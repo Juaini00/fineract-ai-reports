@@ -6,6 +6,8 @@ The purpose of this document is to establish the reporting surface before mappin
 
 Detailed field/table mapping will be added later per area.
 
+This document is the human-approved source of truth for allowed reporting data. The machine-readable counterpart belongs under `knowledge/data-scope/` and is defined by `docs/knowledge-catalog.md`.
+
 ## 1. Scope Principle
 
 The service must not treat the full Fineract database as available reporting context.
@@ -20,6 +22,8 @@ Rules:
 - Runtime queries must come from approved reporting capabilities.
 - Each approved capability must declare its allowed tables, joins, filters, metrics, and PII behavior.
 - If a user asks for data outside the approved scope, reject or ask for clarification.
+- Every approved, conditional, deferred, and out-of-scope data area must have a matching machine-readable entry under `knowledge/data-scope/` before catalog validation is considered complete.
+- Knowledge files must not introduce runtime access to tables, columns, joins, metrics, or response fields outside this scope.
 
 ## 2. Initial MVP Scope
 

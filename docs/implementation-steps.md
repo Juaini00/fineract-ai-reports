@@ -650,6 +650,12 @@ TODO
 
 Goal: load and validate YAML knowledge files.
 
+Reference design:
+
+```text
+docs/knowledge-catalog.md
+```
+
 Initial folders:
 
 ```text
