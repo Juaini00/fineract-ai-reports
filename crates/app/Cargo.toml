@@ -1,0 +1,10 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+app_core = { package = "core", path = "../core" }
+tokio.workspace = true
+tracing.workspace = true
