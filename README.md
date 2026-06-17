@@ -260,8 +260,12 @@ Memory is never the source of truth for resumable jobs.
 
 - `docs/project-setup.md`: workspace and crate setup rules.
 - `docs/implementation-steps.md`: current implementation roadmap.
-- `docs/chat-data-model.md`: planned chat/session/job schema and Redis state.
+- `docs/chat-data-model.md`: chat/session/job schema and Redis state design.
 - `docs/ai-reporting-design.md`: broader reporting service design.
+- `docs/reporting-data-scope.md`: approved high-level reporting data areas.
+- `docs/reporting-data/`: detailed table and field scope per reporting data area.
+- `docs/reporting-capabilities.md`: approved executable reporting capabilities and guard rules.
+- `docs/reporting-pii-policy.md`: PII, masking, and never-expose field policy.
 - `AGENTS.md`: operating instructions for AI coding agents working in this repo.
 
 ## Safety Rules

@@ -72,25 +72,28 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"
-tokio = { version = "1.52.3", features = ["full"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 axum = "0.8.9"
+chrono = { version = "0.4.45", features = ["serde"] }
+config = "0.15.23"
+dotenvy = "0.15.7"
+futures = "0.3.32"
+hex = "0.4.3"
+pgvector = { version = "0.4.2", features = ["sqlx"] }
+redis = { version = "1.2.3", features = ["tokio-comp"] }
+rand = "0.8.6"
+reqwest = { version = "0.13.4", features = ["json", "rustls"] }
+rust_decimal = { version = "1.42.1", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_yaml = "0.9.34"
-sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "chrono", "uuid", "rust_decimal"] }
-dotenvy = "0.15.7"
-config = "0.15.23"
-thiserror = "2.0.18"
-tower-http = { version = "0.6.11", features = ["trace", "tracing"] }
-uuid = { version = "1.23.3", features = ["serde", "v4"] }
-chrono = { version = "0.4.45", features = ["serde"] }
-redis = { version = "1.2.3", features = ["tokio-comp"] }
-pgvector = { version = "0.4.2", features = ["sqlx"] }
-rand = "0.8.6"
 sha2 = "0.10.9"
-hex = "0.4.3"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "chrono", "uuid", "rust_decimal"] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["full"] }
+tower-http = { version = "0.6.11", features = ["trace", "tracing"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 ```
 
@@ -398,17 +401,16 @@ Do not add reporting code before health/readiness/auth are working.
 
 Do not add dynamic SQL generation.
 
-## 9. Immediate Next Implementation
+## 9. Current Implementation Position
 
-The immediate next implementation should be:
+The initial setup described in this document is complete:
 
 ```text
-1. Add crates/core.
-2. Add core::run().
-3. Make app call app_core::run().
-4. Make cargo check pass.
-5. Add config module.
-6. Add telemetry module.
-7. Add /health endpoint.
-8. Run app and curl /health.
+1. Root Cargo.toml is workspace-only.
+2. crates/app is the binary entrypoint.
+3. crates/core owns app logic.
+4. app calls core through the app_core alias.
+5. health/readiness/auth foundations are implemented.
 ```
+
+Continue with `docs/implementation-steps.md` for the active roadmap.

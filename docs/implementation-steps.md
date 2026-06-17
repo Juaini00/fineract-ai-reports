@@ -483,7 +483,7 @@ curl http://127.0.0.1:3007/auth/me \
 Current status:
 
 ```text
-TODO NEXT
+DONE
 ```
 
 ## Phase 7: Authorization Guards
@@ -527,7 +527,8 @@ Failure examples:
 Current status:
 
 ```text
-TODO
+DONE: minimal helpers added in crates/core/src/auth/authorization.rs.
+Report SQL office filtering and response masking still need to be wired into protected report endpoints.
 ```
 
 ## Phase 8: Chat Session And Job Data Model
@@ -573,8 +574,10 @@ cancelled
 Initial pipeline steps:
 
 ```text
+queued
 checking_context
 embedding
+taking_decision
 response
 ```
 
@@ -609,7 +612,7 @@ indexes exist
 Current status:
 
 ```text
-TODO
+DONE: migration 20260617130000_create_chat_tables.sql creates chat sessions, messages, jobs, checkpoints, events, and indexes.
 ```
 
 ## Phase 9: Chat Job API Foundation

@@ -861,11 +861,11 @@ Keep the implementation small and testable. Do not introduce dynamic SQL generat
 
 ## 17. Next Steps
 
-1. Implement API key authentication middleware.
-2. Implement `GET /auth/me`.
-3. Add chat session/job migrations from `docs/chat-data-model.md`.
-4. Implement chat job API foundation.
-5. Create `knowledge/` and `queries/` folders.
-6. Add the first savings domain and capability definitions.
-7. Add the first approved SQL query files.
-8. Implement catalog loading and validation.
+1. Implement chat job API foundation.
+2. Create `knowledge/` and `queries/` folders.
+3. Add the first savings domain and capability definitions.
+4. Add the first approved SQL query files.
+5. Implement catalog loading and validation.
+6. Implement local classifier for savings deposit total/top_n.
+7. Wire authorization guards into report execution.
+8. Implement approved query execution and response formatting.

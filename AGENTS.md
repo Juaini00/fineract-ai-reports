@@ -41,10 +41,10 @@
 
 ## Auth Status And Rules
 
-- Implemented: `POST /auth/api-keys`, bootstrap admin token auth, API key hashing, `ApiKeyRepository`, `AuthService`, consistent response envelope.
+- Implemented: `POST /auth/api-keys`, bootstrap admin token auth, API key hashing, `ApiKeyRepository`, `AuthService`, API key authentication extractor, `GET /auth/me`, consistent response envelope.
 - Raw API keys are returned once and never stored. DB stores `key_hash` and `key_prefix` only.
-- Next auth step is Phase 6: API key authentication middleware/extractor and `GET /auth/me`.
-- For now, `allowed_office_ids` is stored but not enforced. Leave a TODO until report query filtering exists. Capability authorization should be enforced once protected chat/report endpoints exist.
+- Minimal authorization helpers exist for capability, office-scope, and PII checks. Enforce them in protected chat/report endpoints before executing approved queries.
+- `allowed_office_ids` is stored and helper-validated, but report SQL filtering is not implemented yet. Office filtering must be enforced inside approved report queries once report execution exists.
 
 ## Chat/Job Design Decisions
 
@@ -57,8 +57,8 @@
 ## Current Implementation Order
 
 - Follow `docs/implementation-steps.md` as the active roadmap.
-- Completed: baseline, app bootstrap, DB pools/readiness, API key generation.
-- Next: API key authentication middleware, `GET /auth/me`, then chat session/job migrations from `docs/chat-data-model.md`.
+- Completed: baseline, app bootstrap, DB pools/readiness, API key generation/authentication, minimal authorization helpers, reporting scope docs, reporting capability/PII docs, and chat session/job migrations.
+- Next: Phase 9 chat job API foundation, then catalog/query foundation.
 
 ## Important References
 
@@ -66,3 +66,6 @@
 - `docs/implementation-steps.md`: active phase roadmap.
 - `docs/chat-data-model.md`: chat/session/job tables and Redis state rules.
 - `docs/ai-reporting-design.md`: broader AI reporting architecture.
+- `docs/reporting-data-scope.md`: approved/deferred reporting data scope.
+- `docs/reporting-capabilities.md`: executable capability rules.
+- `docs/reporting-pii-policy.md`: PII/masking/never-expose rules.

@@ -1,4 +1,6 @@
-use anyhow::Result;
+use std::path::Path;
+
+use anyhow::{Context, Result};
 use redis::AsyncCommands;
 use serde::Serialize;
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -81,7 +83,17 @@ impl DatabasePools {
     }
 
     pub async fn run_app_migrations(&self) -> Result<()> {
-        sqlx::migrate!("../../migrations").run(&self.app).await?;
+        let migrations_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+        let migrator = sqlx::migrate::Migrator::new(migrations_path.as_path())
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load app database migrations from {}",
+                    migrations_path.display()
+                )
+            })?;
+
+        migrator.run(&self.app).await?;
         Ok(())
     }
 
