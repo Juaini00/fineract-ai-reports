@@ -20,6 +20,15 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: message.into(),
+            details: None,
+        }
+    }
+
     pub fn unauthorized(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
