@@ -37,7 +37,6 @@ pub struct QueryConfig {
     pub default_timeout_ms: u64,
 }
 
-
 #[derive(Clone, Debug)]
 pub struct VoyageAiConfig {
     pub api_key: String,
