@@ -1,0 +1,38 @@
+id: deferred_areas
+status: deferred_group
+source_doc: docs/reporting-data-scope.md#4-deferred-data-areas
+areas:
+  - id: loans
+    tables:
+      - m_loan
+      - m_product_loan
+      - m_loan_transaction
+      - m_loan_repayment_schedule
+      - m_loan_charge
+  - id: accounting_gl
+    tables:
+      - acc_gl_account
+      - acc_gl_journal_entry
+      - acc_accounting_rule
+      - acc_product_mapping
+      - acc_gl_closure
+  - id: tax
+    tables:
+      - m_tax_component
+      - m_tax_component_history
+      - m_tax_group
+      - m_tax_group_mappings
+      - m_savings_account_transaction_tax_details
+  - id: custom_datatables
+    tables:
+      - x_registered_table
+      - x_table_column_code_mappings
+      - m_entity_datatable_check
+  - id: audit_users_operations
+    tables:
+      - m_appuser
+      - m_role
+      - m_permission
+      - m_portfolio_command_source
+      - request_audit_table
+rule: Deferred areas must not be referenced by approved MVP capabilities or queries.

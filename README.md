@@ -18,7 +18,7 @@ The service reads from an existing Fineract PostgreSQL database through a read-o
 
 Implemented:
 
-- Rust workspace with two crates: `crates/app` and `crates/core`.
+- Rust workspace target with three crates: `crates/app`, `crates/core`, and `crates/chat`.
 - Typed configuration loading from `.env`.
 - Tracing and HTTP server bootstrap.
 - App PostgreSQL pool.
@@ -37,8 +37,7 @@ Implemented:
 
 Next major work:
 
-- Capability authorization helpers.
-- Chat/session/job migrations.
+- Align workspace to `app` + `core` + `chat`.
 - Chat job API foundation.
 - SSE progress streaming.
 - Approved reporting capability catalog.
@@ -46,15 +45,18 @@ Next major work:
 
 ## Architecture
 
-The workspace intentionally has only two crates for now:
+The workspace intentionally uses only three short-named crates for now:
 
 ```text
 ai_report/
   Cargo.toml
   crates/
     app/      # binary entrypoint
-    core/     # application logic
+    core/     # shared foundation
+    chat/     # chat-driven reporting feature
   docs/
+  knowledge/
+  queries/
   migrations/
   docker-compose.yml
 ```
@@ -62,9 +64,12 @@ ai_report/
 Rules:
 
 - Root `Cargo.toml` is workspace-only and must not contain `[package]`.
-- `crates/app` is only the binary launcher.
-- `crates/core` owns config, tracing, DB pools, HTTP routes, auth, and future reporting logic.
-- `crates/app` depends on `crates/core` using the alias `app_core` because `core` conflicts with Rust's built-in `core` crate in macros.
+- `crates/app` is the binary launcher and composition root.
+- `crates/core` owns shared foundation: config, tracing, DB pools, API primitives, auth, extractors, response envelope, validation primitives, and shared authorization helpers.
+- `crates/chat` owns chat sessions, chat messages, chat jobs, checkpoints/events, and future pipeline orchestration.
+- Crate names stay short: `app`, `core`, `chat`. Do not use `ai_report_*` crate names.
+- Knowledge remains folders/YAML under `knowledge/`; SQL remains under `queries/`.
+- Do not create `knowledge` or `reporting` crates yet.
 - Keep the route -> service -> repository -> database boundary.
 - Do not put `sqlx` calls directly in route handlers or services.
 

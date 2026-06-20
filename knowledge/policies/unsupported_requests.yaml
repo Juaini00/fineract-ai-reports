@@ -1,0 +1,12 @@
+id: unsupported_requests_policy
+hard_reject:
+  - arbitrary SQL
+  - write or update Fineract data
+  - request secret fields
+  - request out-of-scope tables
+  - request deferred domains in MVP
+clarify:
+  - missing date range
+  - ambiguous output mode
+  - ambiguous domain
+  - missing limit for top_n

@@ -1,0 +1,13 @@
+id: fineract.enums.client_status
+table: m_client
+column: status_enum
+values:
+  - value: 100
+    code: pending
+    status: documented
+  - value: 300
+    code: active
+    status: documented
+  - value: 600
+    code: closed
+    status: documented

@@ -619,6 +619,19 @@ DONE: migration 20260617130000_create_chat_tables.sql creates chat sessions, mes
 
 Goal: create authenticated chat job endpoints before knowledge/planner/report execution.
 
+Crate placement:
+
+```text
+crates/chat
+```
+
+Rules:
+
+1. Use the crate name `chat`, not `ai_report_chat`.
+2. Keep `core` as shared foundation for config, DB pools, API primitives, auth, and response/error types.
+3. Keep chat session/job service, repository, and future pipeline orchestration inside `chat`.
+4. Do not create `knowledge` or `reporting` crates for this phase.
+
 Endpoints:
 
 ```text
@@ -639,6 +652,7 @@ Rules:
 3. `POST /chat/jobs` may create a session if no `session_id` is provided.
 4. Clarification responses must use `POST /chat/jobs/{job_id}/responses`, not a new job.
 5. SSE should stream high-level safe events only.
+6. Keep route -> handler -> service -> repository -> database boundaries.
 
 Current status:
 

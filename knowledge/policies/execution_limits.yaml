@@ -1,0 +1,11 @@
+id: execution_limits_policy
+defaults:
+  query_timeout_ms: 3000
+  max_rows: 100
+  max_date_range_days: 366
+  max_iterations: 12
+  max_parallel_queries: 3
+direct_execution:
+  max_estimated_latency_ms: 5000
+async_execution:
+  max_estimated_latency_ms: 60000

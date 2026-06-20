@@ -1,0 +1,12 @@
+id: fineract.columns.excluded
+fields:
+  - table: m_client
+    columns: [account_no, external_id]
+    reason: Sensitive business identifiers are excluded from MVP output.
+  - table: m_savings_account
+    columns: [account_no, external_id, iban]
+    reason: Sensitive account identifiers are excluded from MVP output.
+  - table: m_savings_account_transaction
+    columns: [external_id, ref_no]
+    reason: Transaction references are excluded from MVP output.
+rule: Excluded fields must not appear in approved query output contracts.

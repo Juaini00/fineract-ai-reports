@@ -631,19 +631,22 @@ The separation is based on responsibility boundaries:
 
 ```text
 app
-  -> binary entrypoint only
+  -> binary entrypoint and composition root
 
 core
-  -> application library: config, DB pools, HTTP routes, auth, and future chat/reporting modules
+  -> shared foundation: config, DB pools, API primitives, auth, validation, response envelope
+
+chat
+  -> chat-driven reporting feature: sessions, messages, jobs, checkpoints, future pipeline
 ```
 
 Benefits:
 
 1. The initial project remains easy to understand.
-2. `app` stays thin and only starts the service.
-3. `core` owns the application modules.
-4. Future modules are added inside `core` first, not as random top-level crates.
-5. If the project grows, modules can later be extracted into additional crates deliberately.
+2. `app` stays thin but owns composition wiring.
+3. `core` stays focused on shared foundation.
+4. `chat` owns the main product flow without forcing separate `knowledge` or `reporting` crates.
+5. Additional crates are added only when there is a concrete non-chat surface or stable boundary.
 
 ### 12.2 Alternative For Early MVP
 
@@ -652,11 +655,13 @@ Do not create these crates yet:
 ```text
 api
 infra
+knowledge
+reporting
 runtime
-ai_report_core
-ai_report_api
-ai_report_runtime
+ai_report_*
 ```
+
+Use short crate names only. The allowed workspace crates for now are `app`, `core`, and `chat`.
 
 For now, add modules inside `crates/core/src/`.
 
@@ -824,9 +829,10 @@ Important constraints:
 - API keys must support revocation, expiration, capability scopes, office scopes, and PII visibility.
 
 Build the backend with the current maintainable boundary:
-- app: binary entrypoint only.
-- core: application library containing config, DB pools, HTTP routes, auth, and future chat/reporting modules.
-- Do not add api/infra/runtime crates yet.
+- app: binary entrypoint and composition root.
+- core: shared foundation containing config, DB pools, API primitives, auth, validation, response envelope, and shared authorization helpers.
+- chat: chat-driven reporting feature containing sessions, messages, jobs, checkpoints/events, and future pipeline orchestration.
+- Do not add api/infra/runtime/knowledge/reporting or `ai_report_*` crates yet.
 
 Start with the MVP:
 - Domain: savings.

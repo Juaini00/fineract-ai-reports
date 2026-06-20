@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     pub auth: AuthConfig,
     pub query: QueryConfig,
+    pub voyage_ai: VoyageAiConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -34,6 +35,12 @@ pub struct AuthConfig {
 #[derive(Clone, Debug)]
 pub struct QueryConfig {
     pub default_timeout_ms: u64,
+}
+
+
+#[derive(Clone, Debug)]
+pub struct VoyageAiConfig {
+    pub api_key: String,
 }
 
 impl AppConfig {
@@ -68,6 +75,9 @@ impl AppConfig {
                 default_timeout_ms: get_env_or("QUERY_DEFAULT_TIMEOUT_MS", "3000")
                     .parse()
                     .context("QUERY_DEFAULT_TIMEOUT_MS must be an integer")?,
+            },
+            voyage_ai: VoyageAiConfig {
+                api_key: get_required_env("VOYAGEAI_API_KEY")?,
             },
         })
     }

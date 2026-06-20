@@ -1,0 +1,19 @@
+id: client_foundation
+status: included_mvp_foundation
+source_doc: docs/reporting-data-scope.md#32-client-foundation
+detail_doc: docs/reporting-data/client-foundation.md
+description: Client ownership and lifecycle context for savings reporting.
+included_tables:
+  - m_client
+conditional_tables:
+  - m_client_non_person
+excluded_tables:
+  - m_client_identifier
+  - m_client_address
+  - m_client_transfer_details
+allowed_domains:
+  - client
+  - savings
+default_rules:
+  - Prefer aggregate reporting by default.
+  - Client identity fields require explicit capability approval and can_view_pii=true.

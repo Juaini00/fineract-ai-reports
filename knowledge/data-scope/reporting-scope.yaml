@@ -1,0 +1,26 @@
+id: reporting_scope
+version: 0.1.0
+source_doc: docs/reporting-data-scope.md
+description: Approved reporting data surface for the MVP catalog.
+included_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+conditional_areas:
+  - group_center_foundation
+secondary_areas:
+  - savings_charges_fees
+deferred_areas:
+  - loans
+  - accounting_gl
+  - tax
+  - custom_datatables
+  - audit_users_operations
+out_of_scope:
+  - arbitrary_sql_exploration
+  - full_fineract_schema_search
+  - document_image_file_reporting
+  - identity_document_reporting
+  - address_level_reporting
+  - fineract_write_actions

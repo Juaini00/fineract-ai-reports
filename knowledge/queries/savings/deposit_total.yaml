@@ -1,0 +1,52 @@
+id: savings.deposit_total
+database: fineract
+sql_file: queries/savings/deposit_total.sql
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+tables:
+  - m_savings_account_transaction
+  - m_savings_account
+  - m_client
+  - m_office
+metrics:
+  - savings.deposit_amount
+  - savings.deposit_count
+parameters:
+  - name: from_date
+    type: date
+    required: true
+  - name: to_date
+    type: date
+    required: true
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: currency_code
+    type: string
+    required: false
+  - name: product_ids
+    type: array_bigint
+    required: false
+output_fields:
+  - name: from_date
+    type: date
+    sensitivity: public_business
+  - name: to_date
+    type: date
+    sensitivity: public_business
+  - name: total_deposit_amount
+    type: decimal
+    sensitivity: public_business
+  - name: deposit_count
+    type: integer
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+timeout_ms: 3000
+cost_class: low

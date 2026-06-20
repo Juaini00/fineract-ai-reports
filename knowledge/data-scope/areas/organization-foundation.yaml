@@ -1,0 +1,17 @@
+id: organization_foundation
+status: included_mvp_foundation
+source_doc: docs/reporting-data-scope.md#31-organization-foundation
+detail_doc: docs/reporting-data/organization-foundation.md
+description: Office and staff foundation for office-scoped reporting.
+included_tables:
+  - m_office
+  - m_staff
+conditional_tables:
+  - m_staff_assignment_history
+excluded_tables: []
+allowed_domains:
+  - organization
+  - client
+  - savings
+default_rules:
+  - Office filters must be constrained by API key allowed_office_ids.

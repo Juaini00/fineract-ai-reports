@@ -8,9 +8,10 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use tokio::net::TcpListener;
+use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
-pub async fn run() -> anyhow::Result<()> {
+pub async fn bootstrap() -> anyhow::Result<(config::AppConfig, db::DatabasePools)> {
     dotenvy::dotenv().ok();
     telemetry::init();
 
@@ -23,10 +24,16 @@ pub async fn run() -> anyhow::Result<()> {
         info!("app database migrations completed");
     }
 
+    Ok((config, pools))
+}
+
+pub async fn run() -> anyhow::Result<()> {
+    let (config, pools) = bootstrap().await?;
+
     let readiness = pools.readiness().await;
 
     let state = api::AppState::new(config.clone(), pools);
-    let router = api::router(state);
+    let router = api::router(state).layer(TraceLayer::new_for_http());
     let addr: SocketAddr = format!("{}:{}", config.app.host, config.app.port)
         .parse()
         .context("invalid APP_HOST or APP_PORT")?;
@@ -38,7 +45,7 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn log_startup_status(
+pub fn log_startup_status(
     config: &config::AppConfig,
     addr: SocketAddr,
     readiness: &db::ReadinessChecks,

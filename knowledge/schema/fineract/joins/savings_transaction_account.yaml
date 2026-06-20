@@ -1,0 +1,6 @@
+id: fineract.joins.savings_transaction_account
+description: Savings transaction to savings account join.
+joins:
+  - from: m_savings_account_transaction.savings_account_id
+    to: m_savings_account.id
+rule: Required for product and account-owner context.

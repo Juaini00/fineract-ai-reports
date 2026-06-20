@@ -1,0 +1,12 @@
+id: out_of_scope_areas
+status: rejected_group
+source_doc: docs/reporting-data-scope.md#5-explicitly-out-of-scope-for-mvp
+areas:
+  - arbitrary_sql_exploration
+  - full_fineract_schema_search
+  - document_image_file_reporting
+  - identity_document_reporting
+  - address_level_reporting
+  - user_audit_reporting
+  - fineract_write_actions
+rule: Out-of-scope areas must produce hard validation failures if referenced by runtime catalog files.

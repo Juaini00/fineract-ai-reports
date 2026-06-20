@@ -1,0 +1,16 @@
+[package]
+name = "chat"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+app_core = {package = "core", path = "../core"}
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+validator.workspace = true

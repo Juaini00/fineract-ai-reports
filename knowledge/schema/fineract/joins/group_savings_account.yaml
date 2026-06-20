@@ -1,0 +1,7 @@
+id: fineract.joins.group_savings_account
+description: Group-owned savings account join path.
+status: conditional
+joins:
+  - from: m_savings_account.group_id
+    to: m_group.id
+rule: Use only when group_center_foundation is enabled.

@@ -1,0 +1,17 @@
+id: client
+status: approved_mvp
+display_name: Client
+description: Client ownership context for savings reporting and PII-aware output.
+data_areas:
+  - client_foundation
+concepts:
+  - id: client
+    meaning: Customer or member in Fineract.
+    synonyms: [client, customer, member, account holder]
+supported_intents:
+  - client-owned savings reporting
+unsupported_intents:
+  - identity document reporting
+  - address-level reporting
+default_rules:
+  - Client identity output requires explicit capability approval.

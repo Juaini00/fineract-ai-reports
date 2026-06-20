@@ -1,0 +1,9 @@
+id: reporting_responses
+language: en
+templates:
+  total: "Total {metric_label} from {from_date} to {to_date} is {value}."
+  top_n: "Here are the top {limit} transactions from {from_date} to {to_date}."
+empty_result: "No data was found for the requested parameters."
+rules:
+  - Use only fields declared by the selected capability output contract.
+  - Do not expose PII unless explicitly allowed.

@@ -1,0 +1,48 @@
+id: fineract.savings
+status: approved_mvp
+data_areas:
+  - savings_core
+  - savings_transactions
+tables:
+  - name: m_savings_account
+    data_area: savings_core
+    meaning: Savings account record.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: client_id
+        sensitivity: public_business
+      - name: group_id
+        sensitivity: public_business
+      - name: product_id
+        sensitivity: public_business
+      - name: account_no
+        sensitivity: sensitive_business_identifier
+  - name: m_savings_product
+    data_area: savings_core
+    meaning: Savings product definition.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: name
+        sensitivity: public_business
+  - name: m_savings_account_transaction
+    data_area: savings_transactions
+    meaning: Savings transaction record.
+    default_filters:
+      - is_reversed = false
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: savings_account_id
+        sensitivity: public_business
+      - name: office_id
+        sensitivity: public_business
+      - name: transaction_type_enum
+        sensitivity: public_business
+      - name: transaction_date
+        sensitivity: public_business
+      - name: amount
+        sensitivity: public_business
+      - name: is_reversed
+        sensitivity: public_business

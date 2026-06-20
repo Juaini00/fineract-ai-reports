@@ -2,10 +2,14 @@
 
 ## Current Architecture
 
-- This is a Rust workspace with exactly two crates for now: `crates/app` and `crates/core`. Do not add `api`, `infra`, `runtime`, `ai_report_core`, `ai_report_api`, or `ai_report_runtime` crates yet.
+- This is a Rust workspace with exactly three crates for now: `crates/app`, `crates/core`, and `crates/chat`. Do not add `api`, `infra`, `runtime`, `knowledge`, `reporting`, or any `ai_report_*` crates yet.
 - The root `Cargo.toml` is workspace-only; it must not contain `[package]`.
-- `crates/app` is only the binary entrypoint. It depends on `crates/core` through the alias `app_core = { package = "core", path = "../core" }` because `core` conflicts with Rust's built-in `core` crate in macros.
-- `crates/core` owns app logic for now: config, tracing, DB pools, HTTP routes, auth, and future chat/reporting modules.
+- Crate names must stay short and direct: `app`, `core`, `chat`. Do not use names like `ai_report_core`, `ai_report_chat`, or `chat_service`.
+- `crates/app` is the binary entrypoint and composition root. It wires `core` foundation pieces and the `chat` feature crate.
+- `crates/core` owns shared foundation: config, tracing, DB pools, API primitives, auth, extractors, response envelope, validation primitives, and shared authorization helpers.
+- `crates/chat` owns the main chat-driven reporting feature: chat sessions, chat messages, chat jobs, checkpoints/events, and the future pipeline orchestration.
+- Knowledge remains folders/YAML under `knowledge/` and SQL remains under `queries/`; do not create `crates/knowledge` yet.
+- Reporting remains part of the chat-driven flow for now; do not create `crates/reporting` yet.
 - Keep the existing boundaries: route -> service -> repository -> database. Do not put `sqlx` calls directly in route handlers or services.
 
 ## Commands
@@ -58,7 +62,7 @@
 
 - Follow `docs/implementation-steps.md` as the active roadmap.
 - Completed: baseline, app bootstrap, DB pools/readiness, API key generation/authentication, minimal authorization helpers, reporting scope docs, reporting capability/PII docs, and chat session/job migrations.
-- Next: Phase 9 chat job API foundation, then catalog/query foundation.
+- Next: align workspace to `app` + `core` + `chat`, then Phase 9 chat job API foundation, then catalog/query foundation.
 
 ## Important References
 

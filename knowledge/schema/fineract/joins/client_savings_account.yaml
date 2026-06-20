@@ -1,0 +1,8 @@
+id: fineract.joins.client_savings_account
+description: Client-owned savings account join path.
+joins:
+  - from: m_savings_account.client_id
+    to: m_client.id
+  - from: m_client.office_id
+    to: m_office.id
+rule: Use this path for client-owned savings accounts.

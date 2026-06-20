@@ -1,0 +1,18 @@
+id: query_safety_policy
+rules:
+  select_only: true
+  single_statement: true
+  parameterized_only: true
+unsafe_commands:
+  - INSERT
+  - UPDATE
+  - DELETE
+  - TRUNCATE
+  - DROP
+  - ALTER
+  - CREATE
+  - GRANT
+  - REVOKE
+  - COPY
+  - VACUUM
+  - ANALYZE

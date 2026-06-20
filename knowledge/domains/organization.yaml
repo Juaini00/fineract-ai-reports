@@ -1,0 +1,15 @@
+id: organization
+status: approved_mvp
+display_name: Organization
+description: Office and branch context used for office-scoped reporting.
+data_areas:
+  - organization_foundation
+concepts:
+  - id: office
+    meaning: Organization unit used to scope reports.
+    synonyms: [office, branch, location, organization unit]
+supported_intents:
+  - office scoped reporting
+unsupported_intents:
+  - create office
+  - update office

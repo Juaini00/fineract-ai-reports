@@ -1,0 +1,10 @@
+id: unsupported_responses
+language: en
+templates:
+  unsupported_domain: "This request is not supported by the current reporting scope."
+  unsupported_capability: "This report type is not available yet."
+  forbidden_scope: "This API key is not allowed to run the requested report."
+  unsafe_request: "This request cannot be processed because it violates reporting safety rules."
+rules:
+  - Keep errors sanitized.
+  - Do not mention internal SQL, prompts, stack traces, or secrets.

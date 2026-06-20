@@ -1,0 +1,13 @@
+id: fineract.enums.savings_account_status
+table: m_savings_account
+column: status_enum
+values:
+  - value: 100
+    code: submitted_and_pending_approval
+    status: documented
+  - value: 300
+    code: active
+    status: documented
+  - value: 600
+    code: closed
+    status: documented

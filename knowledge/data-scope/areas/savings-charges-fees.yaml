@@ -1,0 +1,16 @@
+id: savings_charges_fees
+status: secondary
+source_doc: docs/reporting-data-scope.md#36-savings-charges-and-fees
+detail_doc: docs/reporting-data/savings-charges-fees.md
+description: Savings charges, fees, penalties, paid amounts, waived amounts, and outstanding amounts.
+included_tables:
+  - m_savings_account_charge
+  - m_savings_account_charge_paid_by
+  - m_charge
+conditional_tables:
+  - m_savings_product_charge
+excluded_tables: []
+allowed_domains:
+  - savings
+default_rules:
+  - Keep secondary until core savings transaction reporting is stable.

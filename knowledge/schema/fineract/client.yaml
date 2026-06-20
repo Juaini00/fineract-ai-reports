@@ -1,0 +1,19 @@
+id: fineract.client
+status: approved_mvp
+data_areas:
+  - client_foundation
+tables:
+  - name: m_client
+    data_area: client_foundation
+    meaning: Client or customer record.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: office_id
+        sensitivity: public_business
+      - name: display_name
+        sensitivity: pii
+      - name: account_no
+        sensitivity: sensitive_business_identifier
+      - name: external_id
+        sensitivity: sensitive_business_identifier

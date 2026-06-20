@@ -1,0 +1,9 @@
+id: fineract.joins.office_scope
+description: Office authorization path for savings transaction reports.
+joins:
+  - from: m_savings_account_transaction.office_id
+    to: m_office.id
+    required_for:
+      - savings_deposit_total
+      - savings_deposit_top_n
+rule: m_savings_account_transaction.office_id must be constrained to authorized office ids.

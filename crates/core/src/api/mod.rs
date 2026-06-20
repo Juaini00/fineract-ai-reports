@@ -6,7 +6,6 @@ pub mod response;
 pub mod routes;
 
 use axum::Router;
-use tower_http::trace::TraceLayer;
 
 use crate::{
     auth::{repository::ApiKeyRepository, service::AuthService},
@@ -38,6 +37,5 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::auth::router())
-        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

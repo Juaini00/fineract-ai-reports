@@ -1,0 +1,9 @@
+id: clarification_responses
+language: en
+templates:
+  missing_date_range: "Which date range should this report use?"
+  missing_limit: "How many top records should be returned?"
+  ambiguous_output_mode: "Do you want a combined total, transaction list, or period breakdown?"
+rules:
+  - Clarification must continue the same chat job.
+  - Do not create a new job for clarification answers.

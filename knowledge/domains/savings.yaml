@@ -1,0 +1,27 @@
+id: savings
+status: approved_mvp
+display_name: Savings
+description: Savings account and transaction reporting.
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+concepts:
+  - id: deposit
+    meaning: Money credited into a savings account.
+    synonyms: [deposit, money in, credit, savings credit]
+  - id: withdrawal
+    meaning: Money debited from a savings account.
+    synonyms: [withdrawal, money out, debit, savings debit]
+  - id: savings_account
+    meaning: Customer or group savings account.
+    synonyms: [savings, savings account, deposit account]
+supported_intents:
+  - savings deposit totals
+  - largest savings deposits
+unsupported_intents:
+  - create savings account
+  - reverse transaction
+default_rules:
+  - Exclude reversed transactions unless explicitly requested by an approved capability.

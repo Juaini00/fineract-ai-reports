@@ -1,0 +1,25 @@
+id: fineract.organization
+status: approved_mvp
+data_areas:
+  - organization_foundation
+tables:
+  - name: m_office
+    data_area: organization_foundation
+    meaning: Office or branch hierarchy.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: name
+        sensitivity: public_business
+      - name: hierarchy
+        sensitivity: public_business
+  - name: m_staff
+    data_area: organization_foundation
+    meaning: Staff assigned to an office.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: office_id
+        sensitivity: public_business
+      - name: display_name
+        sensitivity: pii

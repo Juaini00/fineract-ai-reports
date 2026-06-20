@@ -1,0 +1,19 @@
+id: fineract.enums.savings_transaction_type
+table: m_savings_account_transaction
+column: transaction_type_enum
+values:
+  - value: 1
+    code: deposit
+    label: Deposit
+    direction: credit
+    status: approved_mvp
+  - value: 2
+    code: withdrawal
+    label: Withdrawal
+    direction: debit
+    status: candidate
+  - value: 3
+    code: interest_posting
+    label: Interest Posting
+    direction: credit
+    status: candidate

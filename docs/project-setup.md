@@ -1,12 +1,13 @@
 # Project Setup
 
-This document defines the exact project setup we will use. It intentionally avoids the larger multi-crate design for now.
+This document defines the exact project setup we will use. It keeps crate boundaries small and intentional.
 
-The current implementation should use only two crates:
+The current implementation should use exactly three crates:
 
 ```text
 app
 core
+chat
 ```
 
 ## 1. Final Rule For The Initial Setup
@@ -29,25 +30,38 @@ ai_report/
       Cargo.toml
       src/
         lib.rs
+
+    chat/
+      Cargo.toml
+      src/
+        lib.rs
 ```
 
 Meaning:
 
 ```text
-app  = binary entrypoint
-core = application library
+app  = binary entrypoint and composition root
+core = shared application foundation
+chat = main chat-driven reporting feature
 ```
 
 Do not add more crates yet.
 
-Do not use crate names like `ai_report_core` or `ai_report_app`.
+Do not use crate names like `ai_report_core`, `ai_report_app`, `ai_report_chat`, `chat_service`, `knowledge`, or `reporting`.
 
 The crate names must be:
 
 ```text
 app
 core
+chat
 ```
+
+Knowledge remains a folder-based catalog under `knowledge/`.
+
+SQL remains under `queries/`.
+
+Reporting remains part of the chat-driven feature until there is a concrete non-chat report API or scheduling surface.
 
 ## 2. Root Cargo.toml
 
@@ -62,6 +76,7 @@ Correct root structure:
 members = [
     "crates/app",
     "crates/core",
+    "crates/chat",
 ]
 resolver = "3"
 
@@ -107,7 +122,7 @@ The runnable binary is crates/app.
 
 ## 3. app Crate
 
-`app` is only the binary launcher.
+`app` is the binary launcher and composition root.
 
 Path:
 
@@ -117,7 +132,7 @@ crates/app/src/main.rs
 
 `app` should not contain business logic.
 
-`app` should only call the `core` crate through the local alias `app_core`.
+`app` wires the `core` foundation and `chat` feature crate.
 
 Expected `crates/app/Cargo.toml`:
 
@@ -129,6 +144,7 @@ edition.workspace = true
 
 [dependencies]
 app_core = { package = "core", path = "../core" }
+chat = { path = "../chat" }
 anyhow.workspace = true
 tokio.workspace = true
 ```
@@ -141,6 +157,16 @@ async fn main() -> anyhow::Result<()> {
     app_core::run().await
 }
 ```
+
+The exact wiring can remain behind `app_core::run()` during transition, but the intended dependency direction is:
+
+```text
+app -> core
+app -> chat
+chat -> core
+```
+
+Do not make `core -> chat` and `chat -> core` depend on each other.
 
 Why the alias is needed:
 
@@ -159,7 +185,7 @@ app is a binary crate, not a library crate.
 
 ## 4. core Crate
 
-`core` is the application library.
+`core` is the shared application foundation.
 
 Path:
 
@@ -173,11 +199,16 @@ crates/core/src/lib.rs
 config loading
 tracing setup
 database pool setup
-HTTP router setup
+shared HTTP/API primitives
 auth service
 health/readiness handlers
-future reporting/catalog logic
+validated JSON extractor
+API key authentication extractor
+response envelope
+shared authorization helpers
 ```
+
+`core` must not own chat-specific job orchestration once `crates/chat` exists.
 
 Expected `crates/core/Cargo.toml`:
 
@@ -219,7 +250,71 @@ pub async fn run() -> anyhow::Result<()> {
 
 After that works, we add modules gradually.
 
-## 5. Module Setup Order Inside core
+## 5. chat Crate
+
+`chat` owns the main chat-driven reporting feature.
+
+Path:
+
+```text
+crates/chat/src/lib.rs
+```
+
+`chat` owns:
+
+```text
+chat sessions
+chat messages
+chat jobs
+chat job checkpoints
+chat job events
+future pipeline orchestration
+chat-driven knowledge retrieval usage
+chat-driven approved query/report execution usage
+```
+
+`chat` does not own:
+
+```text
+global config loading
+telemetry initialization
+database pool creation
+API key hashing/storage
+base response envelope
+raw knowledge YAML files
+raw SQL catalog files
+```
+
+Knowledge and SQL are project-level assets:
+
+```text
+knowledge/
+queries/
+```
+
+They are consumed by the chat pipeline later, but they are not separate crates for now.
+
+Initial `crates/chat/Cargo.toml` should use the short crate name:
+
+```toml
+[package]
+name = "chat"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+app_core = { package = "core", path = "../core" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+validator.workspace = true
+```
+
+## 6. Module Setup Order Inside core
 
 Do not create all modules at once.
 
@@ -231,9 +326,9 @@ Add them in this order:
 3. db
 4. api
 5. auth
-6. catalog
-7. reporting
 ```
+
+Do not add `catalog` or `reporting` modules to `core` now. Catalog files live under `knowledge/`, and reporting execution belongs inside the chat-driven pipeline until a separate non-chat reporting surface exists.
 
 ### Step 1: config
 
@@ -340,7 +435,7 @@ crates/core/src/api/response.rs
 crates/core/src/api/extractors/validated_json.rs
 ```
 
-## 6. Initial run() Target
+## 7. Initial run() Target
 
 The first real `run()` should do only this:
 
@@ -356,7 +451,7 @@ Do not connect databases yet in the first implementation if the HTTP server is n
 
 After `/health` works, add database pools and `/ready`.
 
-## 7. Validation Commands
+## 8. Validation Commands
 
 Check workspace:
 
@@ -382,7 +477,7 @@ Test health endpoint after server exists:
 curl http://127.0.0.1:3007/health
 ```
 
-## 8. What Not To Do Yet
+## 9. What Not To Do Yet
 
 Do not create these crates yet:
 
@@ -390,26 +485,31 @@ Do not create these crates yet:
 api
 infra
 runtime
+knowledge
+reporting
 ai_report_core
 ai_report_api
+ai_report_chat
 ai_report_runtime
 ```
 
 Do not create all modules upfront.
 
-Do not add reporting code before health/readiness/auth are working.
+Do not split `knowledge` or `reporting` into crates before there is a concrete need.
+
+Do not add reporting execution before health/readiness/auth and chat job foundations are working.
 
 Do not add dynamic SQL generation.
 
-## 9. Current Implementation Position
+## 10. Current Implementation Position
 
 The initial setup described in this document is complete:
 
 ```text
 1. Root Cargo.toml is workspace-only.
 2. crates/app is the binary entrypoint.
-3. crates/core owns app logic.
-4. app calls core through the app_core alias.
+3. crates/core owns shared foundation.
+4. crates/chat is the next crate to add for chat-driven reporting.
 5. health/readiness/auth foundations are implemented.
 ```
 

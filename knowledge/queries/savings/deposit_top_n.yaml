@@ -1,0 +1,67 @@
+id: savings.deposit_top_n
+database: fineract
+sql_file: queries/savings/deposit_top_n.sql
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+tables:
+  - m_savings_account_transaction
+  - m_savings_account
+  - m_savings_product
+  - m_client
+  - m_office
+metrics:
+  - savings.deposit_amount
+parameters:
+  - name: from_date
+    type: date
+    required: true
+  - name: to_date
+    type: date
+    required: true
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: limit
+    type: integer
+    required: true
+  - name: currency_code
+    type: string
+    required: false
+  - name: product_ids
+    type: array_bigint
+    required: false
+output_fields:
+  - name: transaction_id
+    type: bigint
+    sensitivity: public_business
+  - name: transaction_date
+    type: date
+    sensitivity: public_business
+  - name: amount
+    type: decimal
+    sensitivity: public_business
+  - name: currency_code
+    type: string
+    sensitivity: public_business
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: product_id
+    type: bigint
+    sensitivity: public_business
+  - name: product_name
+    type: string
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+timeout_ms: 3000
+cost_class: medium

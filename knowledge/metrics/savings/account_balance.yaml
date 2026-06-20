@@ -1,0 +1,8 @@
+id: savings.account_balance
+domain: savings
+status: candidate
+data_areas:
+  - savings_core
+source_table: m_savings_account
+expression: m_savings_account.account_balance_derived
+sensitivity: public_business

@@ -1,0 +1,14 @@
+id: pii_policy
+source_doc: docs/reporting-pii-policy.md
+default_behavior: omit
+rules:
+  - can_view_pii=true is necessary but not sufficient.
+  - Capability must explicitly allow every PII field returned.
+  - secret_never_expose fields must never be returned, logged, or sent to AI.
+sensitivity_classes:
+  - public_business
+  - sensitive_business_identifier
+  - pii
+  - security_sensitive
+  - secret_never_expose
+  - free_text_sensitive

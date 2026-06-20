@@ -1,0 +1,14 @@
+id: fineract.columns.sensitivity
+classes:
+  public_business:
+    default_behavior: allow_if_capability_declares
+  sensitive_business_identifier:
+    default_behavior: exclude
+  pii:
+    default_behavior: require_can_view_pii_and_capability_approval
+  security_sensitive:
+    default_behavior: exclude
+  secret_never_expose:
+    default_behavior: never_expose
+  free_text_sensitive:
+    default_behavior: exclude

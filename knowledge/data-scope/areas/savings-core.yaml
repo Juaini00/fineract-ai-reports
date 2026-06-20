@@ -1,0 +1,17 @@
+id: savings_core
+status: included_mvp_domain
+source_doc: docs/reporting-data-scope.md#34-savings-core
+detail_doc: docs/reporting-data/savings-core.md
+description: Savings accounts, products, balances, and lifecycle context.
+included_tables:
+  - m_savings_account
+  - m_savings_product
+conditional_tables:
+  - m_savings_product_charge
+  - m_savings_officer_assignment_history
+excluded_tables: []
+allowed_domains:
+  - savings
+default_rules:
+  - Savings account owner may be client or group.
+  - Office scope must be enforced through transaction or owner office path.

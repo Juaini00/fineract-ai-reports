@@ -1,0 +1,6 @@
+id: office_scope_policy
+rules:
+  - Fineract report queries must constrain office ids to API key allowed_office_ids.
+  - User-provided office_ids must be a subset of allowed_office_ids.
+  - If office_ids is omitted, use all allowed_office_ids.
+default_source: api_key.allowed_office_ids

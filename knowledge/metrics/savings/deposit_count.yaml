@@ -1,0 +1,10 @@
+id: savings.deposit_count
+domain: savings
+data_areas:
+  - savings_transactions
+source_table: m_savings_account_transaction
+expression: COUNT(*)
+filters:
+  - m_savings_account_transaction.transaction_type_enum = 1
+  - m_savings_account_transaction.is_reversed = false
+sensitivity: public_business
