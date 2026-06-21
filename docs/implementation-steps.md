@@ -321,10 +321,12 @@ api_keys table exists
 Current status:
 
 ```text
-PARTIALLY DONE
+DONE
 
-api_keys migration exists and has been applied.
-chat session/job migrations still need to be created.
+api_keys migration exists.
+chat session/job migration exists.
+knowledge catalog/index migration exists.
+Local/dev startup migration is controlled by APP_DATABASE_MIGRATE_ON_STARTUP.
 ```
 
 ## Phase 5: API Key Generation
@@ -527,8 +529,12 @@ Failure examples:
 Current status:
 
 ```text
-DONE: minimal helpers added in crates/core/src/auth/authorization.rs.
-Report SQL office filtering and response masking still need to be wired into protected report endpoints.
+PARTIALLY DONE
+
+API key authentication produces a ClientContext.
+Chat/report-oriented guard helpers live in crates/chat/src/policy/authorization.rs.
+Helpers cover capability checks, effective office scope, and PII permission checks.
+Report SQL office filtering and response masking still need to be wired into the execution plan and approved SQL path.
 ```
 
 ## Phase 8: Chat Session And Job Data Model
@@ -657,7 +663,26 @@ Rules:
 Current status:
 
 ```text
-TODO
+PARTIALLY DONE
+
+Implemented:
+POST /chat/sessions
+GET  /chat/sessions/{session_id}
+GET  /chat/sessions/{session_id}/messages
+POST /chat/jobs
+GET  /chat/jobs/{job_id}
+
+Current module layout:
+crates/chat/src/api      = routes, handlers, DTOs
+crates/chat/src/chat     = model, repository, service
+crates/chat/src/policy   = authorization guard helpers
+
+Still pending for this phase:
+GET  /chat/jobs/{job_id}/stream
+POST /chat/jobs/{job_id}/responses
+chat_job_checkpoints writes at important boundaries
+chat_job_events writes for major status/final/error/clarification events
+Redis live progress/SSE coordination
 ```
 
 ## Phase 10: Catalog Foundation
@@ -673,20 +698,36 @@ docs/knowledge-catalog.md
 Initial folders:
 
 ```text
+knowledge/data-scope/
 knowledge/domains/
+knowledge/schema/
+knowledge/metrics/
 knowledge/capabilities/
 knowledge/queries/
+knowledge/policies/
+knowledge/responses/
 queries/
 ```
 
 Initial files:
 
 ```text
+knowledge/data-scope/reporting-scope.yaml
+knowledge/data-scope/areas/*.yaml
 knowledge/domains/savings.yaml
+knowledge/domains/client.yaml
+knowledge/domains/organization.yaml
+knowledge/schema/fineract/*.yaml
+knowledge/schema/fineract/enums/*.yaml
+knowledge/schema/fineract/joins/*.yaml
+knowledge/schema/fineract/columns/*.yaml
+knowledge/metrics/savings/*.yaml
 knowledge/capabilities/savings/deposit_total.yaml
 knowledge/capabilities/savings/deposit_top_n.yaml
 knowledge/queries/savings/deposit_total.yaml
 knowledge/queries/savings/deposit_top_n.yaml
+knowledge/policies/*.yaml
+knowledge/responses/*.yaml
 queries/savings/deposit_total.sql
 queries/savings/deposit_top_n.sql
 ```
@@ -705,6 +746,27 @@ Endpoint:
 
 ```text
 POST /catalog/validate
+```
+
+Current status:
+
+```text
+PARTIALLY DONE
+
+Project-level knowledge and query folders exist.
+Initial MVP YAML/SQL files exist for data scope, domains, schema, metrics, capabilities, queries, policies, and responses.
+Loader and validator are implemented under crates/chat/src/knowledge/catalog.
+Current loader/validator coverage is limited to data areas, domains, capabilities, and queries.
+Retrieval document builder exists under crates/chat/src/knowledge/retrieval.rs.
+Catalog/index persistence exists under crates/chat/src/knowledge/index and writes generated retrieval documents with embedding NULL.
+POST /catalog/validate is not implemented yet.
+
+Still pending for this phase:
+read CATALOG_PATH, QUERY_PATH, CATALOG_VALIDATE_ON_STARTUP, and CATALOG_SYNC_ON_STARTUP from AppConfig
+extend typed models/loaders for schema, metrics, policies, and responses
+reject unknown YAML fields after schemas stabilize
+validate status values, sensitivity classes, guards, and policy references
+add the authenticated catalog validation endpoint
 ```
 
 ## Phase 11: Query Validation
@@ -736,6 +798,15 @@ REVOKE
 COPY
 VACUUM
 ANALYZE
+```
+
+Current status:
+
+```text
+TODO
+
+SQL files exist, but SQL safety validation is not implemented yet.
+Do not execute approved SQL at runtime until this phase is complete.
 ```
 
 ## Phase 12: Local Classifier MVP
@@ -770,6 +841,12 @@ If confidence is low:
 
 ```text
 return unsupported or clarification
+```
+
+Current status:
+
+```text
+TODO
 ```
 
 ## Phase 13: Execution Plan And Policy Guard
@@ -902,6 +979,20 @@ Endpoint:
 ```text
 POST /vector-index/rebuild
 GET  /vector-index/status
+```
+
+Current status:
+
+```text
+PARTIALLY STARTED
+
+Database tables exist for knowledge_catalog_versions and knowledge_index.
+Retrieval document hashes and index persistence exist.
+Embeddings are not generated yet.
+Vector rebuild/status endpoints are not implemented yet.
+
+Important sequencing rule:
+Do not add Voyage embedding calls until Phase 10 catalog validation and Phase 11 SQL safety validation are solid.
 ```
 
 ## Phase 19: Reporting Expansion

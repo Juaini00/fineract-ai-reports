@@ -146,19 +146,27 @@ edition.workspace = true
 app_core = { package = "core", path = "../core" }
 chat = { path = "../chat" }
 anyhow.workspace = true
+axum.workspace = true
 tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
 ```
 
-Expected `crates/app/src/main.rs`:
+Current `crates/app/src/main.rs` responsibility:
 
-```rust
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    app_core::run().await
-}
+```text
+call app_core::bootstrap()
+build core AppState
+build chat ChatAppState
+merge core and chat routers
+apply the global HTTP TraceLayer
+bind and serve the configured address
+log startup/readiness status
 ```
 
-The exact wiring can remain behind `app_core::run()` during transition, but the intended dependency direction is:
+`app_core::run()` may remain as a fallback helper, but the active composition root is now `crates/app/src/main.rs`.
+
+The intended dependency direction is:
 
 ```text
 app -> core
@@ -205,7 +213,7 @@ health/readiness handlers
 validated JSON extractor
 API key authentication extractor
 response envelope
-shared authorization helpers
+API key context model shared by protected feature crates
 ```
 
 `core` must not own chat-specific job orchestration once `crates/chat` exists.
@@ -263,13 +271,14 @@ crates/chat/src/lib.rs
 `chat` owns:
 
 ```text
-chat sessions
-chat messages
-chat jobs
-chat job checkpoints
-chat job events
+api routes, handlers, and DTOs for chat endpoints
+chat sessions, messages, and jobs
+chat job repositories and services
+future chat job checkpoints and events usage
 future pipeline orchestration
-chat-driven knowledge retrieval usage
+chat-local policy guards for capability, office scope, and PII checks
+chat-driven catalog loading, validation, and retrieval document building
+chat-driven knowledge index persistence
 chat-driven approved query/report execution usage
 ```
 
@@ -305,13 +314,52 @@ edition.workspace = true
 [dependencies]
 app_core = { package = "core", path = "../core" }
 anyhow.workspace = true
+axum.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 validator.workspace = true
+```
+
+Current internal module layout:
+
+```text
+crates/chat/src/
+  api/
+    dto/
+    handlers/
+    routes/
+  chat/
+    model.rs
+    repository.rs
+    service.rs
+  knowledge/
+    catalog/
+      loader.rs
+      validator.rs
+    index/
+      repository.rs
+      sync.rs
+    model.rs
+    retrieval.rs
+  policy/
+    authorization.rs
+```
+
+Boundary rules inside `chat`:
+
+```text
+api = HTTP mapping only
+chat = durable session/message/job application logic
+knowledge/catalog = load and validate source YAML/SQL metadata
+knowledge/retrieval = build retrieval documents from validated catalog data
+knowledge/index = persist generated retrieval documents to app DB search/index tables
+policy = chat/report execution guard helpers
 ```
 
 ## 6. Module Setup Order Inside core
@@ -435,6 +483,13 @@ crates/core/src/api/response.rs
 crates/core/src/api/extractors/validated_json.rs
 ```
 
+Current implementation note:
+
+```text
+Authorization helpers that are specific to report/chat execution live in crates/chat/src/policy/authorization.rs.
+Core still owns API key authentication and the ClientContext model.
+```
+
 ## 7. Initial run() Target
 
 The first real `run()` should do only this:
@@ -509,8 +564,9 @@ The initial setup described in this document is complete:
 1. Root Cargo.toml is workspace-only.
 2. crates/app is the binary entrypoint.
 3. crates/core owns shared foundation.
-4. crates/chat is the next crate to add for chat-driven reporting.
+4. crates/chat exists and owns chat-driven reporting feature code.
 5. health/readiness/auth foundations are implemented.
+6. chat now has separate api, chat, knowledge, and policy modules.
 ```
 
 Continue with `docs/implementation-steps.md` for the active roadmap.

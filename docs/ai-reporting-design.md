@@ -830,8 +830,8 @@ Important constraints:
 
 Build the backend with the current maintainable boundary:
 - app: binary entrypoint and composition root.
-- core: shared foundation containing config, DB pools, API primitives, auth, validation, response envelope, and shared authorization helpers.
-- chat: chat-driven reporting feature containing sessions, messages, jobs, checkpoints/events, and future pipeline orchestration.
+- core: shared foundation containing config, DB pools, API primitives, auth, validation, response envelope, and API key ClientContext.
+- chat: chat-driven reporting feature containing API routes/handlers/DTOs, sessions, messages, jobs, knowledge catalog/index usage, report policy helpers, checkpoints/events, and future pipeline orchestration.
 - Do not add api/infra/runtime/knowledge/reporting or `ai_report_*` crates yet.
 
 Start with the MVP:
@@ -852,26 +852,27 @@ Implement in this order:
 6. API key authentication middleware.
 7. Chat session/job migrations.
 8. Chat job API foundation.
-9. Catalog YAML loader.
-10. Query SQL loader and validator.
-11. Local classifier for savings deposit total/top_n.
-12. Policy guard and execution plan types.
-13. Capability/office/PII authorization guards based on API key scopes.
-14. Query executor with parameter binding, statement timeout, and row limit.
-15. Audit logging.
-16. Template response formatter.
-17. DeepSeek client for later planner/formatter fallback.
+9. Catalog YAML loader and validator.
+10. Catalog retrieval document/index persistence without embeddings.
+11. Query SQL loader and validator.
+12. Local classifier for savings deposit total/top_n.
+13. Policy guard and execution plan types.
+14. Capability/office/PII authorization guards based on API key scopes.
+15. Query executor with parameter binding, statement timeout, and row limit.
+16. Audit logging.
+17. Template response formatter.
+18. DeepSeek client for later planner/formatter fallback.
 
 Keep the implementation small and testable. Do not introduce dynamic SQL generation. If a request is unsupported, return a safe unsupported response.
 ```
 
 ## 17. Next Steps
 
-1. Implement chat job API foundation.
-2. Create `knowledge/` and `queries/` folders.
-3. Add the first savings domain and capability definitions.
-4. Add the first approved SQL query files.
-5. Implement catalog loading and validation.
+1. Complete the remaining Phase 9 endpoints: `GET /chat/jobs/{job_id}/stream` and `POST /chat/jobs/{job_id}/responses`.
+2. Add checkpoint/event writes for important chat job boundaries.
+3. Finish catalog config wiring and add `POST /catalog/validate`.
+4. Extend catalog loading/validation for schema, metrics, policies, and responses.
+5. Implement SQL safety validation before any runtime query execution.
 6. Implement local classifier for savings deposit total/top_n.
-7. Wire authorization guards into report execution.
+7. Wire authorization guards into execution planning and approved SQL parameterization.
 8. Implement approved query execution and response formatting.

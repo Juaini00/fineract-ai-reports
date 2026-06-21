@@ -562,6 +562,7 @@ Config:
 CATALOG_PATH=knowledge
 QUERY_PATH=queries
 CATALOG_VALIDATE_ON_STARTUP=true
+CATALOG_SYNC_ON_STARTUP=false
 ```
 
 Rules:
@@ -569,6 +570,20 @@ Rules:
 - Local/dev can validate catalog during app startup.
 - Production should validate catalog during deployment and may also validate at startup.
 - Invalid catalog must fail fast before serving report endpoints.
+
+Current implementation:
+
+```text
+crates/chat/src/knowledge/catalog/loader.rs
+crates/chat/src/knowledge/catalog/validator.rs
+```
+
+Current coverage:
+
+```text
+loaded and validated: data areas, domains, capabilities, queries
+files present but not fully loaded/validated yet: schema, metrics, policies, responses
+```
 
 ### 5.4 Step 4: Validate Structure
 
@@ -683,6 +698,39 @@ Rules:
 - Vector search must not decide authorization or execute queries.
 - A retrieved capability still needs Rust validation and policy checks.
 - Search results must carry source ids such as data area id, domain id, capability id, query id, schema id, or metric id.
+
+Current implementation:
+
+```text
+migrations/20260621120000_create_knowledge_index.sql
+crates/chat/src/knowledge/retrieval.rs
+crates/chat/src/knowledge/index/repository.rs
+crates/chat/src/knowledge/index/sync.rs
+```
+
+Current behavior:
+
+```text
+validated catalog data is converted into retrieval documents
+catalog and document content hashes are deterministic
+retrieval documents can be persisted to knowledge_index with embedding NULL
+knowledge_catalog_versions records the generated catalog version
+```
+
+Still pending:
+
+```text
+embedding generation
+Voyage API client
+vector rebuild/status endpoint
+runtime vector retrieval
+```
+
+Sequencing rule:
+
+```text
+Index persistence may exist before embeddings, but vector retrieval must not drive authorization or execution decisions.
+```
 
 ### 5.9 Step 9: Use At Runtime
 
