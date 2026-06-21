@@ -5,7 +5,7 @@ pub mod handlers;
 pub mod response;
 pub mod routes;
 
-use axum::Router;
+use axum::{Router, extract::FromRef};
 
 use crate::{
     auth::{repository::ApiKeyRepository, service::AuthService},
@@ -30,6 +30,12 @@ impl AppState {
             pools,
             auth_service,
         }
+    }
+}
+
+impl FromRef<AppState> for AuthService {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth_service.clone()
     }
 }
 

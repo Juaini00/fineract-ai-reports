@@ -3,10 +3,10 @@ use app_core::auth::model::ClientContext;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::model::{
+use crate::chat::model::{
     ChatJob, ChatMessage, ChatSession, CreateChatJobInput, CreateChatSessionInput, CreatedChatJob,
 };
-use crate::repository::ChatRepository;
+use crate::chat::repository::ChatRepository;
 
 #[derive(Clone)]
 pub struct ChatService {

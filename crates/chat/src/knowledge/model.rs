@@ -25,6 +25,7 @@ pub struct DataAreasKnowledge {
 
     #[serde(default)]
     pub excluded_tables: Vec<String>,
+
     #[serde(default)]
     pub allowed_domains: Vec<String>,
 }

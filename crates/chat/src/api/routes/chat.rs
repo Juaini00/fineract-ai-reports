@@ -1,10 +1,11 @@
-use crate::api::{
-    ChatAppState,
-    handlers::{create_job, create_session, get_job, get_session, list_messages},
-};
 use axum::{
     Router,
     routing::{get, post},
+};
+
+use crate::api::{
+    ChatAppState,
+    handlers::chat::{create_job, create_session, get_job, get_session, list_messages},
 };
 
 pub fn router() -> Router<ChatAppState> {

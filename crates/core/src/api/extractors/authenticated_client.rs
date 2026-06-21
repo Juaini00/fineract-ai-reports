@@ -1,26 +1,27 @@
 use axum::{
-    extract::FromRequestParts,
+    extract::{FromRef, FromRequestParts},
     http::{HeaderMap, header, request::Parts},
 };
 
-use crate::{api::AppState, api::error::ApiError, auth::model::ClientContext};
+use crate::{api::error::ApiError, auth::model::ClientContext, auth::service::AuthService};
 
 const X_API_KEY_HEADER: &str = "x-api-key";
 
 pub struct AuthenticatedClient(pub ClientContext);
 
-impl FromRequestParts<AppState> for AuthenticatedClient {
+impl<S> FromRequestParts<S> for AuthenticatedClient
+where
+    S: Send + Sync,
+    AuthService: FromRef<S>,
+{
     type Rejection = ApiError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let raw_key = extract_api_key(&parts.headers)?
             .ok_or_else(|| ApiError::unauthorized("missing API key"))?;
 
-        let client = state
-            .auth_service
+        let auth_service = AuthService::from_ref(state);
+        let client = auth_service
             .authenticate_api_key(&raw_key)
             .await
             .map_err(ApiError::internal)?
@@ -40,10 +41,7 @@ fn extract_api_key(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
         ));
     }
 
-    let bearer_token = extract_bearer_token(headers);
-    let x_api_key = extract_x_api_key(headers);
-
-    Ok(bearer_token.or(x_api_key))
+    Ok(extract_bearer_token(headers).or_else(|| extract_x_api_key(headers)))
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {

@@ -4,7 +4,7 @@ use serde_json::json;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::model::{ChatJob, ChatMessage, ChatSession, CreatedChatJob};
+use crate::chat::model::{ChatJob, ChatMessage, ChatSession, CreatedChatJob};
 
 #[derive(Clone)]
 pub struct ChatRepository {

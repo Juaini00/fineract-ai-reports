@@ -9,7 +9,6 @@ use tracing::warn;
 use validator::{ValidationErrors, ValidationErrorsKind};
 
 use crate::api::response;
-use crate::auth::authorization::AuthorizationError;
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -205,11 +204,5 @@ fn collect_validation_kind(
 impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
         Self::internal(error)
-    }
-}
-
-impl From<AuthorizationError> for ApiError {
-    fn from(error: AuthorizationError) -> Self {
-        Self::forbidden(error.to_string())
     }
 }

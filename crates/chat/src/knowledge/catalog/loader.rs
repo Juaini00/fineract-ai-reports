@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::knowladge::model::{
+use crate::knowledge::model::{
     CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, KnowledgeCatalog, QueryKnowledge,
 };
 
@@ -54,6 +54,7 @@ impl KnowledgeLoader {
                 .with_context(|| format!("failed to parse {}", path.display()))?;
             items.push(item);
         }
+
         Ok(items)
     }
 }

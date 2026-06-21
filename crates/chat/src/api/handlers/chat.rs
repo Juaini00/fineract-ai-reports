@@ -1,4 +1,8 @@
-use app_core::api::{error::ApiError, extractors::validated_json::ValidatedJson, response};
+use app_core::api::{
+    error::ApiError,
+    extractors::{authenticated_client::AuthenticatedClient, validated_json::ValidatedJson},
+    response,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -10,15 +14,14 @@ use uuid::Uuid;
 use crate::{
     api::{
         ChatAppState,
-        auth::AuthenticatedChatClient,
-        dto::{CreateChatJobRequest, CreateChatSessionRequest},
+        dto::chat::{CreateChatJobRequest, CreateChatSessionRequest},
     },
-    model::{CreateChatJobInput, CreateChatSessionInput},
+    chat::model::{CreateChatJobInput, CreateChatSessionInput},
 };
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
 pub async fn create_session(
-    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatSessionRequest>,
 ) -> Result<Response, ApiError> {
@@ -38,7 +41,7 @@ pub async fn create_session(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
 pub async fn get_session(
-    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -58,7 +61,7 @@ pub async fn get_session(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
 pub async fn list_messages(
-    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -78,7 +81,7 @@ pub async fn list_messages(
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
 pub async fn create_job(
-    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatJobRequest>,
 ) -> Result<Response, ApiError> {
@@ -104,7 +107,7 @@ pub async fn create_job(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
 pub async fn get_job(
-    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {

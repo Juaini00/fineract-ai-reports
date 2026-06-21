@@ -1,9 +1,10 @@
 use app_core::api::AppState;
+use app_core::auth::service::AuthService;
+use axum::{Router, extract::FromRef};
 
-use crate::repository::ChatRepository;
-use crate::service::ChatService;
+use crate::chat::repository::ChatRepository;
+use crate::chat::service::ChatService;
 
-pub mod auth;
 pub mod dto;
 pub mod handlers;
 pub mod routes;
@@ -21,4 +22,16 @@ impl ChatAppState {
 
         Self { core, chat_service }
     }
+}
+
+impl FromRef<ChatAppState> for AuthService {
+    fn from_ref(state: &ChatAppState) -> Self {
+        state.core.auth_service.clone()
+    }
+}
+
+pub fn router(state: ChatAppState) -> Router {
+    Router::new()
+        .merge(routes::chat::router())
+        .with_state(state)
 }

@@ -1,6 +1,7 @@
 use std::{collections::HashSet, fmt};
 
-use crate::auth::model::ClientContext;
+use app_core::api::error::ApiError;
+use app_core::auth::model::ClientContext;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AuthorizationError {
@@ -17,11 +18,17 @@ impl fmt::Display for AuthorizationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CapabilityNotAllowed(capability) => {
-                write!(formatter, "API key is not allowed to run capability `{capability}`")
+                write!(
+                    formatter,
+                    "API key is not allowed to run capability `{capability}`"
+                )
             }
             Self::MissingOfficeScope => write!(formatter, "API key has no office scope"),
             Self::OfficeNotAllowed(office_id) => {
-                write!(formatter, "requested office `{office_id}` is outside API key scope")
+                write!(
+                    formatter,
+                    "requested office `{office_id}` is outside API key scope"
+                )
             }
             Self::PiiNotAllowed => write!(formatter, "PII output is not allowed for this API key"),
         }
@@ -29,6 +36,12 @@ impl fmt::Display for AuthorizationError {
 }
 
 impl std::error::Error for AuthorizationError {}
+
+impl From<AuthorizationError> for ApiError {
+    fn from(error: AuthorizationError) -> Self {
+        Self::forbidden(error.to_string())
+    }
+}
 
 pub fn ensure_capability_allowed(
     client: &ClientContext,

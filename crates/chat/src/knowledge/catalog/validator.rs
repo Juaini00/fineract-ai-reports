@@ -1,7 +1,8 @@
-use anyhow::{Result, bail};
 use std::collections::HashSet;
 
-use crate::knowladge::model::KnowledgeCatalog;
+use anyhow::{Result, bail};
+
+use crate::knowledge::model::KnowledgeCatalog;
 
 pub struct KnowledgeValidator;
 
@@ -142,8 +143,10 @@ fn validate_unique_ids<'a>(label: &str, ids: impl Iterator<Item = &'a str>) -> R
             bail!("duplicate {label} id {id}");
         }
     }
+
     Ok(())
 }
+
 fn validate_refs(
     owner_label: &str,
     owner_id: &str,
@@ -153,7 +156,7 @@ fn validate_refs(
 ) -> Result<()> {
     for reference in refs {
         if !valid_ids.contains(reference.as_str()) {
-            bail!("{owner_label} {owner_id} references unknown {target_label} {reference}")
+            bail!("{owner_label} {owner_id} references unknown {target_label} {reference}");
         }
     }
 
@@ -168,7 +171,7 @@ fn validate_no_deferred_or_rejected_data_areas(
 ) -> Result<()> {
     for data_area in data_areas {
         if blocked_ids.contains(data_area.as_str()) {
-            bail!("{owner_label} {owner_id} references deferred or rejected data area {data_area}")
+            bail!("{owner_label} {owner_id} references deferred or rejected data area {data_area}");
         }
     }
 

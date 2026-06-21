@@ -1,5 +1,4 @@
 pub mod api;
-pub mod knowladge;
-pub mod model;
-pub mod repository;
-pub mod service;
+pub mod chat;
+pub mod knowledge;
+pub mod policy;

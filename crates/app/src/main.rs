@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
     let chat_state = chat::api::ChatAppState::new(core_state.clone());
 
     let router = app_core::api::router(core_state)
-        .merge(chat::api::routes::router().with_state(chat_state))
+        .merge(chat::api::router(chat_state))
         .layer(TraceLayer::new_for_http());
 
     let addr: SocketAddr = format!("{}:{}", config.app.host, config.app.port).parse()?;
