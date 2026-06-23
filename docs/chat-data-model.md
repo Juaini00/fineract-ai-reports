@@ -132,7 +132,7 @@ Example user message:
 ```json
 {
   "role": "user",
-  "content": "Tampilkan data savings Januari sampai Mei 2026"
+  "content": "Show savings data from January to May 2026"
 }
 ```
 
@@ -347,7 +347,7 @@ Redis is not source of truth. If Redis data is lost, the job must still be recov
 Example ambiguous request:
 
 ```text
-Tampilkan data savings Januari sampai Mei 2026
+Show savings data from January to May 2026
 ```
 
 The system detects ambiguity:
@@ -434,7 +434,7 @@ Request:
 ```json
 {
   "session_id": null,
-  "message": "Deposit terbesar hari ini siapa?"
+  "message": "Who made the largest deposit today?"
 }
 ```
 

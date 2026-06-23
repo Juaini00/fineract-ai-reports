@@ -22,7 +22,7 @@ The system should understand the request, determine whether the report is suppor
 2. Runtime queries must come from approved capabilities and approved query definitions.
 3. Rust is the main validator, planner, policy enforcer, and executor.
 4. DeepSeek is used for AI planning fallback and response formatting, not as a SQL executor.
-5. Vector search is used to find relevant knowledge, not to search transactional numbers.
+5. Vector search is used to find relevant knowledge, not to search transactional numbers. See `docs/rag-architecture.md` for the full RAG indexing and retrieval design.
 6. Unsupported requests must be rejected safely.
 7. Heavy reports must be rejected, clarified, or executed as asynchronous jobs.
 8. Every important decision must be auditable: selected domain, selected capability, confidence score, query id, parameters, latency, and token usage.
@@ -291,7 +291,7 @@ Domain knowledge contains:
 Example meaning mappings:
 
 ```text
-deposit = setoran = money in = savings credit from customer
+deposit = money in = savings credit from customer
 interest = bunga = automatic balance increase from interest posting
 withdrawal = penarikan = money out
 ```
@@ -819,6 +819,7 @@ Important constraints:
 - Read business data only from a read-only Fineract database connection or read replica.
 - The AI must never execute arbitrary SQL.
 - Runtime execution must use approved capabilities and approved SQL query files.
+- Runtime SQL execution must use static approved query bindings; do not pass arbitrary runtime SQL strings to SQLx.
 - Rust is responsible for validation, planning, policy enforcement, execution, audit logging, and result shaping.
 - DeepSeek is used only for AI planning fallback and response formatting.
 - pgvector is used for semantic knowledge retrieval, not for transactional numeric data.
@@ -868,11 +869,8 @@ Keep the implementation small and testable. Do not introduce dynamic SQL generat
 
 ## 17. Next Steps
 
-1. Complete the remaining Phase 9 endpoints: `GET /chat/jobs/{job_id}/stream` and `POST /chat/jobs/{job_id}/responses`.
-2. Add checkpoint/event writes for important chat job boundaries.
-3. Finish catalog config wiring and add `POST /catalog/validate`.
-4. Extend catalog loading/validation for schema, metrics, policies, and responses.
-5. Implement SQL safety validation before any runtime query execution.
-6. Implement local classifier for savings deposit total/top_n.
-7. Wire authorization guards into execution planning and approved SQL parameterization.
-8. Implement approved query execution and response formatting.
+1. Extend the local classifier only where needed for MVP phrases and date ranges.
+2. Add response formatting and assistant chat message output for executed reports.
+3. Add remaining SQL validation if execution needs it: EXPLAIN/output/schema checks.
+4. Move synchronous create-job execution into a background worker.
+5. Add Redis-backed SSE only after background execution exists.

@@ -25,15 +25,15 @@ parameters:
     type: array_bigint
     required: true
     source: authorized_scope
-  - name: limit
-    type: integer
-    required: true
   - name: currency_code
     type: string
     required: false
   - name: product_ids
     type: array_bigint
     required: false
+  - name: limit
+    type: integer
+    required: true
 output_fields:
   - name: transaction_id
     type: bigint

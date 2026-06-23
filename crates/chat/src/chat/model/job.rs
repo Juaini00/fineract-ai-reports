@@ -4,39 +4,16 @@ use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
-pub struct CreateChatSessionInput {
-    pub client: ClientContext,
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChatSession {
-    pub id: Uuid,
-    pub api_key_id: Uuid,
-    pub title: Option<String>,
-    pub status: String,
-    pub context_json: serde_json::Value,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub archived_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChatMessage {
-    pub id: Uuid,
-    pub session_id: Uuid,
-    pub job_id: Option<Uuid>,
-    pub role: String,
-    pub metadata_json: serde_json::Value,
-    pub content: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
 pub struct CreateChatJobInput {
     pub client: ClientContext,
     pub session_id: Option<Uuid>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RespondToChatJobInput {
+    pub client: ClientContext,
+    pub job_id: Uuid,
     pub message: String,
 }
 

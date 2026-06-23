@@ -51,12 +51,16 @@ pub struct CapabilityKnowledge {
     pub status: String,
     pub domain: String,
     pub query_id: String,
+    pub output_mode: String,
 
     #[serde(default)]
     pub data_areas: Vec<String>,
 
     #[serde(default)]
     pub metrics: Vec<String>,
+
+    #[serde(default)]
+    pub examples: Vec<String>,
 
     #[serde(default)]
     pub required_parameters: Vec<String>,

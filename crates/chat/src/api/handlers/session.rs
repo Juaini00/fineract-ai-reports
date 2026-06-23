@@ -11,23 +11,20 @@ use axum::{
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{
-    api::{
-        ChatAppState,
-        dto::chat::{CreateChatJobRequest, CreateChatSessionRequest},
-    },
-    chat::model::{CreateChatJobInput, CreateChatSessionInput},
-};
+use crate::api::ChatAppState;
+use crate::api::dto::session::CreateChatSessionRequest;
+use crate::chat::model::CreateChatSessionInput;
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
-pub async fn create_session(
+pub async fn create(
     AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatSessionRequest>,
 ) -> Result<Response, ApiError> {
     let session = state
-        .chat_service
-        .create_session(CreateChatSessionInput {
+        .chat
+        .sessions
+        .create(CreateChatSessionInput {
             client,
             title: request.title,
         })
@@ -40,14 +37,15 @@ pub async fn create_session(
 }
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
-pub async fn get_session(
+pub async fn get(
     AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let Some(session) = state
-        .chat_service
-        .get_session(client, session_id)
+        .chat
+        .sessions
+        .get(client, session_id)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -66,8 +64,9 @@ pub async fn list_messages(
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let messages = state
-        .chat_service
-        .list_messages(client, session_id)
+        .chat
+        .messages
+        .list_for_session(client, session_id)
         .await
         .map_err(ApiError::internal)?;
 
@@ -77,50 +76,4 @@ pub async fn list_messages(
     );
 
     Ok(response::success(StatusCode::OK, messages).into_response())
-}
-
-#[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
-pub async fn create_job(
-    AuthenticatedClient(client): AuthenticatedClient,
-    State(state): State<ChatAppState>,
-    ValidatedJson(request): ValidatedJson<CreateChatJobRequest>,
-) -> Result<Response, ApiError> {
-    let job = state
-        .chat_service
-        .create_job(CreateChatJobInput {
-            client,
-            session_id: request.session_id,
-            message: request.message,
-        })
-        .await
-        .map_err(ApiError::internal)?;
-
-    info!(
-        session_id = %job.session_id,
-        job_id = %job.job_id,
-        user_message_id = %job.user_message_id,
-        "chat job created"
-    );
-
-    Ok(response::success(StatusCode::CREATED, job).into_response())
-}
-
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
-pub async fn get_job(
-    AuthenticatedClient(client): AuthenticatedClient,
-    State(state): State<ChatAppState>,
-    Path(job_id): Path<Uuid>,
-) -> Result<Response, ApiError> {
-    let Some(job) = state
-        .chat_service
-        .get_job(client, job_id)
-        .await
-        .map_err(ApiError::internal)?
-    else {
-        return Err(ApiError::not_found("chat job not found"));
-    };
-
-    info!(job_id = %job.id, status = %job.status, current_step = %job.current_step, "chat job fetched");
-
-    Ok(response::success(StatusCode::OK, job).into_response())
 }

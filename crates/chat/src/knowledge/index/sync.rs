@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::knowledge::catalog::loader::KnowledgeLoader;
 use crate::knowledge::catalog::validator::KnowledgeValidator;
-use crate::knowledge::index::repository::KnowledgeRepository;
+use crate::knowledge::embedding::VoyageEmbeddingClient;
+use crate::knowledge::index::repository::{IndexedRetrievalDocument, KnowledgeRepository};
 use crate::knowledge::retrieval::{
     RetrievalDocument, RetrievalDocumentBuilder, RetrievalSourceType,
 };
@@ -15,11 +16,15 @@ pub struct KnowledgeSyncSummary {
     pub catalog_version_id: Uuid,
     pub content_hash: String,
     pub document_count: usize,
+    pub embedding_model: Option<String>,
 }
 
 pub struct KnowledgeSyncService {
     loader: KnowledgeLoader,
     repository: KnowledgeRepository,
+    embedding_client: Option<VoyageEmbeddingClient>,
+    embedding_model: Option<String>,
+    embedding_dimensions: Option<i32>,
 }
 
 impl KnowledgeSyncService {
@@ -27,6 +32,25 @@ impl KnowledgeSyncService {
         Self {
             loader,
             repository: KnowledgeRepository::new(pool),
+            embedding_client: None,
+            embedding_model: None,
+            embedding_dimensions: None,
+        }
+    }
+
+    pub fn with_embeddings(
+        loader: KnowledgeLoader,
+        pool: PgPool,
+        embedding_client: VoyageEmbeddingClient,
+        embedding_model: String,
+        embedding_dimensions: i32,
+    ) -> Self {
+        Self {
+            loader,
+            repository: KnowledgeRepository::new(pool),
+            embedding_client: Some(embedding_client),
+            embedding_model: Some(embedding_model),
+            embedding_dimensions: Some(embedding_dimensions),
         }
     }
 
@@ -36,16 +60,54 @@ impl KnowledgeSyncService {
 
         let documents = RetrievalDocumentBuilder::build(&catalog);
         let content_hash = catalog_content_hash(&documents);
+        let indexed_documents = self.indexed_documents(documents).await?;
         let catalog_version_id = self
             .repository
-            .replace_indexed_catalog_version("local", &content_hash, &documents)
+            .replace_indexed_catalog_version(
+                "local",
+                &content_hash,
+                &indexed_documents,
+                self.embedding_model.as_deref(),
+                self.embedding_dimensions,
+            )
             .await?;
 
         Ok(KnowledgeSyncSummary {
             catalog_version_id,
             content_hash,
-            document_count: documents.len(),
+            document_count: indexed_documents.len(),
+            embedding_model: self.embedding_model.clone(),
         })
+    }
+
+    async fn indexed_documents(
+        &self,
+        documents: Vec<RetrievalDocument>,
+    ) -> Result<Vec<IndexedRetrievalDocument>> {
+        let Some(client) = self.embedding_client.as_ref() else {
+            return Ok(documents
+                .into_iter()
+                .map(|document| IndexedRetrievalDocument {
+                    document,
+                    embedding: None,
+                })
+                .collect());
+        };
+
+        let inputs = documents
+            .iter()
+            .map(|document| document.retrieval_text.clone())
+            .collect::<Vec<_>>();
+        let embeddings = client.embed_documents(&inputs).await?;
+
+        Ok(documents
+            .into_iter()
+            .zip(embeddings)
+            .map(|(document, embedding)| IndexedRetrievalDocument {
+                document,
+                embedding: Some(embedding),
+            })
+            .collect())
     }
 }
 

@@ -97,8 +97,8 @@ Purpose:
 
 Supported examples:
 
-- `Total deposit bulan ini berapa?`
-- `Total setoran Januari sampai September 2026.`
+- `What is the total deposit this month?`
+- `Total deposits from January to September 2026.`
 - `How much savings deposit did we receive today?`
 
 Output mode:
@@ -175,8 +175,8 @@ Purpose:
 
 Supported examples:
 
-- `Deposit terbesar hari ini siapa?`
-- `Setoran paling besar bulan ini.`
+- `Who made the largest deposit today?`
+- `Show the largest deposits this month.`
 - `Top 10 savings deposits this week.`
 
 Output mode:

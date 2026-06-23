@@ -116,7 +116,7 @@ It contains:
 - Business description.
 - Supported data area ids.
 - Core business concepts.
-- Synonyms in English and Indonesian.
+- English synonyms.
 - Common user phrases.
 - Supported intents.
 - Explicit unsupported intents.
@@ -125,7 +125,7 @@ It contains:
 Example mappings:
 
 ```text
-deposit = setoran = money in = savings credit from customer
+deposit = money in = savings credit from customer
 withdrawal = penarikan = money out
 interest = bunga = automatic balance increase from interest posting
 office = branch = cabang = organizational reporting scope
@@ -659,6 +659,32 @@ VACUUM
 ANALYZE
 ```
 
+Current implementation:
+
+```text
+crates/chat/src/knowledge/catalog/validator.rs
+```
+
+Current static coverage:
+
+```text
+SQL file existence
+SELECT-only start check
+single-statement check
+blocked unsafe command token check
+placeholder count/order check against query metadata
+basic placeholder cast check against declared parameter types
+required office/date/limit clause presence checks
+```
+
+Still pending:
+
+```text
+EXPLAIN validation against Fineract/app database
+declared output field validation against real query columns
+table and column validation against loaded schema knowledge
+```
+
 ### 5.7 Step 7: Build Runtime Catalog
 
 After validation, the service builds an immutable in-memory runtime catalog.
@@ -713,23 +739,24 @@ Current behavior:
 ```text
 validated catalog data is converted into retrieval documents
 catalog and document content hashes are deterministic
-retrieval documents can be persisted to knowledge_index with embedding NULL
-knowledge_catalog_versions records the generated catalog version
+retrieval documents can be persisted to knowledge_index
+when CATALOG_SYNC_ON_STARTUP=true, Voyage embeddings are stored in knowledge_index.embedding
+knowledge_catalog_versions records indexed or embedded status
+runtime vector fallback searches the latest indexed/embedded catalog version only
+runtime vector fallback currently searches capability rows only and filters by allowed_capabilities
 ```
 
 Still pending:
 
 ```text
-embedding generation
-Voyage API client
 vector rebuild/status endpoint
-runtime vector retrieval
+broader runtime context assembly beyond capability candidates
 ```
 
 Sequencing rule:
 
 ```text
-Index persistence may exist before embeddings, but vector retrieval must not drive authorization or execution decisions.
+Vector retrieval ranks allowed capability candidates only. It must not drive authorization or execute SQL directly.
 ```
 
 ### 5.9 Step 9: Use At Runtime
@@ -739,10 +766,9 @@ Runtime request flow:
 ```text
 User request
   -> API key authentication
-  -> local normalization
-  -> data scope candidate check
-  -> domain candidate retrieval
-  -> capability candidate retrieval
+  -> local rule classifier fast-path
+  -> query embedding when local rules do not match and caller has allowed capabilities
+  -> latest catalog version capability candidate retrieval
   -> parameter extraction
   -> confidence scoring
   -> clarification / unsupported / execution plan
@@ -804,7 +830,7 @@ data_areas:
 concepts:
   - id: deposit
     meaning: Money credited into a savings account.
-    synonyms: [deposit, setoran, money in, credit]
+    synonyms: [deposit, money in, credit]
   - id: withdrawal
     meaning: Money debited from a savings account.
     synonyms: [withdrawal, penarikan, money out, debit]
@@ -836,7 +862,7 @@ metrics:
   - savings.deposit_count
 output_mode: total
 examples:
-  - Total deposit bulan ini berapa?
+  - What is the total deposit this month?
   - How much savings deposit did we receive today?
 required_parameters:
   - from_date
@@ -1086,6 +1112,7 @@ Do not implement these in the first catalog version:
 
 ## 13. References
 
+- `docs/rag-architecture.md` — how the catalog is indexed into pgvector and retrieved at runtime.
 - `docs/reporting-data-scope.md`
 - `docs/reporting-capabilities.md`
 - `docs/reporting-pii-policy.md`

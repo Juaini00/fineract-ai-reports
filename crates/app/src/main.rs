@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     let readiness = pools.readiness().await;
 
     let core_state = app_core::api::AppState::new(config.clone(), pools);
-    let chat_state = chat::api::ChatAppState::new(core_state.clone());
+    let chat_state = chat::api::ChatAppState::new(core_state.clone()).await?;
 
     let router = app_core::api::router(core_state)
         .merge(chat::api::router(chat_state))

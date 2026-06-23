@@ -332,12 +332,32 @@ Current internal module layout:
 crates/chat/src/
   api/
     dto/
+      catalog.rs
+      job.rs
+      session.rs
     handlers/
+      catalog.rs
+      job.rs
+      session.rs
     routes/
+      catalog.rs
+      job.rs
+      session.rs
   chat/
-    model.rs
-    repository.rs
-    service.rs
+    classifier.rs
+    planner.rs
+    model/
+      job.rs
+      message.rs
+      session.rs
+    repository/
+      job.rs
+      message.rs
+      session.rs
+    service/
+      job.rs
+      message.rs
+      session.rs
   knowledge/
     catalog/
       loader.rs
@@ -354,8 +374,13 @@ crates/chat/src/
 Boundary rules inside `chat`:
 
 ```text
-api = HTTP mapping only
-chat = durable session/message/job application logic
+api = HTTP mapping only, split by catalog/job/session
+chat/classifier = deterministic local intent classification before AI/vector
+chat/planner = deterministic conversion from matched classification into an atomic execution plan
+api::ChatAppState = composition for chat services and the cached validated knowledge catalog
+chat/model = durable session/message/job data types, split by concern
+chat/repository = PostgreSQL access, split by concern
+chat/service = application logic, split by concern
 knowledge/catalog = load and validate source YAML/SQL metadata
 knowledge/retrieval = build retrieval documents from validated catalog data
 knowledge/index = persist generated retrieval documents to app DB search/index tables

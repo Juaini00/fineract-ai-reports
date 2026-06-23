@@ -97,6 +97,7 @@ fn build_capability_document(capability: &CapabilityKnowledge) -> RetrievalDocum
         format!("Query {}", capability.query_id),
         optional_list("Data areas", &capability.data_areas),
         optional_list("Metrics", &capability.metrics),
+        optional_list("Examples", &capability.examples),
         optional_list("Required parameters", &capability.required_parameters),
         optional_list("Optional parameters", &capability.optional_parameters),
     ]);
@@ -110,8 +111,10 @@ fn build_capability_document(capability: &CapabilityKnowledge) -> RetrievalDocum
             "status": capability.status,
             "domain": capability.domain,
             "query_id": capability.query_id,
+            "output_mode": capability.output_mode,
             "data_areas": capability.data_areas,
             "metrics": capability.metrics,
+            "examples": capability.examples,
             "required_parameters": capability.required_parameters,
             "optional_parameters": capability.optional_parameters,
         }),

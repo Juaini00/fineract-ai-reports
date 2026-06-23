@@ -671,6 +671,8 @@ GET  /chat/sessions/{session_id}
 GET  /chat/sessions/{session_id}/messages
 POST /chat/jobs
 GET  /chat/jobs/{job_id}
+GET  /chat/jobs/{job_id}/stream
+POST /chat/jobs/{job_id}/responses
 
 Current module layout:
 crates/chat/src/api      = routes, handlers, DTOs
@@ -678,11 +680,12 @@ crates/chat/src/chat     = model, repository, service
 crates/chat/src/policy   = authorization guard helpers
 
 Still pending for this phase:
-GET  /chat/jobs/{job_id}/stream
-POST /chat/jobs/{job_id}/responses
-chat_job_checkpoints writes at important boundaries
-chat_job_events writes for major status/final/error/clarification events
-Redis live progress/SSE coordination
+broader chat_job_checkpoints writes at important pipeline boundaries
+broader chat_job_events writes for final/error/clarification events
+Redis-backed live progress/SSE coordination once background execution exists
+
+Current shortcut:
+GET /chat/jobs/{job_id}/stream returns one safe status event from PostgreSQL.
 ```
 
 ## Phase 10: Catalog Foundation
@@ -756,17 +759,17 @@ PARTIALLY DONE
 Project-level knowledge and query folders exist.
 Initial MVP YAML/SQL files exist for data scope, domains, schema, metrics, capabilities, queries, policies, and responses.
 Loader and validator are implemented under crates/chat/src/knowledge/catalog.
-Current loader/validator coverage is limited to data areas, domains, capabilities, and queries.
+Current loader/validator coverage includes data areas, domains, capabilities, queries, status values, basic executable capability requirements, parameter types, output sensitivity classes, and static SQL safety checks.
 Retrieval document builder exists under crates/chat/src/knowledge/retrieval.rs.
-Catalog/index persistence exists under crates/chat/src/knowledge/index and writes generated retrieval documents with embedding NULL.
-POST /catalog/validate is not implemented yet.
+Catalog/index persistence exists under crates/chat/src/knowledge/index and writes generated retrieval documents.
+Voyage embedding sync exists for startup sync when CATALOG_SYNC_ON_STARTUP=true and VOYAGEAI_API_KEY is configured.
+POST /catalog/validate is implemented and authenticated.
 
 Still pending for this phase:
-read CATALOG_PATH, QUERY_PATH, CATALOG_VALIDATE_ON_STARTUP, and CATALOG_SYNC_ON_STARTUP from AppConfig
 extend typed models/loaders for schema, metrics, policies, and responses
 reject unknown YAML fields after schemas stabilize
-validate status values, sensitivity classes, guards, and policy references
-add the authenticated catalog validation endpoint
+validate guards and policy references more completely
+runtime vector retrieval fallback exists for chat job creation; admin rebuild/status endpoints remain pending
 ```
 
 ## Phase 11: Query Validation
@@ -803,10 +806,23 @@ ANALYZE
 Current status:
 
 ```text
-TODO
+PARTIALLY DONE
 
-SQL files exist, but SQL safety validation is not implemented yet.
-Do not execute approved SQL at runtime until this phase is complete.
+Implemented static checks:
+SQL file exists
+SQL starts with SELECT
+SQL is single-statement
+SQL does not contain blocked unsafe command tokens
+SQL placeholders match declared parameter count/order
+basic SQL casts match declared parameter types
+office/date/limit clauses are present when required by metadata
+
+Still pending:
+EXPLAIN validation with sample params against the target database
+output column validation against the declared output contract
+table/column validation against loaded schema knowledge
+
+Do not execute approved SQL at runtime until the remaining validation gaps are closed or explicitly accepted for MVP.
 ```
 
 ## Phase 12: Local Classifier MVP
@@ -816,10 +832,10 @@ Goal: classify simple savings deposit questions without AI first.
 Supported examples:
 
 ```text
-Deposit terbesar hari ini siapa?
-Setoran paling besar hari ini.
-Total deposit bulan ini berapa?
-Total setoran Januari sampai September 2026.
+Who made the largest deposit today?
+Show the largest deposits today.
+What is the total deposit this month?
+Total deposits from January to September 2026.
 ```
 
 Classifier output:
@@ -846,7 +862,19 @@ return unsupported or clarification
 Current status:
 
 ```text
-TODO
+PARTIALLY DONE
+
+Implemented:
+crates/chat/src/chat/classifier.rs
+Rule-based classification for savings deposit total and top-N examples.
+Supports English-only `today` and `this month` date ranges.
+Stores the classification result in chat_jobs.state_json.classification when a job is created.
+
+Still pending:
+month-name/date-range extraction such as January to September 2026
+execution-plan conversion
+using clarification output to create assistant clarification messages
+runtime continuation after clarification responses
 ```
 
 ## Phase 13: Execution Plan And Policy Guard
@@ -877,6 +905,27 @@ Policy checks:
 6. API key can run capability.
 7. API key can access requested office scope.
 
+Current status:
+
+```text
+PARTIALLY DONE
+
+Implemented:
+crates/chat/src/chat/planner.rs
+Matched classifier results are converted into a minimal atomic execution plan.
+Execution plan is stored in chat_jobs.state_json.execution_plan when a job is created.
+Current plan loads and validates the catalog, then maps the matched capability to its approved query id from catalog metadata.
+The validated catalog is cached in ChatAppState and reused by job planning.
+Policy decision is stored in chat_jobs.state_json.policy_decision when a job is created.
+Current policy decision checks API key capability, effective office scope, and simple PII permission before any execution.
+
+Still pending:
+required parameter completeness validation against catalog metadata
+date range and limit guard enforcement
+output mode lookup from richer typed capability metadata instead of MVP naming heuristic
+using policy_decision to block execution once a real executor exists
+```
+
 ## Phase 14: Query Executor MVP
 
 Goal: execute approved SQL safely against Fineract read-only database.
@@ -890,6 +939,28 @@ Executor requirements:
 5. Return structured result.
 6. Record latency and status.
 7. Never concatenate user input into SQL.
+
+Current status:
+
+```text
+PARTIALLY DONE
+
+Implemented:
+crates/chat/src/chat/executor.rs
+Synchronous executor runs approved catalog SQL after policy_decision is allowed.
+Approved SQL is selected through static `include_str!` bindings by query id, not runtime dynamic SQL strings.
+Parameters are bound from execution_plan and policy_decision; user input is not concatenated into SQL.
+Results are stored in chat_jobs.result_json and job status becomes completed.
+Execution/policy errors are stored as sanitized chat_jobs.error_json and job status becomes failed.
+Completion writes response_completed checkpoint and final event.
+Failure writes job_failed checkpoint and error event.
+Result/error payloads include latency_ms.
+
+Still pending:
+statement timeout enforcement
+max row enforcement beyond SQL LIMIT metadata
+background worker instead of synchronous create-job execution
+```
 
 ## Phase 15: Audit Logging
 
@@ -939,6 +1010,24 @@ If PII is not allowed:
 The largest savings deposit today is IDR 25,000,000 from account SV-****001.
 ```
 
+Current status:
+
+```text
+PARTIALLY DONE
+
+Implemented:
+crates/chat/src/chat/formatter.rs
+Successful report execution inserts an assistant chat_messages row with a simple English template response.
+GET /chat/sessions/{session_id}/messages now shows user and assistant messages after successful execution.
+
+Still pending:
+currency/decimal formatting
+PII-aware top-N templates beyond MVP fields
+empty-result templates
+response knowledge YAML usage
+DeepSeek formatting fallback for complex responses
+```
+
 ## Phase 17: DeepSeek Integration
 
 Goal: add AI only after the deterministic pipeline works.
@@ -960,6 +1049,12 @@ large result computation
 ## Phase 18: Vector Indexing
 
 Goal: add semantic knowledge retrieval after catalog is stable.
+
+Reference design for the full RAG pipeline (indexing + runtime retrieval):
+
+```text
+docs/rag-architecture.md
+```
 
 Initial vector content:
 
@@ -988,11 +1083,16 @@ PARTIALLY STARTED
 
 Database tables exist for knowledge_catalog_versions and knowledge_index.
 Retrieval document hashes and index persistence exist.
-Embeddings are not generated yet.
+Voyage document embeddings are generated when catalog startup sync is enabled.
+Runtime query embedding and capability vector search are wired as a fallback after the local rule classifier does not match.
+Vector search is restricted to capability rows in the caller's allowed_capabilities.
+Vector search uses the latest indexed/embedded catalog version and collapses duplicate capability ids.
+Current confidence policy: <0.40 unsupported, 0.40-0.55 clarify, close candidates within 0.05 clarify, clear >=0.55 can execute after policy checks.
+Classification state records source (`local_rule`, `vector`, or clarification source) and vector candidates for manual verification.
 Vector rebuild/status endpoints are not implemented yet.
 
 Important sequencing rule:
-Do not add Voyage embedding calls until Phase 10 catalog validation and Phase 11 SQL safety validation are solid.
+Vector retrieval only selects approved capability candidates. SQL execution still goes through catalog validation, policy guard, and static approved SQL bindings.
 ```
 
 ## Phase 19: Reporting Expansion
