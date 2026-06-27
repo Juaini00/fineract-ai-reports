@@ -31,6 +31,15 @@
 - Start Redis: `docker compose up -d redis`
 - Check Redis: `docker compose exec -T redis redis-cli ping`
 
+## Postman MCP Workflow
+
+- Use Postman MCP for API collection discovery, request inspection, and request/collection updates when verifying API behavior.
+- Read `postman://instructions` before Postman API work.
+- Primary local verification collection: `fineract report` in workspace `cms-rivolta`, folder `chat`.
+- Collection variables are expected for local use: `BASE_URL`, `LOCAL_ADMIN_TOKEN`, `API_KEY`, `SESSION_ID`, and `JOB_ID`.
+- Preferred Postman MCP flow: `searchPostmanElements` for the collection, `getCollection` with `model=full`, then inspect/update the relevant request definitions.
+- If the active Postman MCP tool profile has no request/collection runner, execute the same request sequence locally against `http://127.0.0.1:3007` and keep secrets out of command output.
+
 ## Local Runtime
 
 - Local app port is `3007` from `.env`; use `http://127.0.0.1:3007` in examples.
@@ -57,8 +66,8 @@
 
 - Implemented: `POST /auth/api-keys`, bootstrap admin token auth, API key hashing, `ApiKeyRepository`, `AuthService`, API key authentication extractor, `GET /auth/me`, consistent response envelope.
 - Raw API keys are returned once and never stored. DB stores `key_hash` and `key_prefix` only.
-- Minimal authorization helpers exist in `crates/chat/src/policy/authorization.rs` for capability, office-scope, and PII checks. Enforce them in protected chat/report execution before approved queries run.
-- `allowed_office_ids` is stored and helper-validated, but report SQL filtering is not implemented yet. Office filtering must be enforced inside approved report queries once report execution exists.
+- Authorization helpers in `crates/chat/src/policy/authorization.rs` (capability, office-scope, PII) are wired into the chat job pipeline: `chat::chat::planner::evaluate_policy` runs before `chat::chat::executor::execute_plan`, and execution is blocked when the decision is not `Allowed`.
+- Office filtering is enforced inside approved SQL: `queries/savings/*.sql` use `office_id = ANY($3::bigint[])` and the executor binds `policy_decision.office_ids` to that parameter. New approved queries must follow the same pattern — do not post-filter office scope in Rust.
 
 ## Chat/Job Design Decisions
 
@@ -72,8 +81,9 @@
 
 - Follow `docs/implementation-steps.md` as the active roadmap.
 - Completed: baseline, app bootstrap, DB pools/readiness, API key generation/authentication, reporting scope/capability/PII docs, chat session/job migrations, workspace alignment to `app` + `core` + `chat`, and current chat module split.
-- Partially done: Phase 9 chat job API foundation, Phase 10 catalog foundation, and knowledge index persistence without embeddings.
-- Next: finish Phase 9 checkpoint/event coverage and real Redis-backed SSE behavior, then finish catalog config and `POST /catalog/validate`, then Phase 11 SQL safety validation.
+- Partially done: Phase 10 catalog foundation (typed loaders for schema/metrics/policies/responses still pending), Phase 18 retrieval breadth (capability-only, broader sources pending), DeepSeek planner fallback.
+- Done since last update: Phase 9 background worker + Redis-backed SSE (`JobService::emit_event` + spawned `run_pipeline`), Phase 11 runtime SQL validation via `validate_runtime` wired into `POST /catalog/validate`, Phase 18 admin endpoints `POST /vector-index/rebuild` and `GET /vector-index/status`.
+- Next: broaden retrieval to domain/metric/schema/policy rows, then DeepSeek planner fallback, then Phase 19 new capabilities.
 
 ## Important References
 

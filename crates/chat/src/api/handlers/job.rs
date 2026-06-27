@@ -11,9 +11,9 @@ use axum::{
         sse::{Event, Sse},
     },
 };
-use futures::stream;
-use std::convert::Infallible;
-use tracing::info;
+use futures::stream::{self, StreamExt};
+use std::{convert::Infallible, time::Duration};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::api::ChatAppState;
@@ -84,19 +84,68 @@ pub async fn stream(
         return Err(ApiError::not_found("chat job not found"));
     };
 
-    let payload = serde_json::json!({
+    let snapshot = serde_json::json!({
         "job_id": job.id,
         "status": job.status,
         "current_step": job.current_step,
     })
     .to_string();
 
-    let events =
-        stream::once(
-            async move { Ok::<_, Infallible>(Event::default().event("status").data(payload)) },
-        );
+    let Some(redis_client) = state.core.pools.redis.clone() else {
+        let events = stream::once(async move {
+            Ok::<_, Infallible>(Event::default().event("status").data(snapshot))
+        });
+        return Ok(Sse::new(events).into_response());
+    };
 
-    Ok(Sse::new(events).into_response())
+    // Poll Redis :latest_event every 1s, emit on change, terminate on :live_state ∈ {completed, failed}.
+    // ponytail: polling; upgrade to PubSub if per-job event latency hurts UX.
+    let event_key = format!("chat_job:{job_id}:latest_event");
+    let state_key = format!("chat_job:{job_id}:live_state");
+    let stream = stream::unfold(
+        (redis_client, event_key, state_key, Some(snapshot), 0u32, true),
+        |(client, event_key, state_key, snapshot, ticks, mut first)| async move {
+            if let Some(initial) = snapshot {
+                return Some((
+                    Ok::<_, Infallible>(Event::default().event("status").data(initial)),
+                    (client, event_key, state_key, None, ticks, false),
+                ));
+            }
+            if !first {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            first = false;
+            if ticks >= 120 {
+                return None;
+            }
+            let mut conn = match client.get_multiplexed_async_connection().await {
+                Ok(conn) => conn,
+                Err(error) => {
+                    warn!(error = %error, "redis connect failed during SSE");
+                    return None;
+                }
+            };
+            let event: Option<String> = redis::AsyncCommands::get(&mut conn, &event_key)
+                .await
+                .unwrap_or(None);
+            let live_state: Option<String> = redis::AsyncCommands::get(&mut conn, &state_key)
+                .await
+                .unwrap_or(None);
+
+            let event = event.unwrap_or_else(|| "{}".to_string());
+            let sse = Event::default().event("update").data(event);
+
+            let terminal = matches!(live_state.as_deref(), Some("completed") | Some("failed"));
+            let next_ticks = if terminal { 121 } else { ticks + 1 };
+            Some((
+                Ok(sse),
+                (client, event_key, state_key, None, next_ticks, first),
+            ))
+        },
+    )
+    .take(125);
+
+    Ok(Sse::new(stream).into_response())
 }
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id, job_id = %job_id))]

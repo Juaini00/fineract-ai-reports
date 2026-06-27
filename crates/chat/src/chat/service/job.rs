@@ -4,15 +4,14 @@ use std::time::Instant;
 use anyhow::{Result, bail};
 use app_core::auth::model::ClientContext;
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tracing::warn;
 use uuid::Uuid;
 
 use crate::chat::classifier::{
     ClarificationOption, ClassificationCandidate, ClassificationOutcome, ClassificationResult,
-    clarify_retrieved_capabilities, classify_clarification_response, classify_message,
-    classify_retrieved_capability,
+    clarify_retrieved_capabilities, classify_clarification_response, classify_retrieved_capability,
 };
 use crate::chat::executor::execute_plan;
 use crate::chat::formatter::format_report_response;
@@ -33,6 +32,7 @@ pub struct JobService {
     catalog: Arc<KnowledgeCatalog>,
     knowledge: KnowledgeRepository,
     embedding_client: VoyageEmbeddingClient,
+    redis: Option<redis::Client>,
 }
 
 impl JobService {
@@ -43,6 +43,7 @@ impl JobService {
         fineract_pool: PgPool,
         catalog: Arc<KnowledgeCatalog>,
         embedding_client: VoyageEmbeddingClient,
+        redis: Option<redis::Client>,
     ) -> Self {
         Self {
             jobs,
@@ -51,7 +52,55 @@ impl JobService {
             catalog,
             knowledge: KnowledgeRepository::new(app_pool),
             embedding_client,
+            redis,
         }
+    }
+
+    /// Emit a chat-job event: durable PG insert + best-effort Redis publish
+    /// (`chat_job:{id}:latest_event`). SSE handlers poll the Redis key.
+    /// ponytail: best-effort — Redis failures are warned but not propagated, since PG is the source of truth.
+    async fn emit_event(
+        &self,
+        job_id: Uuid,
+        kind: &str,
+        step: Option<&str>,
+        payload: Value,
+    ) -> Result<()> {
+        self.jobs
+            .insert_event(job_id, kind, step, payload.clone())
+            .await?;
+        if let Some(client) = &self.redis {
+            let body = json!({
+                "kind": kind,
+                "step": step,
+                "payload": payload,
+                "at": Utc::now(),
+            })
+            .to_string();
+            let key = format!("chat_job:{job_id}:latest_event");
+            match client.get_multiplexed_async_connection().await {
+                Ok(mut conn) => {
+                    let result: redis::RedisResult<()> =
+                        redis::AsyncCommands::set_ex(&mut conn, key, body, 3600).await;
+                    if let Err(error) = result {
+                        warn!(job_id = %job_id, error = %error, "redis publish event failed");
+                    }
+                    if matches!(kind, "final" | "error") {
+                        let state_key = format!("chat_job:{job_id}:live_state");
+                        let state = if kind == "final" { "completed" } else { "failed" };
+                        let _: redis::RedisResult<()> = redis::AsyncCommands::set_ex(
+                            &mut conn,
+                            state_key,
+                            state.to_string(),
+                            3600,
+                        )
+                        .await;
+                    }
+                }
+                Err(error) => warn!(job_id = %job_id, error = %error, "redis connect failed"),
+            }
+        }
+        Ok(())
     }
 
     #[tracing::instrument(skip(self, input), fields(api_key_id = %input.client.api_key_id))]
@@ -102,32 +151,63 @@ impl JobService {
             )
             .await?;
 
-        self.jobs
-            .insert_event(
-                job.job_id,
-                "status",
-                Some("queued"),
-                json!({
-                    "status": job.status,
-                    "current_step": job.current_step,
-                }),
-            )
-            .await?;
+        self.emit_event(
+            job.job_id,
+            "status",
+            Some("queued"),
+            json!({
+                "status": job.status,
+                "current_step": job.current_step,
+            }),
+        )
+        .await?;
 
+        let worker = self.clone();
+        let session_id = job.session_id;
+        let job_id = job.job_id;
+        let plan_for_worker = execution_plan.clone();
+        let policy_for_worker = policy_decision.clone();
+        let classification_for_worker = classification.clone();
+        tokio::spawn(async move {
+            if let Err(error) = worker
+                .run_pipeline(
+                    session_id,
+                    job_id,
+                    classification_for_worker,
+                    plan_for_worker,
+                    policy_for_worker,
+                )
+                .await
+            {
+                warn!(job_id = %job_id, error = %error, "chat job background pipeline failed");
+            }
+        });
+
+        Ok(job)
+    }
+
+    async fn run_pipeline(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        classification: ClassificationResult,
+        execution_plan: Option<crate::chat::planner::ExecutionPlan>,
+        policy_decision: crate::chat::planner::PolicyDecision,
+    ) -> Result<()> {
         if classification.outcome == ClassificationOutcome::ClarificationRequired {
-            self.write_clarification(job.session_id, job.job_id, &classification)
+            self.write_clarification(session_id, job_id, &classification)
                 .await?;
-            return Ok(job);
+            return Ok(());
         }
 
         if let Some(plan) = execution_plan.as_ref() {
-            self.execute_and_finish(job.session_id, job.job_id, plan, &policy_decision)
+            self.execute_and_finish(session_id, job_id, plan, &policy_decision)
                 .await?;
         } else if classification.outcome == ClassificationOutcome::Unsupported {
-            self.fail_unsupported(job.job_id).await?;
+            self.fail_unsupported(job_id).await?;
         }
 
-        Ok(job)
+        Ok(())
     }
 
     async fn classify_with_retrieval(
@@ -136,40 +216,85 @@ impl JobService {
         client: &ClientContext,
     ) -> ClassificationResult {
         let today = Utc::now().date_naive();
-        let rule_result = classify_message(message, today);
-        if rule_result.outcome == ClassificationOutcome::Matched {
-            return rule_result;
+        if is_write_intent(message) {
+            return unsupported_result("write_intent", Vec::new());
         }
+
         if client.allowed_capabilities.is_empty() {
-            return rule_result;
+            return unsupported_result("no_allowed_capabilities", Vec::new());
         }
 
-        let embedding = match self.embedding_client.embed_query(message).await {
-            Ok(embedding) => embedding,
+        match self.embedding_client.embed_query(message).await {
+            Ok(embedding) => match self
+                .knowledge
+                .search_capabilities(embedding.clone(), &client.allowed_capabilities, 3)
+                .await
+            {
+                Ok(candidates) => {
+                    let context = self
+                        .knowledge
+                        .search_context(embedding, 5)
+                        .await
+                        .unwrap_or_else(|error| {
+                            warn!(error = %error, "knowledge context search failed; continuing without context");
+                            Vec::new()
+                        });
+                    let mut result = self
+                        .classify_from_candidates(message, today, &candidates)
+                        .unwrap_or_else(|| unsupported_result("vector_no_match", candidates));
+                    attach_context_candidates(&mut result, &context);
+                    return result;
+                }
+                Err(error) => {
+                    warn!(error = %error, "knowledge vector search failed; using catalog lexical retrieval");
+                }
+            },
             Err(error) => {
-                warn!(error = %error, "query embedding failed; using local classifier result");
-                let mut result = rule_result;
-                result.source = Some("vector_unavailable".to_string());
-                return result;
+                warn!(error = %error, "query embedding failed; using catalog lexical retrieval");
             }
-        };
+        }
 
-        let candidates = match self
-            .knowledge
-            .search_capabilities(embedding, &client.allowed_capabilities, 3)
-            .await
-        {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                warn!(error = %error, "knowledge vector search failed; using local classifier result");
-                let mut result = rule_result;
-                result.source = Some("vector_unavailable".to_string());
-                return result;
-            }
-        };
-
+        let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 3);
         self.classify_from_candidates(message, today, &candidates)
-            .unwrap_or_else(|| vector_no_match(rule_result, candidates))
+            .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates))
+    }
+
+    fn catalog_lexical_candidates(
+        &self,
+        message: &str,
+        allowed_capabilities: &[String],
+        limit: usize,
+    ) -> Vec<RetrievedKnowledgeCandidate> {
+        let message_tokens = tokens(message);
+        if message_tokens.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidates = self
+            .catalog
+            .capabilities
+            .iter()
+            .filter(|capability| {
+                capability.status == "approved_mvp"
+                    && allowed_capabilities.iter().any(|id| id == &capability.id)
+            })
+            .filter_map(|capability| {
+                let text = capability_retrieval_text(capability);
+                let score = lexical_confidence(&message_tokens, &text);
+                (score >= 0.40).then(|| RetrievedKnowledgeCandidate {
+                    source_type: "capability".to_string(),
+                    source_id: capability.id.clone(),
+                    title: format!("Capability {}", capability.id),
+                    retrieval_text: text,
+                    metadata_json: Value::Null,
+                    distance: 1.0 - f64::from(score),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        candidates.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+        candidates.truncate(limit);
+        candidates
     }
 
     fn classify_from_candidates(
@@ -191,6 +316,7 @@ impl JobService {
             .map(|candidate| ClassificationCandidate {
                 capability: candidate.source_id.clone(),
                 confidence: vector_confidence(candidate.distance),
+                source_type: Some(candidate.source_type.clone()),
             })
             .collect::<Vec<_>>();
 
@@ -278,13 +404,17 @@ impl JobService {
                 )
                 .await?;
 
-            if classification.outcome == ClassificationOutcome::ClarificationRequired {
-                self.write_clarification(job.session_id, input.job_id, &classification)
-                    .await?;
-            } else if let Some(plan) = execution_plan.as_ref() {
-                self.execute_and_finish(job.session_id, input.job_id, plan, &policy_decision)
-                    .await?;
-            }
+            let worker = self.clone();
+            let session_id = job.session_id;
+            let job_id = input.job_id;
+            tokio::spawn(async move {
+                if let Err(error) = worker
+                    .run_pipeline(session_id, job_id, classification, execution_plan, policy_decision)
+                    .await
+                {
+                    warn!(job_id = %job_id, error = %error, "chat job clarification pipeline failed");
+                }
+            });
         }
 
         Ok(Some(response))
@@ -321,14 +451,13 @@ impl JobService {
                 json!({ "options": classification.options }),
             )
             .await?;
-        self.jobs
-            .insert_event(
-                job_id,
-                "clarification",
-                Some("taking_decision"),
-                json!({ "options": classification.options }),
-            )
-            .await?;
+        self.emit_event(
+            job_id,
+            "clarification",
+            Some("taking_decision"),
+            json!({ "options": classification.options }),
+        )
+        .await?;
 
         Ok(())
     }
@@ -351,17 +480,16 @@ impl JobService {
                 json!({ "code": "unsupported_request" }),
             )
             .await?;
-        self.jobs
-            .insert_event(
-                job_id,
-                "error",
-                Some("taking_decision"),
-                json!({
-                    "code": "unsupported_request",
-                    "message": "No approved reporting capability matched this request.",
-                }),
-            )
-            .await?;
+        self.emit_event(
+            job_id,
+            "error",
+            Some("taking_decision"),
+            json!({
+                "code": "unsupported_request",
+                "message": "No approved reporting capability matched this request.",
+            }),
+        )
+        .await?;
 
         Ok(())
     }
@@ -403,18 +531,17 @@ impl JobService {
                         }),
                     )
                     .await?;
-                self.jobs
-                    .insert_event(
-                        job_id,
-                        "final",
-                        Some("response"),
-                        json!({
-                            "status": "completed",
-                            "row_count": row_count,
-                            "latency_ms": latency_ms,
-                        }),
-                    )
-                    .await?;
+                self.emit_event(
+                    job_id,
+                    "final",
+                    Some("response"),
+                    json!({
+                        "status": "completed",
+                        "row_count": row_count,
+                        "latency_ms": latency_ms,
+                    }),
+                )
+                .await?;
             }
             Err(error) => {
                 let latency_ms = started_at.elapsed().as_millis() as u64;
@@ -441,18 +568,17 @@ impl JobService {
                         }),
                     )
                     .await?;
-                self.jobs
-                    .insert_event(
-                        job_id,
-                        "error",
-                        Some("response"),
-                        json!({
-                            "code": "execution_failed",
-                            "message": "Report execution failed.",
-                            "latency_ms": latency_ms,
-                        }),
-                    )
-                    .await?;
+                self.emit_event(
+                    job_id,
+                    "error",
+                    Some("response"),
+                    json!({
+                        "code": "execution_failed",
+                        "message": "Report execution failed.",
+                        "latency_ms": latency_ms,
+                    }),
+                )
+                .await?;
             }
         }
 
@@ -475,17 +601,85 @@ fn capability_option(capability: &CapabilityKnowledge) -> ClarificationOption {
     }
 }
 
-fn vector_no_match(
-    mut result: ClassificationResult,
+fn unsupported_result(
+    source: &str,
     candidates: Vec<RetrievedKnowledgeCandidate>,
 ) -> ClassificationResult {
-    result.source = Some("vector_no_match".to_string());
-    result.candidates = candidates
-        .into_iter()
-        .map(|candidate| ClassificationCandidate {
-            capability: candidate.source_id,
-            confidence: vector_confidence(candidate.distance),
-        })
-        .collect();
+    ClassificationResult {
+        outcome: ClassificationOutcome::Unsupported,
+        domain: None,
+        capability: None,
+        confidence: 0.0,
+        params: json!({}),
+        clarification: None,
+        options: Vec::new(),
+        source: Some(source.to_string()),
+        candidates: candidates
+            .into_iter()
+            .map(|candidate| ClassificationCandidate {
+                capability: candidate.source_id,
+                confidence: vector_confidence(candidate.distance),
+                source_type: Some(candidate.source_type),
+            })
+            .collect(),
+    }
+}
+
+/// Append non-capability retrieval rows (data_area, domain, query) to the
+/// classification's candidate list for audit/observability. They do not
+/// influence the local-rule decision, but DeepSeek planner fallback can read
+/// them off `chat_jobs.state_json.classification.candidates`.
+fn attach_context_candidates(
+    result: &mut ClassificationResult,
+    context: &[RetrievedKnowledgeCandidate],
+) {
     result
+        .candidates
+        .extend(context.iter().map(|candidate| ClassificationCandidate {
+            capability: candidate.source_id.clone(),
+            confidence: vector_confidence(candidate.distance),
+            source_type: Some(candidate.source_type.clone()),
+        }));
+}
+
+fn capability_retrieval_text(capability: &CapabilityKnowledge) -> String {
+    [
+        capability.id.clone(),
+        capability.domain.clone(),
+        capability.output_mode.clone(),
+        capability.data_areas.join(" "),
+        capability.metrics.join(" "),
+        capability.examples.join(" "),
+        capability.required_parameters.join(" "),
+        capability.optional_parameters.join(" "),
+    ]
+    .join(" ")
+    .to_lowercase()
+}
+
+fn lexical_confidence(message_tokens: &[String], text: &str) -> f32 {
+    let matches = message_tokens
+        .iter()
+        .filter(|token| text.contains(token.as_str()))
+        .count();
+    (matches as f32 / message_tokens.len().min(6) as f32).min(0.95)
+}
+
+fn tokens(value: &str) -> Vec<String> {
+    value
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| token.len() >= 3)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn is_write_intent(message: &str) -> bool {
+    let normalized = message.to_lowercase();
+    contains_any_local(&normalized, &["create", "open", "add", "new"])
+        && contains_any_local(&normalized, &["account", "customer", "client"])
+}
+
+fn contains_any_local(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }

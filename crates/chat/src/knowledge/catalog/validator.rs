@@ -1,6 +1,10 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
+use sqlx::{AssertSqlSafe, Column, Executor, PgPool, SqlSafeStr, Statement};
 
 use crate::knowledge::model::{KnowledgeCatalog, QueryKnowledge};
 
@@ -213,15 +217,7 @@ impl KnowledgeValidator {
                 )?;
             }
 
-            let sql_path = if query.sql_file.starts_with("queries/") {
-                catalog
-                    .query_path
-                    .parent()
-                    .unwrap_or(&catalog.query_path)
-                    .join(&query.sql_file)
-            } else {
-                catalog.query_path.join(&query.sql_file)
-            };
+            let sql_path = resolve_sql_path(catalog, query);
 
             if !sql_path.exists() {
                 bail!(
@@ -296,6 +292,67 @@ fn is_deferred_or_rejected_status(status: &str) -> bool {
         status,
         "deferred" | "deferred_group" | "rejected" | "rejected_group" | "out_of_scope"
     )
+}
+
+fn resolve_sql_path(catalog: &KnowledgeCatalog, query: &QueryKnowledge) -> PathBuf {
+    if query.sql_file.starts_with("queries/") {
+        catalog
+            .query_path
+            .parent()
+            .unwrap_or(&catalog.query_path)
+            .join(&query.sql_file)
+    } else {
+        catalog.query_path.join(&query.sql_file)
+    }
+}
+
+/// Runtime SQL validation: prepares each approved Fineract query against the
+/// Fineract pool. The prepare step parses the SQL (covers the "EXPLAIN succeeds"
+/// requirement without executing rows) and returns column metadata, which we
+/// compare to the declared `output_fields` contract.
+///
+/// ponytail: only column *names* are checked; type matching is left to the
+/// executor's `try_get` at runtime — upgrade when output_fields gain typed PG
+/// OIDs in YAML.
+pub async fn validate_runtime(catalog: &KnowledgeCatalog, fineract_pool: &PgPool) -> Result<()> {
+    for query in &catalog.queries {
+        if query.database != "fineract" {
+            continue;
+        }
+
+        let sql_path = resolve_sql_path(catalog, query);
+        let sql = std::fs::read_to_string(&sql_path)?;
+        let sql_for_prepare: String = sql.trim().trim_end_matches(';').to_string();
+
+        let statement = fineract_pool
+            .prepare(AssertSqlSafe(sql_for_prepare).into_sql_str())
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("query {} failed prepare against fineract: {err}", query.id)
+            })?;
+
+        let actual: Vec<String> = statement
+            .columns()
+            .iter()
+            .map(|column| column.name().to_string())
+            .collect();
+        let expected: Vec<String> = query
+            .output_fields
+            .iter()
+            .map(|field| field.name.clone())
+            .collect();
+
+        if actual != expected {
+            bail!(
+                "query {} output columns {:?} do not match declared output_fields {:?}",
+                query.id,
+                actual,
+                expected
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {

@@ -529,12 +529,12 @@ Failure examples:
 Current status:
 
 ```text
-PARTIALLY DONE
+DONE
 
 API key authentication produces a ClientContext.
-Chat/report-oriented guard helpers live in crates/chat/src/policy/authorization.rs.
-Helpers cover capability checks, effective office scope, and PII permission checks.
-Report SQL office filtering and response masking still need to be wired into the execution plan and approved SQL path.
+Authorization helpers in crates/chat/src/policy/authorization.rs are wired through chat::chat::planner::evaluate_policy and gate chat::chat::executor::execute_plan.
+Office filtering is enforced inside approved SQL via office_id = ANY($3::bigint[]) bound from policy_decision.office_ids.
+Still pending: PII response masking templates beyond MVP fields (tracked under Phase 16).
 ```
 
 ## Phase 8: Chat Session And Job Data Model
@@ -679,13 +679,18 @@ crates/chat/src/api      = routes, handlers, DTOs
 crates/chat/src/chat     = model, repository, service
 crates/chat/src/policy   = authorization guard helpers
 
-Still pending for this phase:
-broader chat_job_checkpoints writes at important pipeline boundaries
-broader chat_job_events writes for final/error/clarification events
-Redis-backed live progress/SSE coordination once background execution exists
+Background worker:
+POST /chat/jobs and POST /chat/jobs/{job_id}/responses now insert + emit the queued event, then spawn the pipeline (clarification / execute / fail) via tokio::spawn, so the HTTP call returns immediately.
+JobService::run_pipeline is the shared async worker entry point used by both create and respond.
 
-Current shortcut:
-GET /chat/jobs/{job_id}/stream returns one safe status event from PostgreSQL.
+Redis-backed SSE:
+JobService::emit_event writes every event durably to PostgreSQL (chat_job_events) AND publishes a best-effort snapshot to Redis key chat_job:{job_id}:latest_event with a 1h TTL. Terminal events (final/error) also set chat_job:{job_id}:live_state to completed/failed.
+GET /chat/jobs/{job_id}/stream now polls Redis every 1s, emits an SSE "update" frame on each tick, and stops when live_state is completed/failed or after a 120s safety window. When Redis is disabled it falls back to the previous single PostgreSQL snapshot frame.
+
+Still pending for this phase:
+broader chat_job_checkpoints writes at additional pipeline boundaries (currently queued, clarification_required, response_completed, job_failed)
+:lock key for multi-instance fairness (single-process worker is fine for MVP)
+PubSub fan-out for sub-second SSE latency (polling at 1s is sufficient for current UX)
 ```
 
 ## Phase 10: Catalog Foundation
@@ -817,12 +822,14 @@ SQL placeholders match declared parameter count/order
 basic SQL casts match declared parameter types
 office/date/limit clauses are present when required by metadata
 
-Still pending:
-EXPLAIN validation with sample params against the target database
-output column validation against the declared output contract
-table/column validation against loaded schema knowledge
+Runtime checks added via crates/chat/src/knowledge/catalog/validator.rs::validate_runtime:
+SQL is prepared against the Fineract pool (covers parse / EXPLAIN gate without executing rows)
+Returned column names are compared to the declared output_fields contract
+Wired into POST /catalog/validate; route fails fast on parse or contract mismatch
 
-Do not execute approved SQL at runtime until the remaining validation gaps are closed or explicitly accepted for MVP.
+Still pending:
+column type matching against output_fields (currently name-only; runtime executor try_get catches type drift)
+table/column cross-check against loaded schema knowledge (depends on Phase 10 schema typing)
 ```
 
 ## Phase 12: Local Classifier MVP
@@ -1084,12 +1091,14 @@ PARTIALLY STARTED
 Database tables exist for knowledge_catalog_versions and knowledge_index.
 Retrieval document hashes and index persistence exist.
 Voyage document embeddings are generated when catalog startup sync is enabled.
-Runtime query embedding and capability vector search are wired as a fallback after the local rule classifier does not match.
+Runtime query embedding and capability vector search are wired into chat job creation.
+Catalog lexical retrieval is used as a fallback when embedding/vector search is unavailable.
 Vector search is restricted to capability rows in the caller's allowed_capabilities.
 Vector search uses the latest indexed/embedded catalog version and collapses duplicate capability ids.
 Current confidence policy: <0.40 unsupported, 0.40-0.55 clarify, close candidates within 0.05 clarify, clear >=0.55 can execute after policy checks.
 Classification state records source (`local_rule`, `vector`, or clarification source) and vector candidates for manual verification.
-Vector rebuild/status endpoints are not implemented yet.
+POST /vector-index/rebuild and GET /vector-index/status are implemented (authenticated; rebuild runs KnowledgeSyncService::with_embeddings, status returns the latest knowledge_catalog_versions row).
+Broader retrieval: KnowledgeRepository::search_context queries non-capability rows (data_area, domain, query) from the latest indexed catalog version; results are appended to classification.candidates with their source_type for audit and future DeepSeek planner consumption — they do not influence the local-rule decision.
 
 Important sequencing rule:
 Vector retrieval only selects approved capability candidates. SQL execution still goes through catalog validation, policy guard, and static approved SQL bindings.

@@ -117,9 +117,10 @@ request
   -> API key auth (core)
   -> ClientContext attached
   -> chat job created (chat::chat::service)
-  -> local rule classifier fast-path
-  -> if not matched and API key has allowed capabilities: embed query
+  -> deterministic write-intent guard
+  -> if API key has allowed capabilities: embed query
   -> vector search latest catalog version capability rows filtered by allowed_capabilities
+  -> catalog lexical fallback when embedding/vector search is unavailable
   -> choose one high-confidence capability or ask clarification from close candidates
   -> persist classification.source and classification.candidates in chat_jobs.state_json
   -> [retrieval ends here]
@@ -188,16 +189,14 @@ DeepSeek can return only one of: a `capability_id` choice with extracted paramet
 - Retrieval document builder that flattens catalog entries into searchable text with stable metadata.
 - Voyage embedding client for document embeddings.
 - Sync orchestration that persists retrieval documents, fills embeddings when startup sync is enabled, and records an `indexed` or `embedded` catalog version.
-- Runtime query embedding and capability-only vector fallback in chat job creation.
+- Runtime query embedding and capability-only vector classification in chat job creation.
 - `classification.source` and `classification.candidates` persisted in `chat_jobs.state_json` for manual verification.
 
 ### Pending
 
-- `POST /vector-index/rebuild` and `GET /vector-index/status`.
-- Admin rebuild/status endpoints.
-- Broader candidate context assembly across domains, metrics, schema, and policy notes.
-- Query embedding/vector retrieval for clarification responses.
-- DeepSeek planner fallback over retrieved candidates.
+- Metric / schema / policy / response retrieval documents (current `RetrievalSourceType` enum only covers `data_area | domain | capability | query`; emitter must be extended once those YAML files become typed in Phase 10).
+- Query embedding/vector retrieval for clarification responses (current path is lexical only).
+- DeepSeek planner fallback over retrieved candidates. Context candidates (data_area / domain / query) are already attached to `chat_jobs.state_json.classification.candidates` with their `source_type` for the planner to consume.
 
 ### Sequencing Rule
 

@@ -766,9 +766,10 @@ Runtime request flow:
 ```text
 User request
   -> API key authentication
-  -> local rule classifier fast-path
-  -> query embedding when local rules do not match and caller has allowed capabilities
+  -> deterministic write-intent guard
+  -> query embedding when caller has allowed capabilities
   -> latest catalog version capability candidate retrieval
+  -> catalog lexical fallback when embedding/vector search is unavailable
   -> parameter extraction
   -> confidence scoring
   -> clarification / unsupported / execution plan

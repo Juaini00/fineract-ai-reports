@@ -35,6 +35,10 @@ pub struct ClarificationOption {
 pub struct ClassificationCandidate {
     pub capability: String,
     pub confidence: f32,
+    /// Index source kind: capability / data_area / domain / query. Optional for
+    /// back-compat with older jobs whose state_json predates broader retrieval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
 }
 
 pub fn classify_message(message: &str, today: NaiveDate) -> ClassificationResult {
@@ -297,6 +301,10 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    if let Some(range) = month_range(message) {
+        return Some(range);
+    }
+
     if contains_any(message, &["today"]) {
         return Some((today, today));
     }
@@ -312,6 +320,62 @@ fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)>
     }
 
     None
+}
+
+fn month_range(message: &str) -> Option<(NaiveDate, NaiveDate)> {
+    let tokens = message
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let year = tokens
+        .iter()
+        .rev()
+        .find_map(|token| token.parse::<i32>().ok())?;
+    let months = tokens
+        .iter()
+        .filter_map(|token| month_number(token))
+        .collect::<Vec<_>>();
+
+    match months.as_slice() {
+        [month] => {
+            let from_date = NaiveDate::from_ymd_opt(year, *month, 1)?;
+            let to_date = end_of_month(year, *month)?;
+            Some((from_date, to_date))
+        }
+        [from_month, to_month, ..] => {
+            let from_date = NaiveDate::from_ymd_opt(year, *from_month, 1)?;
+            let to_date = end_of_month(year, *to_month)?;
+            Some((from_date, to_date))
+        }
+        _ => None,
+    }
+}
+
+fn month_number(token: &str) -> Option<u32> {
+    match token {
+        "jan" | "january" | "januari" => Some(1),
+        "feb" | "february" | "februari" => Some(2),
+        "mar" | "march" | "maret" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" | "mei" => Some(5),
+        "jun" | "june" | "juni" => Some(6),
+        "jul" | "july" | "juli" => Some(7),
+        "aug" | "august" | "agustus" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" | "okt" | "oktober" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" | "des" | "desember" => Some(12),
+        _ => None,
+    }
+}
+
+fn end_of_month(year: i32, month: u32) -> Option<NaiveDate> {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(next_year, next_month, 1).map(|date| date - chrono::Duration::days(1))
 }
 
 fn deposit_options() -> Vec<ClarificationOption> {
@@ -391,6 +455,23 @@ mod tests {
         assert_eq!(result.outcome, ClassificationOutcome::Matched);
         assert_eq!(result.capability.as_deref(), Some("savings_deposit_total"));
         assert_eq!(result.params["from_date"], "2026-06-15");
+    }
+
+    #[test]
+    fn parses_indonesian_month_range() {
+        let result = classify_retrieved_capability(
+            "saya mau tau deposit bulan mei - september 2025",
+            today(),
+            "savings",
+            "savings_deposit_total",
+            "total",
+            0.7,
+            Vec::new(),
+        );
+
+        assert_eq!(result.outcome, ClassificationOutcome::Matched);
+        assert_eq!(result.params["from_date"], "2025-05-01");
+        assert_eq!(result.params["to_date"], "2025-09-30");
     }
 
     #[test]

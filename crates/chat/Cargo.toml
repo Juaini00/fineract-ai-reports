@@ -20,3 +20,5 @@ uuid.workspace = true
 validator.workspace = true
 pgvector.workspace = true
 reqwest.workspace = true
+redis.workspace = true
+tokio.workspace = true

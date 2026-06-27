@@ -75,6 +75,7 @@ impl ChatAppState {
                 core.pools.fineract.clone(),
                 catalog.clone(),
                 runtime_embedding_client,
+                core.pools.redis.clone(),
             ),
         };
 

@@ -24,6 +24,7 @@ struct CatalogVersionIdRow {
 
 #[derive(Debug, Clone, FromRow)]
 pub struct RetrievedKnowledgeCandidate {
+    pub source_type: String,
     pub source_id: String,
     pub title: String,
     pub retrieval_text: String,
@@ -90,6 +91,7 @@ impl KnowledgeRepository {
                 LIMIT 1
             ), ranked AS (
                 SELECT
+                    source_type,
                     source_id,
                     title,
                     retrieval_text,
@@ -103,6 +105,7 @@ impl KnowledgeRepository {
                   AND source_id = ANY($2)
             )
             SELECT
+                source_type,
                 source_id,
                 title,
                 retrieval_text,
@@ -116,6 +119,58 @@ impl KnowledgeRepository {
         )
         .bind(embedding)
         .bind(allowed_capabilities)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    /// Non-capability context (data_area, domain, query) from the latest indexed
+    /// catalog version. Returned alongside capability candidates for audit and
+    /// future DeepSeek planner context — never drives execution.
+    pub async fn search_context(
+        &self,
+        embedding: Vec<f32>,
+        limit: i64,
+    ) -> Result<Vec<RetrievedKnowledgeCandidate>> {
+        let embedding = Vector::from(embedding);
+        let rows = sqlx::query_as::<_, RetrievedKnowledgeCandidate>(
+            r#"
+            WITH latest_catalog AS (
+                SELECT id
+                FROM knowledge_catalog_versions
+                WHERE status IN ('embedded', 'indexed')
+                ORDER BY synced_at DESC NULLS LAST, created_at DESC
+                LIMIT 1
+            ), ranked AS (
+                SELECT
+                    source_type,
+                    source_id,
+                    title,
+                    retrieval_text,
+                    metadata_json,
+                    (embedding <=> $1) AS distance,
+                    row_number() OVER (PARTITION BY source_type, source_id ORDER BY embedding <=> $1) AS row_number
+                FROM knowledge_index
+                WHERE catalog_version_id = (SELECT id FROM latest_catalog)
+                  AND embedding IS NOT NULL
+                  AND source_type <> 'capability'
+            )
+            SELECT
+                source_type,
+                source_id,
+                title,
+                retrieval_text,
+                metadata_json,
+                distance
+            FROM ranked
+            WHERE row_number = 1
+            ORDER BY distance
+            LIMIT $2
+            "#,
+        )
+        .bind(embedding)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
