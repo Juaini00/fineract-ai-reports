@@ -15,7 +15,7 @@ pub(crate) struct CreateApiKeyRequest {
     #[serde(default)]
     pub(crate) allowed_office_ids: Vec<i64>,
 
-    #[validate(length(min = 1, message = "at least one capability is required"))]
+    #[serde(default)]
     pub(crate) allowed_capabilities: Vec<String>,
 
     #[serde(default)]

@@ -87,7 +87,11 @@ impl JobService {
                     }
                     if matches!(kind, "final" | "error") {
                         let state_key = format!("chat_job:{job_id}:live_state");
-                        let state = if kind == "final" { "completed" } else { "failed" };
+                        let state = if kind == "final" {
+                            "completed"
+                        } else {
+                            "failed"
+                        };
                         let _: redis::RedisResult<()> = redis::AsyncCommands::set_ex(
                             &mut conn,
                             state_key,
@@ -239,9 +243,20 @@ impl JobService {
                             warn!(error = %error, "knowledge context search failed; continuing without context");
                             Vec::new()
                         });
+                    let top_capability_conf = candidates
+                        .first()
+                        .map(|candidate| vector_confidence(candidate.distance))
+                        .unwrap_or(0.0);
                     let mut result = self
                         .classify_from_candidates(message, today, &candidates)
-                        .unwrap_or_else(|| unsupported_result("vector_no_match", candidates));
+                        .unwrap_or_else(|| {
+                            unsupported_result("vector_no_match", candidates.clone())
+                        });
+                    if result.outcome != ClassificationOutcome::Unsupported
+                        && self.context_overrides_capability(message, &context, top_capability_conf)
+                    {
+                        result = unsupported_result("off_domain_match", candidates);
+                    }
                     attach_context_candidates(&mut result, &context);
                     return result;
                 }
@@ -257,6 +272,41 @@ impl JobService {
         let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 3);
         self.classify_from_candidates(message, today, &candidates)
             .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates))
+    }
+
+    /// Returns true when the top context candidate (a non-capability row from
+    /// `search_context`) wins decisively over the top capability candidate AND
+    /// its source is a deferred/rejected area or domain. This is the signal that
+    /// the user asked about a topic outside the API key's reporting surface, and
+    /// the savings capability that scored mid-confidence is the wrong answer.
+    /// ponytail: simple two-number compare. Upgrade to per-source-type weights
+    /// only if false positives appear in production.
+    fn context_overrides_capability(
+        &self,
+        message: &str,
+        context: &[RetrievedKnowledgeCandidate],
+        top_capability_confidence: f32,
+    ) -> bool {
+        let Some((top, top_conf)) = context
+            .iter()
+            .filter(|candidate| {
+                is_deferred_context_source(
+                    &self.catalog,
+                    &candidate.source_type,
+                    &candidate.source_id,
+                )
+            })
+            .map(|candidate| (candidate, vector_confidence(candidate.distance)))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+        else {
+            return false;
+        };
+
+        if top_conf >= 0.50 && top_conf > top_capability_confidence + 0.10 {
+            return true;
+        }
+
+        top_conf >= 0.38 && has_off_domain_cue(message, &top.source_id)
     }
 
     fn catalog_lexical_candidates(
@@ -409,7 +459,13 @@ impl JobService {
             let job_id = input.job_id;
             tokio::spawn(async move {
                 if let Err(error) = worker
-                    .run_pipeline(session_id, job_id, classification, execution_plan, policy_decision)
+                    .run_pipeline(
+                        session_id,
+                        job_id,
+                        classification,
+                        execution_plan,
+                        policy_decision,
+                    )
                     .await
                 {
                     warn!(job_id = %job_id, error = %error, "chat job clarification pipeline failed");
@@ -584,6 +640,54 @@ impl JobService {
 
         Ok(())
     }
+}
+
+fn is_deferred_context_source(
+    catalog: &KnowledgeCatalog,
+    source_type: &str,
+    source_id: &str,
+) -> bool {
+    match source_type {
+        "domain" => catalog
+            .domains
+            .iter()
+            .find(|domain| domain.id == source_id)
+            .is_some_and(|domain| is_non_executable_status(&domain.status)),
+        "data_area" => catalog
+            .data_areas
+            .iter()
+            .find(|area| area.id == source_id)
+            .is_some_and(|area| is_non_executable_status(&area.status)),
+        _ => false,
+    }
+}
+
+/// Statuses where the catalog explicitly declares the area / domain is NOT
+/// currently executable: deferred (work pending), rejected (won't do),
+/// out_of_scope (hard reject), or candidate (documented but no approved MVP
+/// capability yet — per knowledge-catalog.md §2.5 + group_center default rule).
+fn is_non_executable_status(status: &str) -> bool {
+    matches!(
+        status,
+        "deferred"
+            | "deferred_group"
+            | "rejected"
+            | "rejected_group"
+            | "out_of_scope"
+            | "candidate"
+    )
+}
+
+fn has_off_domain_cue(message: &str, source_id: &str) -> bool {
+    let message = message.to_lowercase();
+    let source_id = source_id.to_lowercase();
+
+    (source_id.contains("loan") && message.contains("loan"))
+        || (source_id.contains("accounting")
+            && contains_any_local(&message, &["accounting", "journal", "ledger", "gl"]))
+        || (source_id.contains("tax") && message.contains("tax"))
+        || (source_id.contains("group")
+            && contains_any_local(&message, &["group", "groups", "center", "centers"]))
 }
 
 fn vector_confidence(distance: f64) -> f32 {

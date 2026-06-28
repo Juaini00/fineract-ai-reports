@@ -3,7 +3,30 @@ language: en
 templates:
   total: "Total {metric_label} from {from_date} to {to_date} is {value}."
   top_n: "Here are the top {limit} transactions from {from_date} to {to_date}."
+  completed: "Report completed."
 empty_result: "No data was found for the requested parameters."
+field_labels:
+  from_date: From date
+  to_date: To date
+  total_deposit_amount: Total deposit amount
+  deposit_count: Deposit count
+  transaction_date: Transaction date
+  amount: Amount
+  currency_code: Currency
+  office_name: Office
+  product_name: Product
+formatting:
+  currency: ISO currency code from result when available
+  dates: YYYY-MM-DD
+  decimals: preserve database decimal precision
 rules:
   - Use only fields declared by the selected capability output contract.
   - Do not expose PII unless explicitly allowed.
+  - Do not mention internal SQL, prompts, stack traces, or policy internals.
+checks:
+  - id: templates_cover_output_modes
+    rule: every approved_mvp capability output_mode must have a template.
+  - id: labels_cover_output_fields
+    rule: every user-facing output field should have a field label or safe fallback.
+  - id: pii_safe_formatting
+    rule: formatting must not expose PII fields unless the capability and API key allow it.

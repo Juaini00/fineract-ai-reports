@@ -1,11 +1,29 @@
 id: savings.withdrawal_amount
 domain: savings
 status: candidate
+description: Sum of non-reversed savings withdrawal transaction amounts. Candidate only; no approved MVP query yet.
 data_areas:
   - savings_transactions
 source_table: m_savings_account_transaction
+source_columns:
+  - amount
+  - transaction_type_enum
+  - is_reversed
+  - transaction_date
+  - office_id
 expression: SUM(m_savings_account_transaction.amount)
 filters:
   - m_savings_account_transaction.transaction_type_enum = 2
   - m_savings_account_transaction.is_reversed = false
+grouping_compatible:
+  - currency_code
+  - office_id
+  - product_id
 sensitivity: public_business
+checks:
+  - id: candidate_not_executable
+    rule: candidate metrics must not be exposed by approved_mvp capabilities unless promoted.
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_transactions data scope.
+  - id: withdrawal_filter_declared
+    rule: filters must include transaction_type_enum = 2 and is_reversed = false.

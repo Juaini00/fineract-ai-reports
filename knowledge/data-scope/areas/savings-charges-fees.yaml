@@ -14,3 +14,8 @@ allowed_domains:
   - savings
 default_rules:
   - Keep secondary until core savings transaction reporting is stable.
+checks:
+  - id: secondary_not_executable_without_capability
+    rule: secondary tables must not be used by approved_mvp queries until a capability is approved.
+  - id: charge_metrics_candidate_only
+    rule: charge and fee metrics must remain candidate until output semantics are approved.

@@ -1,0 +1,38 @@
+id: loan
+status: deferred
+display_name: Loan
+description: Loan portfolio reporting — disbursements, repayments, arrears, write-offs.
+data_areas:
+  - loans
+concepts:
+  - id: loan
+    meaning: Credit account extended to a client or group.
+    synonyms: [loan, credit, kredit, pinjaman]
+  - id: disbursement
+    meaning: Funds released to the borrower at loan origination.
+    synonyms: [disbursement, payout, pencairan]
+  - id: repayment
+    meaning: Borrower payment that reduces outstanding principal or interest.
+    synonyms: [repayment, installment, angsuran, pembayaran]
+  - id: arrears
+    meaning: Overdue installments past their due date.
+    synonyms: [arrears, overdue, delinquent, tunggakan]
+  - id: write_off
+    meaning: Charge-off of uncollectible loan balance.
+    synonyms: [write off, write-off, charge off]
+supported_intents:
+  - loan disbursement totals
+  - loan repayment totals
+  - largest outstanding loans
+  - arrears summary
+unsupported_intents:
+  - create loan account
+  - disburse loan
+  - reverse loan transaction
+default_rules:
+  - Loan reporting is deferred; all loan-related requests must respond as unsupported with a deferred reason.
+checks:
+  - id: deferred_domain
+    rule: this domain must not have approved_mvp capabilities.
+  - id: loan_tables_not_runtime
+    rule: loan data areas must not be referenced by approved_mvp queries.

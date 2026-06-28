@@ -17,3 +17,10 @@ allowed_domains:
 default_rules:
   - Prefer aggregate reporting by default.
   - Client identity fields require explicit capability approval and can_view_pii=true.
+checks:
+  - id: client_pii_declared
+    rule: display_name, names, mobile_no, email_address, and date_of_birth must be classified as pii.
+  - id: client_sensitive_identifiers_excluded
+    rule: account_no and external_id must not appear in approved MVP output fields.
+  - id: row_level_identity_requires_capability
+    rule: row-level client fields require both can_view_pii and capability approval.

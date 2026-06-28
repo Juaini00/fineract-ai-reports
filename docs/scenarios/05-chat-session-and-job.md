@@ -3,6 +3,17 @@
 **Phase covered:** Phase 8 (durable state) + Phase 9 (background worker + Redis SSE) + Phase 12–14 (classifier + plan + executor) + Phase 16 (template formatter).
 **Precondition:** `API_KEY` from `02`. Knowledge catalog synced (`04`). Fineract DB has `m_savings_account_transaction` rows.
 
+## Test status
+
+✅ Passed on 2026-06-28 rerun via Postman MCP runner.
+
+- Session creation returned HTTP 201.
+- Job creation returned HTTP 201 with `data.job_id` and `status=queued`.
+- SSE stream returned HTTP 200 and included a final event.
+- Final job state returned `status=completed` and `result_json.row_count > 0`.
+- Session messages included both `user` and `assistant` roles.
+- Top-N month variant returned `client_id` and `client_display_name` in result rows.
+
 ## 1. Create a session
 
 ```bash
@@ -35,12 +46,12 @@ curl -X POST {{BASE_URL}}/chat/jobs \
   }'
 ```
 
-### Expected (HTTP 202)
+### Expected (HTTP 201)
 ```json
 {
   "success": true,
   "data": {
-    "id": "<uuid>",
+    "job_id": "<uuid>",
     "session_id": "{{SESSION_ID}}",
     "user_message_id": "<uuid>",
     "status": "queued",
@@ -50,7 +61,7 @@ curl -X POST {{BASE_URL}}/chat/jobs \
 }
 ```
 
-Copy `data.id` into `{{JOB_ID}}`. **HTTP returns immediately** — the background `tokio::spawn` worker runs classification → planning → policy → execute and emits progress events as it goes.
+Copy `data.job_id` into `{{JOB_ID}}`. **HTTP returns immediately** — the background `tokio::spawn` worker runs classification → planning → policy → execute and emits progress events as it goes.
 
 ## 3. Stream progress (SSE)
 
@@ -119,6 +130,27 @@ curl {{BASE_URL}}/chat/sessions/{{SESSION_ID}}/messages \
 ## Top-N variant
 
 Same flow with `message: "Show the largest deposits today"` → classifier picks `savings_deposit_top_n`, plan binds `limit`, executor returns rows ordered by amount.
+
+✅ Passed on 2026-06-28 rerun with `message: "Show the largest deposits this month"`. The `today` variant completed but returned `row_count=0` in the local dataset, so the month variant was used to verify row fields.
+
+After the knowledge expansion the `top_n` output contract includes client identity (`LEFT JOIN m_client`):
+
+```json
+{
+  "transaction_id": <n>,
+  "transaction_date": "...",
+  "amount": "...",
+  "currency_code": "...",
+  "office_id": <n>,
+  "office_name": "...",
+  "product_id": <n>,
+  "product_name": "...",
+  "client_id": <n>,
+  "client_display_name": "..."   // PII — sensitivity: pii in output_fields
+}
+```
+
+`client_id` is `NULL` for group-owned accounts (LEFT JOIN). `client_display_name` is a PII field per the YAML output contract; Phase 16 expansion will mask it when `client.can_view_pii=false`. Current formatter template does not surface it yet.
 
 ## Side effects
 - DB `chat_jobs`: status `queued → running → completed`. `state_json` populated; `result_json` written on success.

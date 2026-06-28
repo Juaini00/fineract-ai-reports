@@ -2,6 +2,14 @@
 
 **Phase covered:** Phase 0–4 (baseline + bootstrap + DB + migrations).
 
+## Test status
+
+✅ Passed on 2026-06-28.
+
+- Redis check returned `PONG`.
+- PostgreSQL `pg_extension` contains `vector`.
+- App was already running on `127.0.0.1:3007` and answered health/readiness scenarios.
+
 ## 1. Environment
 
 Required `.env` keys (defaults work for local dev):

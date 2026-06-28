@@ -1,8 +1,29 @@
 id: savings.account_balance
 domain: savings
 status: candidate
+description: Current derived savings account balance snapshot. Candidate only; not date-bounded movement.
 data_areas:
   - savings_core
 source_table: m_savings_account
+source_columns:
+  - account_balance_derived
+  - available_balance_derived
+  - currency_code
+  - product_id
+  - client_id
+  - group_id
 expression: m_savings_account.account_balance_derived
+filters:
+  - account owner office must be inside authorized office scope
+grouping_compatible:
+  - currency_code
+  - office_id
+  - product_id
 sensitivity: public_business
+checks:
+  - id: candidate_not_executable
+    rule: candidate metrics must not be exposed by approved_mvp capabilities unless promoted.
+  - id: snapshot_semantics_declared
+    rule: account balance must be treated as current snapshot, not date-bounded transaction movement.
+  - id: owner_office_scope_required
+    rule: future account-balance queries must enforce owner office scope.

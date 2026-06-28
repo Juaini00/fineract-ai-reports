@@ -1,6 +1,20 @@
 id: office_scope_policy
+source_doc: docs/reporting-capabilities.md#4-common-mvp-savings-joins
 rules:
   - Fineract report queries must constrain office ids to API key allowed_office_ids.
   - User-provided office_ids must be a subset of allowed_office_ids.
   - If office_ids is omitted, use all allowed_office_ids.
+  - Transaction reports must constrain m_savings_account_transaction.office_id with ANY($office_ids).
+  - Account owner office paths should be validated where practical to avoid broadening access.
 default_source: api_key.allowed_office_ids
+enforcement_points:
+  - policy guard validates requested office_ids
+  - query metadata declares office_ids parameter source authorized_scope
+  - SQL uses bound office_ids array, never string interpolation
+checks:
+  - id: every_fineract_query_has_office_ids
+    rule: every Fineract query must declare office_ids as source authorized_scope.
+  - id: every_fineract_query_requires_office_filter
+    rule: every Fineract query guard must set require_office_filter=true.
+  - id: sql_uses_bound_office_array
+    rule: SQL must use ANY($n::bigint[]) for office scope.

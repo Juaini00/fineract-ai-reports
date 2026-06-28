@@ -705,50 +705,48 @@ docs/knowledge-catalog.md
 
 Initial folders:
 
-```text
-knowledge/data-scope/
-knowledge/domains/
-knowledge/schema/
-knowledge/metrics/
-knowledge/capabilities/
-knowledge/queries/
-knowledge/policies/
-knowledge/responses/
-queries/
-```
+- [x] `knowledge/data-scope/`
+- [x] `knowledge/domains/`
+- [x] `knowledge/schema/`
+- [x] `knowledge/metrics/`
+- [x] `knowledge/capabilities/`
+- [x] `knowledge/queries/`
+- [x] `knowledge/policies/`
+- [x] `knowledge/responses/`
+- [x] `queries/`
 
 Initial files:
 
-```text
-knowledge/data-scope/reporting-scope.yaml
-knowledge/data-scope/areas/*.yaml
-knowledge/domains/savings.yaml
-knowledge/domains/client.yaml
-knowledge/domains/organization.yaml
-knowledge/schema/fineract/*.yaml
-knowledge/schema/fineract/enums/*.yaml
-knowledge/schema/fineract/joins/*.yaml
-knowledge/schema/fineract/columns/*.yaml
-knowledge/metrics/savings/*.yaml
-knowledge/capabilities/savings/deposit_total.yaml
-knowledge/capabilities/savings/deposit_top_n.yaml
-knowledge/queries/savings/deposit_total.yaml
-knowledge/queries/savings/deposit_top_n.yaml
-knowledge/policies/*.yaml
-knowledge/responses/*.yaml
-queries/savings/deposit_total.sql
-queries/savings/deposit_top_n.sql
-```
+- [x] `knowledge/data-scope/reporting-scope.yaml`
+- [x] `knowledge/data-scope/areas/*.yaml`
+- [x] `knowledge/domains/savings.yaml`
+- [x] `knowledge/domains/client.yaml`
+- [x] `knowledge/domains/organization.yaml`
+- [x] `knowledge/schema/fineract/*.yaml`
+- [x] `knowledge/schema/fineract/enums/*.yaml`
+- [x] `knowledge/schema/fineract/joins/*.yaml`
+- [x] `knowledge/schema/fineract/columns/*.yaml`
+- [x] `knowledge/metrics/savings/*.yaml`
+- [x] `knowledge/capabilities/savings/deposit_total.yaml`
+- [x] `knowledge/capabilities/savings/deposit_top_n.yaml`
+- [x] `knowledge/queries/savings/deposit_total.yaml`
+- [x] `knowledge/queries/savings/deposit_top_n.yaml`
+- [x] `knowledge/policies/*.yaml`
+- [x] `knowledge/responses/*.yaml`
+- [x] `queries/savings/deposit_total.sql`
+- [x] `queries/savings/deposit_top_n.sql`
 
 Catalog validation:
 
-1. Required YAML fields exist.
-2. Capability references existing domain.
-3. Capability references existing query id.
-4. Query YAML references existing SQL file.
-5. Required parameters are declared.
-6. Output fields are declared.
-7. Guards are declared.
+1. [x] Required YAML fields exist for loaded catalog layers.
+2. [x] Capability references existing domain.
+3. [x] Capability references existing query id.
+4. [x] Query YAML references existing SQL file.
+5. [x] Required parameters are declared.
+6. [x] Output fields are declared.
+7. [x] Guards are declared in query/capability YAML.
+8. [ ] Schema/metric/policy/response files are loaded into typed Rust models.
+9. [ ] Schema/metric/policy/response references are fully validated by Rust.
 
 Endpoint:
 
@@ -762,7 +760,9 @@ Current status:
 PARTIALLY DONE
 
 Project-level knowledge and query folders exist.
-Initial MVP YAML/SQL files exist for data scope, domains, schema, metrics, capabilities, queries, policies, and responses.
+Initial MVP YAML/SQL files exist and are marked complete for data scope, domains, schema, metrics, capabilities, queries, policies, and responses.
+Every `knowledge/**/*.yaml` file now declares explicit `checks` metadata.
+Knowledge checks metadata covers capability-query contracts, office scope, PII, SQL safety, data scope, domain runtime status, metrics, responses, enums, and schema joins.
 Loader and validator are implemented under crates/chat/src/knowledge/catalog.
 Current loader/validator coverage includes data areas, domains, capabilities, queries, status values, basic executable capability requirements, parameter types, output sensitivity classes, and static SQL safety checks.
 Retrieval document builder exists under crates/chat/src/knowledge/retrieval.rs.
@@ -774,7 +774,7 @@ Still pending for this phase:
 extend typed models/loaders for schema, metrics, policies, and responses
 reject unknown YAML fields after schemas stabilize
 validate guards and policy references more completely
-runtime vector retrieval fallback exists for chat job creation; admin rebuild/status endpoints remain pending
+runtime vector retrieval fallback exists for chat job creation
 ```
 
 ## Phase 11: Query Validation

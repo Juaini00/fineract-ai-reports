@@ -13,7 +13,46 @@ tables:
         sensitivity: public_business
       - name: display_name
         sensitivity: pii
+      - name: firstname
+        sensitivity: pii
+      - name: middlename
+        sensitivity: pii
+      - name: lastname
+        sensitivity: pii
+      - name: fullname
+        sensitivity: pii
       - name: account_no
         sensitivity: sensitive_business_identifier
       - name: external_id
         sensitivity: sensitive_business_identifier
+      - name: staff_id
+        sensitivity: public_business
+      - name: status_enum
+        sensitivity: public_business
+      - name: activation_date
+        sensitivity: public_business
+      - name: office_joining_date
+        sensitivity: public_business
+      - name: submittedon_date
+        sensitivity: public_business
+      - name: closedon_date
+        sensitivity: public_business
+      - name: mobile_no
+        sensitivity: pii
+      - name: email_address
+        sensitivity: pii
+      - name: date_of_birth
+        sensitivity: pii
+      - name: default_savings_product
+        sensitivity: public_business
+      - name: default_savings_account
+        sensitivity: public_business
+      - name: transfer_to_office_id
+        sensitivity: public_business
+checks:
+  - id: tables_in_data_scope
+    rule: all tables must belong to client_foundation.
+  - id: pii_fields_classified
+    rule: client name, contact, and birth-date fields must be pii.
+  - id: sensitive_identifiers_excluded
+    rule: account_no and external_id must not appear in MVP output fields.

@@ -36,13 +36,33 @@ pub struct DomainKnowledge {
     pub status: String,
 
     #[serde(default)]
+    pub display_name: Option<String>,
+
+    #[serde(default)]
+    pub description: Option<String>,
+
+    #[serde(default)]
     pub data_areas: Vec<String>,
+
+    #[serde(default)]
+    pub concepts: Vec<DomainConcept>,
 
     #[serde(default)]
     pub supported_intents: Vec<String>,
 
     #[serde(default)]
     pub unsupported_intents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DomainConcept {
+    pub id: String,
+
+    #[serde(default)]
+    pub meaning: Option<String>,
+
+    #[serde(default)]
+    pub synonyms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

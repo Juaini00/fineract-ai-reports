@@ -1,0 +1,21 @@
+id: tax
+status: deferred
+source_doc: docs/reporting-data-scope.md#4-deferred-data-areas
+description: Tax components, groups, and transaction-level tax details.
+included_tables: []
+conditional_tables: []
+excluded_tables:
+  - m_tax_component
+  - m_tax_component_history
+  - m_tax_group
+  - m_tax_group_mappings
+  - m_savings_account_transaction_tax_details
+allowed_domains:
+  - tax
+default_rules:
+  - Tax reporting is deferred until tax-aware capabilities and policies are approved.
+checks:
+  - id: deferred_not_runtime
+    rule: this area must not be referenced by approved_mvp capabilities or queries.
+  - id: domain_status_deferred
+    rule: matching tax domain must remain deferred.

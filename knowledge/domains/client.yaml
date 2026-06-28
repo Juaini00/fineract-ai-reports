@@ -15,3 +15,8 @@ unsupported_intents:
   - address-level reporting
 default_rules:
   - Client identity output requires explicit capability approval.
+checks:
+  - id: data_area_exists
+    rule: data_areas must reference client_foundation.
+  - id: pii_safe_default
+    rule: client identity concepts must not become output fields unless a capability explicitly allows them.

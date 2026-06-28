@@ -1,0 +1,22 @@
+id: loans
+status: deferred
+source_doc: docs/reporting-data-scope.md#4-deferred-data-areas
+description: Loan portfolio reporting — disbursement, repayment, arrears, write-offs.
+included_tables: []
+conditional_tables: []
+excluded_tables:
+  - m_loan
+  - m_product_loan
+  - m_loan_transaction
+  - m_loan_repayment_schedule
+  - m_loan_charge
+allowed_domains:
+  - loan
+default_rules:
+  - Loan reporting is deferred until a dedicated loan capability set is approved.
+  - Loan tables must not be referenced by approved MVP capabilities or queries.
+checks:
+  - id: deferred_not_runtime
+    rule: this area must not be referenced by approved_mvp capabilities or queries.
+  - id: domain_status_deferred
+    rule: matching loan domain must remain deferred.

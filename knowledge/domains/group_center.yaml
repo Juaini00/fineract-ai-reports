@@ -1,0 +1,26 @@
+id: group_center
+status: candidate
+display_name: Group and Center
+description: Group-based and center-based organizational reporting for deployments that use group lending or center structures.
+data_areas:
+  - group_center_foundation
+concepts:
+  - id: group
+    meaning: A collection of clients managed together (e.g. group lending).
+    synonyms: [group, lending group, kelompok]
+  - id: center
+    meaning: A higher-level grouping that contains multiple groups.
+    synonyms: [center, centre, pusat]
+supported_intents:
+  - group-owned savings reporting
+  - center-level savings summaries
+unsupported_intents:
+  - create group
+  - assign client to group
+default_rules:
+  - Only enabled when the local Fineract deployment uses group_center_foundation; otherwise respond as unsupported with a conditional-not-enabled reason.
+checks:
+  - id: conditional_domain
+    rule: this domain must remain candidate unless group_center_foundation is explicitly enabled.
+  - id: no_mvp_capability_by_default
+    rule: approved_mvp capabilities must not require group_center unless explicitly enabled.

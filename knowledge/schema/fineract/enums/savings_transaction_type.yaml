@@ -2,6 +2,11 @@ id: fineract.enums.savings_transaction_type
 table: m_savings_account_transaction
 column: transaction_type_enum
 values:
+  - value: 0
+    code: invalid
+    label: Invalid
+    direction: none
+    status: rejected
   - value: 1
     code: deposit
     label: Deposit
@@ -17,3 +22,94 @@ values:
     label: Interest Posting
     direction: credit
     status: candidate
+  - value: 4
+    code: withdrawal_fee
+    label: Withdrawal Fee
+    direction: debit
+    status: secondary
+  - value: 5
+    code: annual_fee
+    label: Annual Fee
+    direction: debit
+    status: secondary
+  - value: 6
+    code: waive_charges
+    label: Waive Charges
+    direction: none
+    status: secondary
+  - value: 7
+    code: pay_charge
+    label: Pay Charge
+    direction: debit
+    status: secondary
+  - value: 8
+    code: dividend_payout
+    label: Dividend Payout
+    direction: credit
+    status: deferred
+  - value: 10
+    code: accrual
+    label: Accrual
+    direction: none
+    status: deferred
+  - value: 12
+    code: initiate_transfer
+    label: Initiate Transfer
+    direction: none
+    status: deferred
+  - value: 13
+    code: approve_transfer
+    label: Approve Transfer
+    direction: none
+    status: deferred
+  - value: 14
+    code: withdraw_transfer
+    label: Withdraw Transfer
+    direction: none
+    status: deferred
+  - value: 15
+    code: reject_transfer
+    label: Reject Transfer
+    direction: none
+    status: deferred
+  - value: 16
+    code: written_off
+    label: Written Off
+    direction: none
+    status: deferred
+  - value: 17
+    code: overdraft_interest
+    label: Overdraft Interest
+    direction: debit
+    status: deferred
+  - value: 18
+    code: withhold_tax
+    label: Withhold Tax
+    direction: debit
+    status: deferred
+  - value: 19
+    code: escheat
+    label: Escheat
+    direction: debit
+    status: deferred
+  - value: 20
+    code: amount_hold
+    label: Amount Hold
+    direction: debit
+    status: deferred
+  - value: 21
+    code: amount_release
+    label: Amount Release
+    direction: credit
+    status: deferred
+default_rules:
+  - Use value 1 for MVP deposit reporting.
+  - Exclude reversed transactions separately with is_reversed = false.
+  - Do not infer debit or credit without this enum mapping.
+checks:
+  - id: deposit_value_declared
+    rule: value 1 must map to deposit for approved MVP deposit capabilities.
+  - id: candidate_values_not_executable
+    rule: candidate, secondary, and deferred transaction types must not be used by approved_mvp capabilities until promoted.
+  - id: reversed_filter_separate
+    rule: reversal handling must use is_reversed/is_reversal flags, not transaction type alone.

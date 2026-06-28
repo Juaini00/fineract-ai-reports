@@ -1,0 +1,26 @@
+id: tax
+status: deferred
+display_name: Tax
+description: Tax components, groups, and transaction-level tax computation reporting.
+data_areas:
+  - tax
+concepts:
+  - id: tax_component
+    meaning: A single tax rate or rule applied to a transaction.
+    synonyms: [tax component, tax rate, pajak]
+  - id: tax_group
+    meaning: A collection of tax components applied together.
+    synonyms: [tax group, group pajak]
+supported_intents:
+  - tax collected by period
+  - tax by component or group
+unsupported_intents:
+  - create tax component
+  - update tax rate
+default_rules:
+  - Tax reporting is deferred; respond as unsupported with a deferred reason.
+checks:
+  - id: deferred_domain
+    rule: this domain must not have approved_mvp capabilities.
+  - id: tax_tables_not_runtime
+    rule: tax data area must not be referenced by approved_mvp queries.

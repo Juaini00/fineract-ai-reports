@@ -66,10 +66,26 @@ fn build_data_area_document(area: &DataAreasKnowledge) -> RetrievalDocument {
 
 fn build_domain_document(domain: &DomainKnowledge) -> RetrievalDocument {
     let title = format!("Domain {}", domain.id);
+    let display_name_line = domain
+        .display_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("Display name: {value}."))
+        .unwrap_or_default();
+    let description_line = domain
+        .description
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("Description: {value}."))
+        .unwrap_or_default();
+    let concept_line = concept_line(&domain.concepts);
     let retrieval_text = compact_lines([
         format!("Domain {}.", domain.id),
+        display_name_line,
+        description_line,
         format!("Status {}.", domain.status),
         optional_list("Data areas", &domain.data_areas),
+        concept_line,
         optional_list("Supported intents", &domain.supported_intents),
         optional_list("Unsupported intents", &domain.unsupported_intents),
     ]);
@@ -81,11 +97,29 @@ fn build_domain_document(domain: &DomainKnowledge) -> RetrievalDocument {
         retrieval_text,
         metadata_json: json!({
             "status": domain.status,
+            "display_name": domain.display_name,
             "data_areas": domain.data_areas,
             "supported_intents": domain.supported_intents,
             "unsupported_intents": domain.unsupported_intents,
         }),
     }
+}
+
+fn concept_line(concepts: &[crate::knowledge::model::DomainConcept]) -> String {
+    if concepts.is_empty() {
+        return String::new();
+    }
+    let mut parts = Vec::new();
+    for concept in concepts {
+        parts.push(concept.id.clone());
+        if let Some(meaning) = concept.meaning.as_deref() {
+            if !meaning.trim().is_empty() {
+                parts.push(meaning.to_string());
+            }
+        }
+        parts.extend(concept.synonyms.iter().cloned());
+    }
+    format!("Concepts: {}.", parts.join(", "))
 }
 
 fn build_capability_document(capability: &CapabilityKnowledge) -> RetrievalDocument {

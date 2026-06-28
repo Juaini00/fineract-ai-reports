@@ -1,4 +1,5 @@
 id: execution_limits_policy
+source_doc: docs/reporting-capabilities.md#3-common-parameters
 defaults:
   query_timeout_ms: 3000
   max_rows: 100
@@ -9,3 +10,18 @@ direct_execution:
   max_estimated_latency_ms: 5000
 async_execution:
   max_estimated_latency_ms: 60000
+capability_overrides:
+  savings_deposit_total:
+    query_timeout_ms: 3000
+    max_date_range_days: 366
+  savings_deposit_top_n:
+    query_timeout_ms: 3000
+    max_date_range_days: 366
+    max_rows: 100
+checks:
+  - id: approved_capabilities_have_limits
+    rule: every approved_mvp capability must have an execution limit override or inherit defaults.
+  - id: top_n_has_max_rows
+    rule: top_n capabilities must declare max_rows.
+  - id: date_range_bounded
+    rule: date-bounded capabilities must declare max_date_range_days.

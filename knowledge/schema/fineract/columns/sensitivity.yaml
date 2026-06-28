@@ -1,14 +1,28 @@
 id: fineract.columns.sensitivity
+source_doc: docs/reporting-pii-policy.md#2-sensitivity-classes
 classes:
   public_business:
     default_behavior: allow_if_capability_declares
+    examples: [office_name, product_name, amount, currency_code]
   sensitive_business_identifier:
     default_behavior: exclude
+    examples: [account_no, external_id, ref_no]
   pii:
     default_behavior: require_can_view_pii_and_capability_approval
+    examples: [display_name, mobile_no, email_address]
   security_sensitive:
     default_behavior: exclude
+    examples: [username, role, permission, client_ip]
   secret_never_expose:
     default_behavior: never_expose
+    examples: [password, token, command_as_json, result]
   free_text_sensitive:
     default_behavior: exclude
+    examples: [description, remarks, reason_for_block]
+checks:
+  - id: every_query_output_has_sensitivity
+    rule: every query output field must declare one class listed here.
+  - id: pii_requires_capability
+    rule: fields classified as pii require can_view_pii and explicit capability approval.
+  - id: secret_never_expose_absent
+    rule: secret_never_expose fields must not appear in schema prompts, query output, logs, or responses.

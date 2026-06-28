@@ -15,3 +15,10 @@ allowed_domains:
   - savings
 default_rules:
   - Office filters must be constrained by API key allowed_office_ids.
+checks:
+  - id: office_table_declared
+    rule: included_tables must include m_office.
+  - id: staff_pii_classified
+    rule: m_staff identity fields must be classified as pii or sensitive_business_identifier in schema knowledge.
+  - id: office_scope_required
+    rule: every approved Fineract query must enforce office scope from API key allowed_office_ids.

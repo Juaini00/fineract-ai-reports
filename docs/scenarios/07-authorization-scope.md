@@ -3,6 +3,16 @@
 **Phase covered:** Phase 7 (helpers) + Phase 13 (`evaluate_policy` gate) + Phase 14 (SQL office-id bind).
 **Precondition:** Two API keys with different scopes.
 
+## Test status
+
+✅ Passed on 2026-06-28 rerun.
+
+- Narrow key top-N request ended as `waiting_for_user_input` with `classification.outcome=clarification_required`, showing out-of-scope top-N was not directly executed.
+- Narrow key total request completed with `policy_decision.office_ids=[1]` and `result_json.query_id=savings.deposit_total`.
+- Full key total request completed with `policy_decision.office_ids=[1,2,3]`.
+- Cross-key job read returned HTTP 404.
+- No ❌ failure observed. Full and narrow totals were equal in local data (`280.000000`), so the "larger total" comparison was not a useful data assertion in this run.
+
 Create a second API key (`API_KEY_NARROW`) using `02-auth-api-keys.md` with:
 
 ```json
@@ -43,7 +53,7 @@ WHERE ... AND t.office_id = ANY($3::bigint[])
 - There is no Rust post-filter — office scope lives inside the SQL itself.
 
 ### Compare with full-scope key
-Same question with `{{API_KEY}}` (offices `[1, 2, 3]`) returns a larger total.
+Same question with `{{API_KEY}}` (offices `[1, 2, 3]`) should return a larger total only when offices 2 or 3 have matching rows for the requested date window. If local data has matching rows only in office 1, verify the scope through `state_json.policy_decision.office_ids` instead.
 
 ## C. PII flag (placeholder)
 

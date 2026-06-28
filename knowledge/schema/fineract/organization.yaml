@@ -13,6 +13,12 @@ tables:
         sensitivity: public_business
       - name: hierarchy
         sensitivity: public_business
+      - name: parent_id
+        sensitivity: public_business
+      - name: external_id
+        sensitivity: sensitive_business_identifier
+      - name: opening_date
+        sensitivity: public_business
   - name: m_staff
     data_area: organization_foundation
     meaning: Staff assigned to an office.
@@ -23,3 +29,24 @@ tables:
         sensitivity: public_business
       - name: display_name
         sensitivity: pii
+      - name: firstname
+        sensitivity: pii
+      - name: lastname
+        sensitivity: pii
+      - name: external_id
+        sensitivity: sensitive_business_identifier
+      - name: is_loan_officer
+        sensitivity: public_business
+      - name: is_active
+        sensitivity: public_business
+      - name: organisational_role_enum
+        sensitivity: public_business
+      - name: organisational_role_parent_staff_id
+        sensitivity: public_business
+checks:
+  - id: tables_in_data_scope
+    rule: all tables must belong to organization_foundation.
+  - id: staff_pii_classified
+    rule: m_staff display/name fields must be pii.
+  - id: office_external_id_excluded
+    rule: m_office.external_id must not appear in MVP output fields.

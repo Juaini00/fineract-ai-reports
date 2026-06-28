@@ -10,3 +10,8 @@ areas:
   - user_audit_reporting
   - fineract_write_actions
 rule: Out-of-scope areas must produce hard validation failures if referenced by runtime catalog files.
+checks:
+  - id: rejected_not_runtime
+    rule: out-of-scope ids must not be referenced by domains, capabilities, queries, metrics, or schema runtime entries.
+  - id: rejected_requests_hard_fail
+    rule: user requests matching these areas must map to unsupported_requests_policy.hard_reject.

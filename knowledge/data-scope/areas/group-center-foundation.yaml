@@ -15,3 +15,10 @@ allowed_domains:
   - savings
 default_rules:
   - Enable only when the local Fineract deployment uses groups or centers.
+checks:
+  - id: conditional_not_executable_by_default
+    rule: conditional group/center tables must not be used by approved_mvp queries unless explicitly enabled.
+  - id: group_office_scope_declared
+    rule: group-owned savings account paths must resolve to m_group.office_id.
+  - id: group_identifiers_excluded
+    rule: m_group.account_no and m_group.external_id must not appear in MVP output contracts.

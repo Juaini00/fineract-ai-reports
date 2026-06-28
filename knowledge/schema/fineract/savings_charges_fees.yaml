@@ -1,0 +1,72 @@
+id: fineract.savings_charges_fees
+status: secondary
+data_areas:
+  - savings_charges_fees
+tables:
+  - name: m_charge
+    data_area: savings_charges_fees
+    meaning: Shared charge or fee definition usable by savings or loan products.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: name
+        sensitivity: public_business
+      - name: currency_code
+        sensitivity: public_business
+      - name: charge_applies_to_enum
+        sensitivity: public_business
+      - name: is_active
+        sensitivity: public_business
+      - name: is_deleted
+        sensitivity: public_business
+      - name: is_penalty
+        sensitivity: public_business
+  - name: m_savings_account_charge
+    data_area: savings_charges_fees
+    meaning: Charge or fee applied to a specific savings account.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: savings_account_id
+        sensitivity: public_business
+      - name: charge_id
+        sensitivity: public_business
+      - name: amount
+        sensitivity: public_business
+      - name: amount_paid_derived
+        sensitivity: public_business
+      - name: amount_outstanding_derived
+        sensitivity: public_business
+      - name: amount_waived_derived
+        sensitivity: public_business
+      - name: amount_writtenoff_derived
+        sensitivity: public_business
+      - name: is_paid_derived
+        sensitivity: public_business
+      - name: is_active
+        sensitivity: public_business
+      - name: is_penalty
+        sensitivity: public_business
+      - name: charge_due_date
+        sensitivity: public_business
+      - name: charge_time_enum
+        sensitivity: public_business
+      - name: charge_calculation_enum
+        sensitivity: public_business
+  - name: m_savings_account_charge_paid_by
+    data_area: savings_charges_fees
+    meaning: Attribution of charge payment to a specific savings transaction.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: savings_account_charge_id
+        sensitivity: public_business
+      - name: savings_account_transaction_id
+        sensitivity: public_business
+      - name: amount
+        sensitivity: public_business
+checks:
+  - id: secondary_schema
+    rule: this schema must remain secondary until a savings charge/fee capability is approved.
+  - id: charge_tables_not_mvp_query
+    rule: these tables must not appear in approved MVP deposit queries.

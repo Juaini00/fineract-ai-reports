@@ -4,10 +4,21 @@ column: status_enum
 values:
   - value: 100
     code: pending
+    label: Pending
     status: documented
   - value: 300
     code: active
+    label: Active
     status: documented
   - value: 600
     code: closed
+    label: Closed
     status: documented
+default_rules:
+  - Use only after a capability declares client lifecycle semantics.
+  - Do not expose client identity fields unless capability and PII policy allow them.
+checks:
+  - id: enum_values_documented
+    rule: common pending, active, and closed values must be documented before lifecycle capabilities use them.
+  - id: not_default_filter_for_deposit_reports
+    rule: deposit movement reports must not filter by client status unless explicitly declared.

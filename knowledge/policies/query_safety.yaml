@@ -1,8 +1,13 @@
 id: query_safety_policy
+source_doc: docs/knowledge-catalog.md#56-step-6-validate-sql-safety
 rules:
   select_only: true
   single_statement: true
   parameterized_only: true
+  approved_sql_files_only: true
+  no_runtime_ai_sql: true
+  require_office_filter_for_fineract: true
+  require_date_filter_for_transaction_reports: true
 unsafe_commands:
   - INSERT
   - UPDATE
@@ -16,3 +21,14 @@ unsafe_commands:
   - COPY
   - VACUUM
   - ANALYZE
+checks:
+  - id: all_queries_select_only
+    rule: every approved SQL file must start with SELECT.
+  - id: all_queries_single_statement
+    rule: every approved SQL file must contain no semicolon except an optional final semicolon.
+  - id: all_queries_parameterized
+    rule: every runtime parameter must use a bound placeholder.
+  - id: no_unsafe_sql_tokens
+    rule: SQL tokens must not include unsafe_commands.
+  - id: no_ai_generated_sql
+    rule: runtime execution may only use query ids mapped to reviewed SQL files.

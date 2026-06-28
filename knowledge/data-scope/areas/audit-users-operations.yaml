@@ -1,0 +1,20 @@
+id: audit_users_operations
+status: deferred
+source_doc: docs/reporting-data-scope.md#4-deferred-data-areas
+description: Application users, roles, permissions, and operational audit logs.
+included_tables: []
+conditional_tables: []
+excluded_tables:
+  - m_appuser
+  - m_role
+  - m_permission
+  - m_portfolio_command_source
+  - request_audit_table
+allowed_domains: []
+default_rules:
+  - User and audit data is operational, not business reporting; deferred until a separate audit reporting capability set is approved.
+checks:
+  - id: deferred_not_runtime
+    rule: this area must not be referenced by approved_mvp capabilities or queries.
+  - id: security_sensitive_by_default
+    rule: user, role, permission, and audit fields must be security_sensitive unless explicitly approved.

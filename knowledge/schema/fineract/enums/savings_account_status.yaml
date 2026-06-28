@@ -4,10 +4,21 @@ column: status_enum
 values:
   - value: 100
     code: submitted_and_pending_approval
+    label: Submitted and pending approval
     status: documented
   - value: 300
     code: active
+    label: Active
     status: documented
   - value: 600
     code: closed
+    label: Closed
     status: documented
+default_rules:
+  - Use only after a capability declares account lifecycle semantics.
+  - Do not filter deposit movement reports by account status unless explicitly required.
+checks:
+  - id: enum_values_documented
+    rule: common submitted, active, and closed values must be documented before lifecycle capabilities use them.
+  - id: not_default_filter_for_deposit_reports
+    rule: deposit movement reports must not filter by account status unless explicitly declared.

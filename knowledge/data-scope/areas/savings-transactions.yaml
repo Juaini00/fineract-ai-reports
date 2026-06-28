@@ -18,3 +18,10 @@ allowed_metrics:
 default_rules:
   - Reversed transactions are excluded by default.
   - Transaction type enum mapping must be declared before use.
+checks:
+  - id: transaction_enum_declared
+    rule: m_savings_account_transaction.transaction_type_enum must be mapped in schema enums before capability use.
+  - id: reversed_filter_declared
+    rule: approved transaction capabilities must declare is_reversed = false unless analyzing reversals.
+  - id: office_scope_declared
+    rule: approved transaction queries must constrain m_savings_account_transaction.office_id to authorized offices.

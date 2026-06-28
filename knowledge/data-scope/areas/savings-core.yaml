@@ -15,3 +15,10 @@ allowed_domains:
 default_rules:
   - Savings account owner may be client or group.
   - Office scope must be enforced through transaction or owner office path.
+checks:
+  - id: account_join_declared
+    rule: savings transaction capabilities must declare the savings_transaction_account join.
+  - id: product_filter_matches_schema
+    rule: product_id filters must use m_savings_account.product_id.
+  - id: sensitive_account_identifiers_excluded
+    rule: account_no, external_id, and iban must not appear in approved MVP output fields.

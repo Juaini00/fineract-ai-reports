@@ -1,9 +1,20 @@
 id: fineract.joins.office_scope
 description: Office authorization path for savings transaction reports.
+status: approved_mvp
+data_areas:
+  - organization_foundation
+  - savings_transactions
 joins:
   - from: m_savings_account_transaction.office_id
     to: m_office.id
+    type: inner
     required_for:
       - savings_deposit_total
       - savings_deposit_top_n
 rule: m_savings_account_transaction.office_id must be constrained to authorized office ids.
+sql_pattern: m_savings_account_transaction.office_id = ANY($office_ids::bigint[])
+checks:
+  - id: required_capabilities_use_join
+    rule: every capability in required_for must use a query that declares this join.
+  - id: office_filter_bound
+    rule: SQL must enforce office scope using a bound bigint array.

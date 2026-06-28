@@ -1,0 +1,18 @@
+id: custom_datatables
+status: deferred
+source_doc: docs/reporting-data-scope.md#4-deferred-data-areas
+description: User-defined Fineract data tables and dynamic column extensions.
+included_tables: []
+conditional_tables: []
+excluded_tables:
+  - x_registered_table
+  - x_table_column_code_mappings
+  - m_entity_datatable_check
+allowed_domains: []
+default_rules:
+  - Custom datatables are tenant-specific and have no static schema; reporting is deferred until a typed introspection layer is added.
+checks:
+  - id: deferred_not_runtime
+    rule: this area must not be referenced by approved_mvp capabilities or queries.
+  - id: field_classification_required
+    rule: every custom datatable field must be classified before use.

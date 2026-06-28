@@ -1,6 +1,8 @@
 id: savings_deposit_total
 status: approved_mvp
 domain: savings
+display_name: Savings Deposit Total
+description: Answer total savings deposits for a date range within the caller's authorized office scope.
 data_areas:
   - organization_foundation
   - client_foundation
@@ -16,6 +18,14 @@ examples:
   - What is the total deposit this month?
   - Total deposits from January to September 2026.
   - How much savings deposit did we receive today?
+supported_intents:
+  - total savings deposits by date range
+  - total deposits for authorized offices
+  - total deposits filtered by currency or savings product
+unsupported_intents:
+  - row-level depositor identity
+  - account number lookup
+  - payment reference lookup
 required_parameters:
   - from_date
   - to_date
@@ -25,13 +35,36 @@ optional_parameters:
   - product_ids
 defaults:
   exclude_reversed: true
+  transaction_type_enum: 1
 guards:
   require_office_scope: true
   max_date_range_days: 366
 pii:
   returns_pii: false
+  behavior: aggregate_only
+  never_return:
+    - client_display_name
+    - account_no
+    - external_id
+    - ref_no
 cost_class: low
 clarification:
   missing_parameters:
     - from_date
     - to_date
+output_fields:
+  - from_date
+  - to_date
+  - total_deposit_amount
+  - deposit_count
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: required_parameters_match_query
+    rule: required_parameters must be declared as required query parameters.
+  - id: output_fields_match_query
+    rule: output_fields must exactly match query output_fields names.
+  - id: no_pii_output
+    rule: all declared query output fields must have public_business sensitivity.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.

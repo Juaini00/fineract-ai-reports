@@ -6,11 +6,14 @@ SELECT
     t.office_id,
     o.name AS office_name,
     sa.product_id,
-    sp.name AS product_name
+    sp.name AS product_name,
+    sa.client_id,
+    c.display_name AS client_display_name
 FROM m_savings_account_transaction t
 JOIN m_savings_account sa ON sa.id = t.savings_account_id
 JOIN m_savings_product sp ON sp.id = sa.product_id
 JOIN m_office o ON o.id = t.office_id
+LEFT JOIN m_client c ON c.id = sa.client_id
 WHERE t.transaction_type_enum = 1
   AND t.is_reversed = false
   AND t.transaction_date BETWEEN $1::date AND $2::date

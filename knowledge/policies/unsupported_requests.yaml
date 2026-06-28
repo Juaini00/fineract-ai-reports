@@ -1,12 +1,23 @@
 id: unsupported_requests_policy
+source_doc: docs/reporting-capabilities.md#8-unsupported-requests
 hard_reject:
   - arbitrary SQL
+  - full Fineract schema exploration
   - write or update Fineract data
   - request secret fields
+  - request raw account numbers, external ids, payment references, or command JSON
   - request out-of-scope tables
   - request deferred domains in MVP
+  - request office scope outside API key allowed_office_ids
 clarify:
   - missing date range
   - ambiguous output mode
   - ambiguous domain
   - missing limit for top_n
+checks:
+  - id: hard_reject_maps_to_policy
+    rule: hard_reject cases must not map to approved capabilities.
+  - id: clarification_cases_are_resumable
+    rule: clarify cases must continue the same chat job.
+  - id: deferred_domains_not_executable
+    rule: deferred domains must not have approved_mvp capabilities.

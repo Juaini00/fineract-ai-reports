@@ -25,3 +25,10 @@ unsupported_intents:
   - reverse transaction
 default_rules:
   - Exclude reversed transactions unless explicitly requested by an approved capability.
+checks:
+  - id: data_areas_exist
+    rule: all savings data_areas must exist under knowledge/data-scope/areas.
+  - id: approved_intents_have_capabilities
+    rule: supported MVP savings intents must map to approved capabilities.
+  - id: unsupported_intents_not_executable
+    rule: write/reversal intents must not map to approved_mvp capabilities.

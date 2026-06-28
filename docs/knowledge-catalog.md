@@ -257,17 +257,15 @@ The MVP should not model the whole Fineract database. It should only include the
 
 Initial files:
 
-```text
-knowledge/data-scope/reporting-scope.yaml
-knowledge/data-scope/areas/organization-foundation.yaml
-knowledge/data-scope/areas/client-foundation.yaml
-knowledge/data-scope/areas/group-center-foundation.yaml
-knowledge/data-scope/areas/savings-core.yaml
-knowledge/data-scope/areas/savings-transactions.yaml
-knowledge/data-scope/areas/savings-charges-fees.yaml
-knowledge/data-scope/areas/deferred.yaml
-knowledge/data-scope/areas/out-of-scope.yaml
-```
+- [x] `knowledge/data-scope/reporting-scope.yaml`
+- [x] `knowledge/data-scope/areas/organization-foundation.yaml`
+- [x] `knowledge/data-scope/areas/client-foundation.yaml`
+- [x] `knowledge/data-scope/areas/group-center-foundation.yaml`
+- [x] `knowledge/data-scope/areas/savings-core.yaml`
+- [x] `knowledge/data-scope/areas/savings-transactions.yaml`
+- [x] `knowledge/data-scope/areas/savings-charges-fees.yaml`
+- [x] `knowledge/data-scope/areas/deferred.yaml`
+- [x] `knowledge/data-scope/areas/out-of-scope.yaml`
 
 These files mirror:
 
@@ -311,11 +309,16 @@ Out-of-scope areas must be represented explicitly:
 
 Initial files:
 
-```text
-knowledge/domains/organization.yaml
-knowledge/domains/client.yaml
-knowledge/domains/savings.yaml
-```
+- [x] `knowledge/domains/organization.yaml`
+- [x] `knowledge/domains/client.yaml`
+- [x] `knowledge/domains/savings.yaml`
+
+Additional deferred/candidate domain context:
+
+- [x] `knowledge/domains/group_center.yaml`
+- [x] `knowledge/domains/loan.yaml`
+- [x] `knowledge/domains/accounting.yaml`
+- [x] `knowledge/domains/tax.yaml`
 
 Purpose:
 
@@ -327,20 +330,23 @@ Purpose:
 
 Initial files:
 
-```text
-knowledge/schema/fineract/organization.yaml
-knowledge/schema/fineract/client.yaml
-knowledge/schema/fineract/savings.yaml
-knowledge/schema/fineract/enums/savings_transaction_type.yaml
-knowledge/schema/fineract/enums/savings_account_status.yaml
-knowledge/schema/fineract/enums/client_status.yaml
-knowledge/schema/fineract/joins/office_scope.yaml
-knowledge/schema/fineract/joins/client_savings_account.yaml
-knowledge/schema/fineract/joins/group_savings_account.yaml
-knowledge/schema/fineract/joins/savings_transaction_account.yaml
-knowledge/schema/fineract/columns/sensitivity.yaml
-knowledge/schema/fineract/columns/excluded.yaml
-```
+- [x] `knowledge/schema/fineract/organization.yaml`
+- [x] `knowledge/schema/fineract/client.yaml`
+- [x] `knowledge/schema/fineract/savings.yaml`
+- [x] `knowledge/schema/fineract/enums/savings_transaction_type.yaml`
+- [x] `knowledge/schema/fineract/enums/savings_account_status.yaml`
+- [x] `knowledge/schema/fineract/enums/client_status.yaml`
+- [x] `knowledge/schema/fineract/joins/office_scope.yaml`
+- [x] `knowledge/schema/fineract/joins/client_savings_account.yaml`
+- [x] `knowledge/schema/fineract/joins/group_savings_account.yaml`
+- [x] `knowledge/schema/fineract/joins/savings_transaction_account.yaml`
+- [x] `knowledge/schema/fineract/columns/sensitivity.yaml`
+- [x] `knowledge/schema/fineract/columns/excluded.yaml`
+
+Additional schema context:
+
+- [x] `knowledge/schema/fineract/group_center.yaml`
+- [x] `knowledge/schema/fineract/savings_charges_fees.yaml`
 
 Initial table families:
 
@@ -357,21 +363,17 @@ Initial table families:
 
 Initial files:
 
-```text
-knowledge/metrics/savings/deposit_amount.yaml
-knowledge/metrics/savings/deposit_count.yaml
-knowledge/metrics/savings/withdrawal_amount.yaml
-knowledge/metrics/savings/account_balance.yaml
-```
+- [x] `knowledge/metrics/savings/deposit_amount.yaml`
+- [x] `knowledge/metrics/savings/deposit_count.yaml`
+- [x] `knowledge/metrics/savings/withdrawal_amount.yaml`
+- [x] `knowledge/metrics/savings/account_balance.yaml`
 
 ### 3.5 Capability Files
 
 Initial files:
 
-```text
-knowledge/capabilities/savings/deposit_total.yaml
-knowledge/capabilities/savings/deposit_top_n.yaml
-```
+- [x] `knowledge/capabilities/savings/deposit_total.yaml`
+- [x] `knowledge/capabilities/savings/deposit_top_n.yaml`
 
 Initial approved capabilities:
 
@@ -388,29 +390,23 @@ Next likely capabilities:
 
 Initial query metadata:
 
-```text
-knowledge/queries/savings/deposit_total.yaml
-knowledge/queries/savings/deposit_top_n.yaml
-```
+- [x] `knowledge/queries/savings/deposit_total.yaml`
+- [x] `knowledge/queries/savings/deposit_top_n.yaml`
 
 Initial SQL files:
 
-```text
-queries/savings/deposit_total.sql
-queries/savings/deposit_top_n.sql
-```
+- [x] `queries/savings/deposit_total.sql`
+- [x] `queries/savings/deposit_top_n.sql`
 
 ### 3.7 Policy Files
 
 Initial files:
 
-```text
-knowledge/policies/pii.yaml
-knowledge/policies/query_safety.yaml
-knowledge/policies/office_scope.yaml
-knowledge/policies/execution_limits.yaml
-knowledge/policies/unsupported_requests.yaml
-```
+- [x] `knowledge/policies/pii.yaml`
+- [x] `knowledge/policies/query_safety.yaml`
+- [x] `knowledge/policies/office_scope.yaml`
+- [x] `knowledge/policies/execution_limits.yaml`
+- [x] `knowledge/policies/unsupported_requests.yaml`
 
 These files may initially mirror existing docs:
 
@@ -422,11 +418,9 @@ These files may initially mirror existing docs:
 
 Initial files:
 
-```text
-knowledge/responses/reporting.yaml
-knowledge/responses/clarification.yaml
-knowledge/responses/unsupported.yaml
-```
+- [x] `knowledge/responses/reporting.yaml`
+- [x] `knowledge/responses/clarification.yaml`
+- [x] `knowledge/responses/unsupported.yaml`
 
 ## 4. Recommended Directory Structure
 
@@ -580,10 +574,46 @@ crates/chat/src/knowledge/catalog/validator.rs
 
 Current coverage:
 
-```text
-loaded and validated: data areas, domains, capabilities, queries
-files present but not fully loaded/validated yet: schema, metrics, policies, responses
-```
+YAML present and content-complete for MVP:
+
+- [x] data-scope
+- [x] domains
+- [x] schema
+- [x] metrics
+- [x] capabilities
+- [x] queries
+- [x] policies
+- [x] responses
+
+Checks metadata present:
+
+- [x] every `knowledge/**/*.yaml` file declares a top-level `checks` block.
+- [x] capability/query checks cover query existence, required parameters, output-field contract, office scope, SQL safety, and PII behavior.
+- [x] data-scope/schema/metric/policy/response checks declare the intended validation rules for future typed validators.
+
+Loaded by typed catalog loader:
+
+- [x] data areas
+- [x] domains
+- [x] capabilities
+- [x] queries
+- [ ] schema
+- [ ] metrics
+- [ ] policies
+- [ ] responses
+
+Validated by typed catalog validator:
+
+- [x] data area ids/statuses
+- [x] domain refs to data areas
+- [x] capability refs to domains, queries, and data areas
+- [x] query refs to data areas
+- [x] query SQL existence and static safety
+- [x] query output sensitivity classes
+- [ ] schema table/column refs
+- [ ] metric refs to schema tables/columns
+- [ ] policy refs to capabilities/query guards
+- [ ] response refs to capability output contracts
 
 ### 5.4 Step 4: Validate Structure
 

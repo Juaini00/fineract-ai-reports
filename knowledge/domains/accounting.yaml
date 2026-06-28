@@ -1,0 +1,31 @@
+id: accounting
+status: deferred
+display_name: Accounting
+description: General ledger and journal entry reporting.
+data_areas:
+  - accounting_gl
+concepts:
+  - id: journal_entry
+    meaning: A double-entry posting to general ledger accounts.
+    synonyms: [journal entry, gl entry, posting, jurnal]
+  - id: gl_account
+    meaning: An account in the chart of accounts.
+    synonyms: [gl account, ledger account, chart of accounts, akun]
+  - id: closure
+    meaning: Period-end ledger closure for accounting periods.
+    synonyms: [closure, period close, tutup buku]
+supported_intents:
+  - general ledger balance reports
+  - journal entries by period
+  - trial balance
+unsupported_intents:
+  - post journal entry
+  - create gl account
+  - close accounting period
+default_rules:
+  - Accounting reporting is deferred; respond as unsupported with a deferred reason.
+checks:
+  - id: deferred_domain
+    rule: this domain must not have approved_mvp capabilities.
+  - id: gl_tables_not_runtime
+    rule: accounting_gl data area must not be referenced by approved_mvp queries.

@@ -3,6 +3,13 @@
 **Phase covered:** Phase 3.
 **Precondition:** App running on `{{BASE_URL}}`.
 
+## Test status
+
+✅ Passed on 2026-06-28 via Postman MCP runner.
+
+- Collection: `ai_report scenarios full verification corrected 2026-06-28`.
+- Assertions: `health 200`, `health ok`, `ready 200`, `ready status`, `dependencies ok`.
+
 ## Liveness
 
 ```bash

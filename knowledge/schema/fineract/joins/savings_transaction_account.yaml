@@ -1,6 +1,19 @@
 id: fineract.joins.savings_transaction_account
 description: Savings transaction to savings account join.
+status: approved_mvp
+data_areas:
+  - savings_core
+  - savings_transactions
 joins:
   - from: m_savings_account_transaction.savings_account_id
     to: m_savings_account.id
+    type: inner
 rule: Required for product and account-owner context.
+required_for:
+  - savings_deposit_total
+  - savings_deposit_top_n
+checks:
+  - id: required_capabilities_use_join
+    rule: every capability in required_for must use a query that declares this join.
+  - id: account_table_declared
+    rule: queries using this join must include m_savings_account_transaction and m_savings_account.

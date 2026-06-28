@@ -18,6 +18,66 @@ tables:
         sensitivity: public_business
       - name: account_no
         sensitivity: sensitive_business_identifier
+      - name: external_id
+        sensitivity: sensitive_business_identifier
+      - name: iban
+        sensitivity: sensitive_business_identifier
+      - name: currency_code
+        sensitivity: public_business
+      - name: currency_digits
+        sensitivity: public_business
+      - name: currency_multiplesof
+        sensitivity: public_business
+      - name: field_officer_id
+        sensitivity: public_business
+      - name: status_enum
+        sensitivity: public_business
+      - name: account_type_enum
+        sensitivity: public_business
+      - name: deposit_type_enum
+        sensitivity: public_business
+      - name: submittedon_date
+        sensitivity: public_business
+      - name: approvedon_date
+        sensitivity: public_business
+      - name: activatedon_date
+        sensitivity: public_business
+      - name: closedon_date
+        sensitivity: public_business
+      - name: account_balance_derived
+        sensitivity: public_business
+      - name: available_balance_derived
+        sensitivity: public_business
+      - name: total_deposits_derived
+        sensitivity: public_business
+      - name: total_withdrawals_derived
+        sensitivity: public_business
+      - name: total_interest_earned_derived
+        sensitivity: public_business
+      - name: total_interest_posted_derived
+        sensitivity: public_business
+      - name: nominal_annual_interest_rate
+        sensitivity: public_business
+      - name: reason_for_block
+        sensitivity: free_text_sensitive
+checks:
+  - id: tables_in_data_scope
+    rule: all tables must belong to savings_core or savings_transactions.
+  - id: transaction_type_enum_declared
+    rule: m_savings_account_transaction.transaction_type_enum must be mapped in savings_transaction_type enum knowledge.
+  - id: account_identifiers_excluded
+    rule: account_no, external_id, iban, ref_no, and reason_for_block must not appear in MVP output fields.
+  - id: reversed_filter_required
+    rule: approved movement reports must filter is_reversed = false unless analyzing reversals.
+checks:
+  - id: tables_in_data_scope
+    rule: all tables must belong to savings_core or savings_transactions.
+  - id: transaction_type_enum_declared
+    rule: m_savings_account_transaction.transaction_type_enum must be mapped in savings_transaction_type enum knowledge.
+  - id: account_identifiers_excluded
+    rule: account_no, external_id, iban, ref_no, and reason_for_block must not appear in MVP output fields.
+  - id: reversed_filter_required
+    rule: approved movement reports must filter is_reversed = false unless analyzing reversals.
   - name: m_savings_product
     data_area: savings_core
     meaning: Savings product definition.
@@ -26,6 +86,16 @@ tables:
         sensitivity: public_business
       - name: name
         sensitivity: public_business
+      - name: short_name
+        sensitivity: public_business
+      - name: currency_code
+        sensitivity: public_business
+      - name: deposit_type_enum
+        sensitivity: public_business
+      - name: nominal_annual_interest_rate
+        sensitivity: public_business
+      - name: description
+        sensitivity: free_text_sensitive
   - name: m_savings_account_transaction
     data_area: savings_transactions
     meaning: Savings transaction record.
@@ -42,7 +112,29 @@ tables:
         sensitivity: public_business
       - name: transaction_date
         sensitivity: public_business
+      - name: submitted_on_date
+        sensitivity: public_business
+      - name: value_date
+        sensitivity: public_business
       - name: amount
+        sensitivity: public_business
+      - name: running_balance_derived
+        sensitivity: public_business
+      - name: cumulative_balance_derived
         sensitivity: public_business
       - name: is_reversed
         sensitivity: public_business
+      - name: is_reversal
+        sensitivity: public_business
+      - name: original_transaction_id
+        sensitivity: public_business
+      - name: is_manual
+        sensitivity: public_business
+      - name: payment_detail_id
+        sensitivity: public_business
+      - name: external_id
+        sensitivity: sensitive_business_identifier
+      - name: ref_no
+        sensitivity: sensitive_business_identifier
+      - name: reason_for_block
+        sensitivity: free_text_sensitive

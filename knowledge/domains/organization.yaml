@@ -13,3 +13,10 @@ supported_intents:
 unsupported_intents:
   - create office
   - update office
+default_rules:
+  - Organization knowledge supports office-scoped reporting only; it does not grant write access.
+checks:
+  - id: data_area_exists
+    rule: data_areas must reference organization_foundation.
+  - id: no_write_intents
+    rule: supported_intents must not include create, update, delete, or administrative office changes.

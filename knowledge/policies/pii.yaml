@@ -5,6 +5,8 @@ rules:
   - can_view_pii=true is necessary but not sufficient.
   - Capability must explicitly allow every PII field returned.
   - secret_never_expose fields must never be returned, logged, or sent to AI.
+  - Prefer aggregate reporting by default.
+  - Do not fetch fields that will be omitted.
 sensitivity_classes:
   - public_business
   - sensitive_business_identifier
@@ -12,3 +14,26 @@ sensitivity_classes:
   - security_sensitive
   - secret_never_expose
   - free_text_sensitive
+capability_rules:
+  savings_deposit_total:
+    returns_pii: false
+    behavior: aggregate_only
+  savings_deposit_top_n:
+    returns_pii: conditional
+    allowed_when_can_view_pii:
+      - client_id
+      - client_display_name
+    never_return:
+      - account_no
+      - external_id
+      - ref_no
+      - payment_detail_id
+checks:
+  - id: sensitivity_classes_match_schema
+    rule: sensitivity_classes must match knowledge/schema/fineract/columns/sensitivity.yaml classes.
+  - id: capability_pii_fields_declared
+    rule: every query pii output field must be allowed by the selected capability.
+  - id: never_return_excluded
+    rule: never_return fields must not appear in approved query output contracts.
+  - id: aggregate_capability_has_no_pii
+    rule: capabilities with returns_pii=false must expose only public_business output fields.

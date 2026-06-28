@@ -1,4 +1,5 @@
 id: fineract.columns.excluded
+source_doc: docs/reporting-pii-policy.md#3-always-excluded-fields
 fields:
   - table: m_client
     columns: [account_no, external_id]
@@ -9,4 +10,21 @@ fields:
   - table: m_savings_account_transaction
     columns: [external_id, ref_no]
     reason: Transaction references are excluded from MVP output.
+  - table: m_group
+    columns: [account_no, external_id]
+    reason: Sensitive group identifiers are excluded from MVP output when group_center scope is enabled.
+  - table: m_staff
+    columns: [firstname, lastname, email_address, mobile_no]
+    reason: Direct staff PII is excluded from MVP output; use display_name only when capability explicitly allows staff display.
+  - table: m_payment_detail
+    columns: [account_number, check_number, receipt_number, bank_number, routing_code]
+    reason: Sensitive payment references are excluded from MVP output.
+  - table: m_savings_account_transaction
+    columns: [reason_for_block]
+    reason: Free text may contain sensitive operational details.
 rule: Excluded fields must not appear in approved query output contracts.
+checks:
+  - id: excluded_fields_not_in_outputs
+    rule: no field listed here may appear in knowledge/queries/* output_fields for approved MVP queries.
+  - id: excluded_fields_not_in_capabilities
+    rule: no field listed here may appear in capability output_fields.

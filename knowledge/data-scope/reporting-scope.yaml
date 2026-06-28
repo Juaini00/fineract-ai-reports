@@ -23,4 +23,12 @@ out_of_scope:
   - document_image_file_reporting
   - identity_document_reporting
   - address_level_reporting
+  - user_audit_reporting
   - fineract_write_actions
+checks:
+  - id: areas_have_files
+    rule: every included, conditional, secondary, deferred, and out_of_scope id must have a matching area file or group entry.
+  - id: runtime_scope_excludes_deferred
+    rule: deferred_areas and out_of_scope entries must not be referenced by approved_mvp capabilities or queries.
+  - id: schema_within_scope
+    rule: schema table families must belong to included, conditional, or secondary data areas only.

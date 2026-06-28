@@ -3,6 +3,13 @@
 **Phase covered:** Phase 5–6.
 **Precondition:** `LOCAL_ADMIN_TOKEN` from `00-setup.md`.
 
+## Test status
+
+✅ Passed on 2026-06-28 via Postman MCP runner.
+
+- API key creation returned HTTP 201 and a one-time raw `data.api_key`.
+- `GET /auth/me` returned HTTP 200 with the authenticated client under `data.client`.
+
 ## Create API key (bootstrap-gated)
 
 ```bash
@@ -53,11 +60,14 @@ curl {{BASE_URL}}/auth/me -H "X-API-Key: {{API_KEY}}"
 {
   "success": true,
   "data": {
-    "api_key_id": "key_...",
-    "owner": "Antun",
-    "allowed_office_ids": [1, 2, 3],
-    "allowed_capabilities": ["savings_deposit_total", "savings_deposit_top_n"],
-    "can_view_pii": true
+    "auth_type": "api_key",
+    "client": {
+      "api_key_id": "key_...",
+      "owner": "Antun",
+      "allowed_office_ids": [1, 2, 3],
+      "allowed_capabilities": ["savings_deposit_total", "savings_deposit_top_n"],
+      "can_view_pii": true
+    }
   },
   "error": null
 }

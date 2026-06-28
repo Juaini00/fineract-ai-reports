@@ -103,7 +103,14 @@ pub async fn stream(
     let event_key = format!("chat_job:{job_id}:latest_event");
     let state_key = format!("chat_job:{job_id}:live_state");
     let stream = stream::unfold(
-        (redis_client, event_key, state_key, Some(snapshot), 0u32, true),
+        (
+            redis_client,
+            event_key,
+            state_key,
+            Some(snapshot),
+            0u32,
+            true,
+        ),
         |(client, event_key, state_key, snapshot, ticks, mut first)| async move {
             if let Some(initial) = snapshot {
                 return Some((

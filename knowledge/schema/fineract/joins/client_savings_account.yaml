@@ -1,8 +1,20 @@
 id: fineract.joins.client_savings_account
 description: Client-owned savings account join path.
+status: approved_mvp
+data_areas:
+  - client_foundation
+  - savings_core
 joins:
   - from: m_savings_account.client_id
     to: m_client.id
+    type: left
   - from: m_client.office_id
     to: m_office.id
+    type: left
 rule: Use this path for client-owned savings accounts.
+pii_rule: Client display fields require can_view_pii=true and capability approval.
+checks:
+  - id: tables_declared
+    rule: queries using this join must declare m_savings_account and m_client.
+  - id: client_pii_guarded
+    rule: client display output must be guarded by capability PII rules.

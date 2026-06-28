@@ -1,0 +1,22 @@
+id: accounting_gl
+status: deferred
+source_doc: docs/reporting-data-scope.md#4-deferred-data-areas
+description: Accounting general ledger — chart of accounts, journal entries, period closure.
+included_tables: []
+conditional_tables: []
+excluded_tables:
+  - acc_gl_account
+  - acc_gl_journal_entry
+  - acc_accounting_rule
+  - acc_product_mapping
+  - acc_gl_closure
+allowed_domains:
+  - accounting
+default_rules:
+  - GL reporting is deferred until approved accounting capabilities are added.
+  - Journal entry retrieval must respect financial reporting boundaries when approved.
+checks:
+  - id: deferred_not_runtime
+    rule: this area must not be referenced by approved_mvp capabilities or queries.
+  - id: domain_status_deferred
+    rule: matching accounting domain must remain deferred.

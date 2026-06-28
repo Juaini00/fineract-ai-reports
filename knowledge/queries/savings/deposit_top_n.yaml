@@ -12,6 +12,10 @@ tables:
   - m_savings_product
   - m_client
   - m_office
+joins:
+  - fineract.joins.savings_transaction_account
+  - fineract.joins.office_scope
+  - fineract.joins.client_savings_account
 metrics:
   - savings.deposit_amount
 parameters:
@@ -34,6 +38,13 @@ parameters:
   - name: limit
     type: integer
     required: true
+required_filters:
+  - m_savings_account_transaction.transaction_type_enum = 1
+  - m_savings_account_transaction.is_reversed = false
+  - m_savings_account_transaction.transaction_date BETWEEN from_date AND to_date
+  - m_savings_account_transaction.office_id constrained to authorized office_ids
+  - ordered by amount descending, transaction_date descending, id descending
+  - bounded by limit
 output_fields:
   - name: transaction_id
     type: bigint
@@ -59,9 +70,34 @@ output_fields:
   - name: product_name
     type: string
     sensitivity: public_business
+  - name: client_id
+    type: bigint
+    sensitivity: public_business
+  - name: client_display_name
+    type: string
+    sensitivity: pii
 guards:
   select_only: true
   single_statement: true
   require_office_filter: true
+  parameterized_only: true
+  pii_fields_require_capability: true
 timeout_ms: 3000
 cost_class: medium
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: placeholder_count_matches_parameters
+    rule: SQL placeholders must match declared parameter order and count.
+  - id: office_filter_is_bound
+    rule: SQL must constrain t.office_id with ANY($3::bigint[]).
+  - id: date_filter_is_bound
+    rule: SQL must constrain t.transaction_date BETWEEN $1::date AND $2::date.
+  - id: limit_is_bound
+    rule: SQL must use bound LIMIT $6.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: pii_contract_declared
+    rule: client_display_name must be pii and capability must declare conditional PII access.

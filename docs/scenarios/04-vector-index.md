@@ -3,6 +3,13 @@
 **Phase covered:** Phase 18 admin surface.
 **Precondition:** `API_KEY` from `02`. `VOYAGEAI_API_KEY` in `.env` if you want embeddings populated; without it, `status` returns `indexed` (no embedding).
 
+## Test status
+
+✅ Passed on 2026-06-28 rerun via Postman MCP runner.
+
+- `POST /vector-index/rebuild` returned HTTP 200 with `document_count=24`.
+- `GET /vector-index/status` returned HTTP 200 with `status=embedded` and `document_count=24`.
+
 ## Rebuild
 
 ```bash
@@ -17,12 +24,14 @@ curl -X POST {{BASE_URL}}/vector-index/rebuild \
   "data": {
     "catalog_version_id": "<uuid>",
     "content_hash": "<sha256>",
-    "document_count": <n>,
+    "document_count": 24,
     "embedding_model": "voyage-3-large"   // or null when Voyage is not configured
   },
   "error": null
 }
 ```
+
+After the knowledge expansion, `document_count` is `13 data_area + 7 domain + 2 capability + 2 query = 24`. If you see a smaller number, run `git status knowledge/` to confirm the expansion is on disk.
 
 ## Status
 

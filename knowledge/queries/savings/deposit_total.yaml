@@ -9,8 +9,10 @@ data_areas:
 tables:
   - m_savings_account_transaction
   - m_savings_account
-  - m_client
   - m_office
+joins:
+  - fineract.joins.savings_transaction_account
+  - fineract.joins.office_scope
 metrics:
   - savings.deposit_amount
   - savings.deposit_count
@@ -31,6 +33,11 @@ parameters:
   - name: product_ids
     type: array_bigint
     required: false
+required_filters:
+  - m_savings_account_transaction.transaction_type_enum = 1
+  - m_savings_account_transaction.is_reversed = false
+  - m_savings_account_transaction.transaction_date BETWEEN from_date AND to_date
+  - m_savings_account_transaction.office_id constrained to authorized office_ids
 output_fields:
   - name: from_date
     type: date
@@ -48,5 +55,19 @@ guards:
   select_only: true
   single_statement: true
   require_office_filter: true
+  parameterized_only: true
 timeout_ms: 3000
 cost_class: low
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: placeholder_count_matches_parameters
+    rule: SQL placeholders must match declared parameter order and count.
+  - id: office_filter_is_bound
+    rule: SQL must constrain t.office_id with ANY($3::bigint[]).
+  - id: date_filter_is_bound
+    rule: SQL must constrain t.transaction_date BETWEEN $1::date AND $2::date.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.

@@ -83,9 +83,5 @@ fn validate_create_api_key_input(input: &CreateApiKeyInput) -> Result<()> {
         bail!("API key owner is required");
     }
 
-    if input.allowed_capabilities.is_empty() {
-        bail!("at least one allowed capability is required");
-    }
-
     Ok(())
 }

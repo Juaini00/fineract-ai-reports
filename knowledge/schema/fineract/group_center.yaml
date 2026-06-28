@@ -1,0 +1,66 @@
+id: fineract.group_center
+status: candidate
+data_areas:
+  - group_center_foundation
+tables:
+  - name: m_group
+    data_area: group_center_foundation
+    meaning: Group or center record (group_center_foundation governs which level applies).
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: office_id
+        sensitivity: public_business
+      - name: staff_id
+        sensitivity: public_business
+      - name: parent_id
+        sensitivity: public_business
+      - name: level_id
+        sensitivity: public_business
+      - name: display_name
+        sensitivity: pii
+      - name: hierarchy
+        sensitivity: public_business
+      - name: account_no
+        sensitivity: sensitive_business_identifier
+      - name: external_id
+        sensitivity: sensitive_business_identifier
+      - name: status_enum
+        sensitivity: public_business
+      - name: activation_date
+        sensitivity: public_business
+      - name: submittedon_date
+        sensitivity: public_business
+      - name: closedon_date
+        sensitivity: public_business
+  - name: m_group_client
+    data_area: group_center_foundation
+    meaning: Client membership of a group or center.
+    columns:
+      - name: group_id
+        sensitivity: public_business
+      - name: client_id
+        sensitivity: public_business
+  - name: m_group_level
+    data_area: group_center_foundation
+    meaning: Defines whether a row in m_group is a center or a group.
+    columns:
+      - name: id
+        sensitivity: public_business
+      - name: level_name
+        sensitivity: public_business
+      - name: parent_id
+        sensitivity: public_business
+      - name: can_have_clients
+        sensitivity: public_business
+      - name: super_parent
+        sensitivity: public_business
+      - name: recursable
+        sensitivity: public_business
+checks:
+  - id: conditional_schema
+    rule: this schema must remain candidate unless group_center_foundation is enabled.
+  - id: group_identifiers_excluded
+    rule: m_group.account_no and external_id must not appear in MVP output fields.
+  - id: group_display_name_pii
+    rule: m_group.display_name must be treated as pii.
