@@ -1,6 +1,6 @@
 id: savings.account_balance
 domain: savings
-status: candidate
+status: approved_mvp
 description: Current derived savings account balance snapshot. Candidate only; not date-bounded movement.
 data_areas:
   - savings_core

@@ -24,14 +24,14 @@ curl -X POST {{BASE_URL}}/vector-index/rebuild \
   "data": {
     "catalog_version_id": "<uuid>",
     "content_hash": "<sha256>",
-    "document_count": 24,
+    "document_count": 34,
     "embedding_model": "voyage-3-large"   // or null when Voyage is not configured
   },
   "error": null
 }
 ```
 
-After the knowledge expansion, `document_count` is `13 data_area + 7 domain + 2 capability + 2 query = 24`. If you see a smaller number, run `git status knowledge/` to confirm the expansion is on disk.
+After the knowledge expansion + Phase 19 slices 1+2+4+5, `document_count` is `13 data_area + 7 domain + 7 capability + 7 query = 34`. If you see a smaller number, run `git status knowledge/` to confirm the new YAML files are on disk.
 
 ## Status
 

@@ -19,8 +19,89 @@ pub fn format_report_response(plan: &ExecutionPlan, result: &Value) -> Option<St
             first_row.get("amount")?.as_str()?,
             first_row.get("transaction_date")?.as_str()?,
         )),
+        "savings_withdrawal_total" => Some(format!(
+            "The total savings withdrawal from {} to {} is {} across {} withdrawal transaction(s).",
+            first_row.get("from_date")?.as_str()?,
+            first_row.get("to_date")?.as_str()?,
+            first_row.get("total_withdrawal_amount")?.as_str()?,
+            first_row.get("withdrawal_count")?.as_i64()?,
+        )),
+        "savings_withdrawal_top_n" => Some(format!(
+            "Found {} savings withdrawal transaction(s). The largest amount is {} on {}.",
+            result.get("row_count")?.as_u64()?,
+            first_row.get("amount")?.as_str()?,
+            first_row.get("transaction_date")?.as_str()?,
+        )),
+        "savings_deposit_monthly_breakdown" => format_monthly_breakdown(result),
+        "savings_deposit_monthly_top_n" => format_monthly_top_n(result),
+        "savings_balance_summary" => Some(format!(
+            "Active client-owned savings portfolio: {} account(s). Total balance {}. Average {}. Largest {}.",
+            first_row.get("account_count")?.as_i64()?,
+            first_row.get("total_balance")?.as_str()?,
+            first_row.get("average_balance")?.as_str()?,
+            first_row.get("max_balance")?.as_str()?,
+        )),
         _ => None,
     }
+}
+
+fn format_monthly_top_n(result: &Value) -> Option<String> {
+    let rows = result.get("rows")?.as_array()?;
+    if rows.is_empty() {
+        return Some("No savings deposit activity in the requested period.".to_string());
+    }
+    // Group consecutive rows by month_start; SQL already ORDERs by month then amount DESC.
+    let mut lines: Vec<String> = Vec::new();
+    let mut last_month: Option<&str> = None;
+    let mut month_count = 0usize;
+    for row in rows.iter().take(120) {
+        let month = row.get("month_start").and_then(Value::as_str).unwrap_or("?");
+        if last_month != Some(month) {
+            month_count += 1;
+            lines.push(format!("{month}:"));
+            last_month = Some(month);
+        }
+        let amount = row.get("amount").and_then(Value::as_str).unwrap_or("0");
+        let date = row
+            .get("transaction_date")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        lines.push(format!("  - {amount} on {date}"));
+    }
+    if rows.len() > 120 {
+        lines.push(format!("... and {} more transaction(s).", rows.len() - 120));
+    }
+    let header = format!(
+        "Top savings deposits per month ({month_count} month(s), {} transaction(s)):",
+        rows.len()
+    );
+    let mut out = vec![header];
+    out.extend(lines);
+    Some(out.join("\n"))
+}
+
+fn format_monthly_breakdown(result: &Value) -> Option<String> {
+    let rows = result.get("rows")?.as_array()?;
+    if rows.is_empty() {
+        return Some("No savings deposit activity in the requested period.".to_string());
+    }
+    let mut lines = vec![format!(
+        "Savings deposit by month ({} month(s)):",
+        rows.len()
+    )];
+    for row in rows.iter().take(24) {
+        let month = row.get("month_start").and_then(Value::as_str).unwrap_or("?");
+        let amount = row
+            .get("total_deposit_amount")
+            .and_then(Value::as_str)
+            .unwrap_or("0");
+        let count = row.get("deposit_count").and_then(Value::as_i64).unwrap_or(0);
+        lines.push(format!("- {month}: {amount} across {count} transaction(s)."));
+    }
+    if rows.len() > 24 {
+        lines.push(format!("... and {} more month(s).", rows.len() - 24));
+    }
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]

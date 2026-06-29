@@ -21,7 +21,13 @@ const DATA_AREA_STATUSES: &[&str] = &[
 ];
 const DOMAIN_STATUSES: &[&str] = &["approved_mvp", "candidate", "deferred", "rejected"];
 const CAPABILITY_STATUSES: &[&str] = &["approved_mvp", "candidate", "deferred", "rejected"];
-const OUTPUT_MODES: &[&str] = &["total", "top_n"];
+const OUTPUT_MODES: &[&str] = &[
+    "total",
+    "top_n",
+    "monthly_breakdown",
+    "monthly_top_n",
+    "summary",
+];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];
 const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "array_bigint"];
 const SENSITIVITY_CLASSES: &[&str] = &[
@@ -117,7 +123,12 @@ impl KnowledgeValidator {
         }
 
         for capability in &catalog.capabilities {
-            if capability.status == "approved_mvp" && capability.required_parameters.is_empty() {
+            // Snapshot output_modes ("summary") have no user-required params —
+            // they aggregate current state filtered by authorized office scope only.
+            if capability.status == "approved_mvp"
+                && capability.output_mode != "summary"
+                && capability.required_parameters.is_empty()
+            {
                 bail!(
                     "approved capability {} must declare required parameters",
                     capability.id
@@ -360,8 +371,9 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
     let trimmed = sql.trim();
     let upper = trimmed.to_ascii_uppercase();
 
-    if !upper.starts_with("SELECT") {
-        bail!("query {} SQL must start with SELECT", query.id);
+    // Allow SELECT or WITH ... SELECT (CTE). Both are read-only.
+    if !(upper.starts_with("SELECT") || upper.starts_with("WITH")) {
+        bail!("query {} SQL must start with SELECT or WITH (CTE)", query.id);
     }
 
     let without_final_semicolon = trimmed.strip_suffix(';').unwrap_or(trimmed);
@@ -396,8 +408,16 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
         }
     }
 
-    if has_parameter(query, "limit") && !upper.contains("LIMIT") {
-        bail!("query {} SQL must constrain result limit", query.id);
+    // Bound result size via LIMIT (atomic top_n) or ROW_NUMBER()/RANK() over a
+    // partition (per-group top_n, used by monthly_top_n et al). Both put a hard
+    // cap on rows; either one is acceptable.
+    if has_parameter(query, "limit")
+        && !(upper.contains("LIMIT") || upper.contains("ROW_NUMBER(") || upper.contains("RANK("))
+    {
+        bail!(
+            "query {} SQL must constrain result limit via LIMIT or a window function",
+            query.id
+        );
     }
 
     Ok(())

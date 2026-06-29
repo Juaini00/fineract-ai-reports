@@ -31,19 +31,19 @@ curl -X POST {{BASE_URL}}/catalog/validate \
     "valid": true,
     "data_areas": 13,
     "domains": 7,
-    "capabilities": 2,
-    "queries": 2
+    "capabilities": 7,
+    "queries": 7
   },
   "error": null
 }
 ```
 
-Expected counts after the knowledge expansion:
+Expected counts after the knowledge expansion + Phase 19 slices 1+2+4:
 
 - `data_areas: 13` — `organization_foundation`, `client_foundation`, `group_center_foundation`, `savings_core`, `savings_transactions`, `savings_charges_fees`, `loans`, `accounting_gl`, `tax`, `custom_datatables`, `audit_users_operations`, `deferred_areas` (group wrapper), `out_of_scope_areas` (group wrapper).
 - `domains: 7` — `organization`, `client`, `savings`, `group_center`, `loan`, `accounting`, `tax`.
-- `capabilities: 2` — `savings_deposit_total`, `savings_deposit_top_n`.
-- `queries: 2` — `savings.deposit_total`, `savings.deposit_top_n`.
+- `capabilities: 7` — deposit_total, deposit_top_n, withdrawal_total, withdrawal_top_n, deposit_monthly_breakdown, deposit_monthly_top_n, **`savings_balance_summary`** (new in slice 5).
+- `queries: 7` — same plus **`savings.balance_summary`**.
 
 If your counts differ, run `git status knowledge/` to see local edits, then re-validate.
 

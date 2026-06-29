@@ -1108,15 +1108,78 @@ Vector retrieval only selects approved capability candidates. SQL execution stil
 
 Goal: add more reporting capabilities after MVP.
 
-Next capabilities:
+Current status:
 
 ```text
-savings_deposit_monthly_breakdown
-savings_deposit_monthly_top_n
-savings_withdrawal_total
-savings_withdrawal_top_n
+PARTIALLY DONE (slices 1 + 2)
+
+Slice 1 — withdrawal capabilities:
+savings_withdrawal_total + savings_withdrawal_top_n capability + query YAML.
+queries/savings/withdrawal_total.sql + withdrawal_top_n.sql (mirror deposit, transaction_type_enum=2).
+savings.withdrawal_amount metric flipped to approved_mvp; savings.withdrawal_count added.
+
+Slice 2 — monthly breakdown:
+savings_deposit_monthly_breakdown capability + query YAML.
+queries/savings/deposit_monthly_breakdown.sql (GROUP BY date_trunc('month', transaction_date)).
+OUTPUT_MODES extended with "monthly_breakdown".
+formatter::format_monthly_breakdown emits a multi-line "Savings deposit by month (N month(s))" template, capped at 24 rows with "... and N more month(s)." overflow.
+
+executor approved_sql() match arms updated for all three new query ids.
+
+Routing: vector retrieval picks the right capability via embedding distance (no classifier
+change needed). classify_retrieved_capability is generic on output_mode — top_n adds limit,
+total and monthly_breakdown only need from_date/to_date. PII gate in planner is keyed on
+output_mode == "top_n", so monthly_breakdown (aggregate) bypasses PII guard correctly.
+
+Lexical fallback in classifier.rs still gates on "deposit" — withdrawal queries during
+embedding outage will degrade to unsupported / clarification. ponytail: expand classifier
+keyword list when vector outage is a real concern.
+
+Slice 3 — date-range parser upgrade (classifier.rs::date_range):
+Added: yesterday/kemarin, this year / tahun ini / ytd / year-to-date, last year / tahun lalu,
+last month / bulan lalu, last week / minggu lalu, relative counts ("last 7 days", "past 30 days",
+"3 months ago", "3 bulan terakhir", "5 hari lalu"), bare year ("deposits in 2026"), and
+month-range with default-current-year ("from January to September" → 2026-01-01 .. 2026-09-30).
+date_range now lowercases internally so callers don't have to.
+13 new unit tests cover each pattern, including January wraparound for "last month".
+
+Slice 4 — monthly top-N capability:
+savings_deposit_monthly_top_n capability + query YAML.
+queries/savings/deposit_monthly_top_n.sql uses a CTE + ROW_NUMBER() OVER (PARTITION BY month
+ORDER BY amount DESC) to pick top-N per month.
+OUTPUT_MODES extended with "monthly_top_n".
+Validator: SQL safety check now accepts queries that start with WITH (CTE) in addition to SELECT.
+Validator: limit-bound check now accepts ROW_NUMBER() / RANK() as alternative to trailing LIMIT.
+Classifier classify_retrieved_capability now treats any output_mode ending in "top_n" as the
+top_n shape (adds `limit` param); monthly_top_n default limit is 1, atomic top_n stays at 10.
+Planner PII gate widened: ensure_pii_allowed fires for any output_mode ending in "top_n",
+so monthly_top_n also requires can_view_pii when client identity is included.
+formatter::format_monthly_top_n groups consecutive rows by month, caps at 120 total rows.
+
+Slice 5 — snapshot balance summary:
+savings_balance_summary capability + query YAML.
+queries/savings/balance_summary.sql aggregates m_savings_account.account_balance_derived over
+active client-owned accounts, filtered by m_client.office_id ∈ allowed_office_ids.
+OUTPUT_MODES extended with "summary".
+Validator: approved capability with output_mode == "summary" may declare empty required_parameters
+(no time/limit/etc. user inputs needed; office scope is implicit from API key).
+Classifier classify_retrieved_capability skips date_range for output_mode == "summary".
+savings.account_balance metric flipped to approved_mvp.
+formatter template emits "Active client-owned savings portfolio: N account(s). Total ... Average ... Largest ...".
+
+Still pending:
+savings_withdrawal_monthly_breakdown / monthly_top_n (mirror deposit slices 2/4 with enum=2).
+group-owned savings balance summary (requires promoting group_center_foundation out of conditional).
+loan_* and accounting_* capabilities — blocked until those domains move out of deferred.
+```
+
+Next capabilities (in priority order):
+
+```text
+savings_withdrawal_monthly_breakdown
+savings_withdrawal_monthly_top_n
+loan_disbursement_total (requires loan domain promotion)
 loan_repayment_total
-loan_disbursement_total
 ```
 
 Each new capability requires:

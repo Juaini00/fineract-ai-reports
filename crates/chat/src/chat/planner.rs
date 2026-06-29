@@ -88,7 +88,10 @@ pub fn evaluate_policy(client: &ClientContext, plan: Option<&ExecutionPlan>) -> 
         Err(error) => return blocked(error.to_string()),
     };
 
-    if let Err(error) = ensure_pii_allowed(client, plan.output_mode == "top_n") {
+    // PII gate applies to any output_mode that returns transactional rows with
+    // optional client identity. Both `top_n` (atomic) and `monthly_top_n`
+    // (per-month) join m_client and expose `client_display_name` (pii).
+    if let Err(error) = ensure_pii_allowed(client, plan.output_mode.ends_with("top_n")) {
         return blocked(error.to_string());
     }
 

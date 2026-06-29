@@ -1,0 +1,34 @@
+id: savings_balance_summary
+status: approved_mvp
+domain: savings
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+required_api_capability: savings_balance_summary
+query_id: savings.balance_summary
+metrics:
+  - savings.account_balance
+output_mode: summary
+examples:
+  - What is the total savings balance right now?
+  - Show the savings portfolio summary.
+  - Current active savings account balance and count.
+  - Berapa saldo total tabungan aktif saat ini?
+  - Ringkasan portofolio tabungan.
+required_parameters: []
+optional_parameters:
+  - office_ids
+  - currency_code
+  - product_ids
+defaults:
+  active_only: true
+  client_owned_only: true
+guards:
+  require_office_scope: true
+  snapshot_only: true
+pii:
+  returns_pii: false
+cost_class: medium
+clarification:
+  missing_parameters: []

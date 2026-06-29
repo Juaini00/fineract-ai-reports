@@ -1,0 +1,38 @@
+id: savings_deposit_monthly_breakdown
+status: approved_mvp
+domain: savings
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+required_api_capability: savings_deposit_monthly_breakdown
+query_id: savings.deposit_monthly_breakdown
+metrics:
+  - savings.deposit_amount
+  - savings.deposit_count
+output_mode: monthly_breakdown
+examples:
+  - Monthly deposit totals from January to September 2026.
+  - Show savings deposits per month for this year.
+  - Month-by-month deposit breakdown.
+  - Berapa setoran tabungan per bulan dari Januari sampai September.
+required_parameters:
+  - from_date
+  - to_date
+optional_parameters:
+  - office_ids
+  - currency_code
+  - product_ids
+defaults:
+  exclude_reversed: true
+guards:
+  require_office_scope: true
+  max_date_range_days: 366
+pii:
+  returns_pii: false
+cost_class: medium
+clarification:
+  missing_parameters:
+    - from_date
+    - to_date

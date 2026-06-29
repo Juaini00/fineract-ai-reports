@@ -211,28 +211,33 @@ pub fn classify_retrieved_capability(
     candidates: Vec<ClassificationCandidate>,
 ) -> ClassificationResult {
     let normalized = message.to_lowercase();
-    let Some((from_date, to_date)) = date_range(&normalized, today) else {
-        return ClassificationResult {
-            outcome: ClassificationOutcome::ClarificationRequired,
-            domain: Some(domain.to_string()),
-            capability: None,
-            confidence,
-            params: json!({}),
-            clarification: Some("Please clarify the report date or period.".to_string()),
-            options: Vec::new(),
-            source: Some("vector".to_string()),
-            candidates,
+    let mut params = json!({ "office_scope": "authorized_scope" });
+
+    // Snapshot output_modes have no time dimension — skip date_range entirely.
+    if output_mode != "summary" {
+        let Some((from_date, to_date)) = date_range(&normalized, today) else {
+            return ClassificationResult {
+                outcome: ClassificationOutcome::ClarificationRequired,
+                domain: Some(domain.to_string()),
+                capability: None,
+                confidence,
+                params: json!({}),
+                clarification: Some("Please clarify the report date or period.".to_string()),
+                options: Vec::new(),
+                source: Some("vector".to_string()),
+                candidates,
+            };
         };
-    };
+        params["from_date"] = json!(from_date.to_string());
+        params["to_date"] = json!(to_date.to_string());
+    }
 
-    let mut params = json!({
-        "from_date": from_date.to_string(),
-        "to_date": to_date.to_string(),
-        "office_scope": "authorized_scope",
-    });
-
-    if output_mode == "top_n" {
-        params["limit"] = json!(limit_from_message(&normalized).unwrap_or(10));
+    // `top_n` (atomic) and `monthly_top_n` (per-month) both need a `limit`
+    // parameter. Defaults: 10 for atomic top_n, 1 for monthly_top_n (one row per
+    // month unless the user asks for top-N per month).
+    if output_mode.ends_with("top_n") {
+        let default_limit = if output_mode == "monthly_top_n" { 1 } else { 10 };
+        params["limit"] = json!(limit_from_message(&normalized).unwrap_or(default_limit));
     }
 
     ClassificationResult {
@@ -301,7 +306,23 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
-    if let Some(range) = month_range(message) {
+    // Lowercase once so sub-helpers can match `January` / `Januari` /
+    // `JANUARY` consistently. Production callers already lowercase, but unit
+    // tests and any direct call get the same treatment here.
+    let message = message.to_lowercase();
+    let message = message.as_str();
+
+    // Order matters: more specific patterns first.
+    if let Some(range) = month_range(message, today) {
+        return Some(range);
+    }
+    if let Some(range) = relative_count_range(message, today) {
+        return Some(range);
+    }
+    if let Some(range) = relative_literal_range(message, today) {
+        return Some(range);
+    }
+    if let Some(range) = bare_year_range(message) {
         return Some(range);
     }
 
@@ -309,12 +330,12 @@ fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)>
         return Some((today, today));
     }
 
-    if contains_any(message, &["this month"]) {
+    if contains_any(message, &["this month", "bulan ini"]) {
         let first_day = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
         return Some((first_day, today));
     }
 
-    if contains_any(message, &["this week"]) {
+    if contains_any(message, &["this week", "minggu ini"]) {
         let days_from_monday = today.weekday().num_days_from_monday() as i64;
         return Some((today - chrono::Duration::days(days_from_monday), today));
     }
@@ -322,19 +343,24 @@ fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)>
     None
 }
 
-fn month_range(message: &str) -> Option<(NaiveDate, NaiveDate)> {
+fn month_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
     let tokens = message
         .split(|character: char| !character.is_alphanumeric())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
-    let year = tokens
-        .iter()
-        .rev()
-        .find_map(|token| token.parse::<i32>().ok())?;
     let months = tokens
         .iter()
         .filter_map(|token| month_number(token))
         .collect::<Vec<_>>();
+    if months.is_empty() {
+        return None;
+    }
+    // Use explicit year token if present, otherwise default to current year.
+    let year = tokens
+        .iter()
+        .rev()
+        .find_map(|token| token.parse::<i32>().ok().filter(|y| (2000..2100).contains(y)))
+        .unwrap_or_else(|| today.year());
 
     match months.as_slice() {
         [month] => {
@@ -349,6 +375,103 @@ fn month_range(message: &str) -> Option<(NaiveDate, NaiveDate)> {
         }
         _ => None,
     }
+}
+
+fn relative_literal_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    if contains_any(message, &["yesterday", "kemarin"]) {
+        let y = today - chrono::Duration::days(1);
+        return Some((y, y));
+    }
+    if contains_any(message, &["last year", "tahun lalu", "tahun kemarin"]) {
+        let year = today.year() - 1;
+        let from = NaiveDate::from_ymd_opt(year, 1, 1)?;
+        let to = NaiveDate::from_ymd_opt(year, 12, 31)?;
+        return Some((from, to));
+    }
+    if contains_any(
+        message,
+        &["this year", "tahun ini", "year to date", "year-to-date", "ytd"],
+    ) {
+        let from = NaiveDate::from_ymd_opt(today.year(), 1, 1)?;
+        return Some((from, today));
+    }
+    if contains_any(message, &["last month", "bulan lalu", "bulan kemarin"]) {
+        let (year, month) = previous_month(today.year(), today.month());
+        let from = NaiveDate::from_ymd_opt(year, month, 1)?;
+        let to = end_of_month(year, month)?;
+        return Some((from, to));
+    }
+    if contains_any(message, &["last week", "minggu lalu"]) {
+        let days_from_monday = today.weekday().num_days_from_monday() as i64;
+        let this_monday = today - chrono::Duration::days(days_from_monday);
+        let last_monday = this_monday - chrono::Duration::days(7);
+        let last_sunday = this_monday - chrono::Duration::days(1);
+        return Some((last_monday, last_sunday));
+    }
+    None
+}
+
+/// "last 7 days" / "past 30 days" / "3 months ago" / "2 minggu terakhir" / "5 hari lalu".
+/// Looks for a number followed by a unit token. Returns (today - N units, today).
+fn relative_count_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    let tokens: Vec<&str> = message
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    for (i, token) in tokens.iter().enumerate() {
+        let Ok(n) = token.parse::<i64>() else {
+            continue;
+        };
+        if !(1..=120).contains(&n) {
+            continue;
+        }
+        let unit_token = tokens.get(i + 1)?.to_ascii_lowercase();
+        let from = match unit_token.as_str() {
+            "day" | "days" | "hari" => Some(today - chrono::Duration::days(n)),
+            "week" | "weeks" | "minggu" => Some(today - chrono::Duration::days(7 * n)),
+            "month" | "months" | "bulan" => Some(subtract_months(today, n as u32)),
+            _ => None,
+        };
+        if let Some(from) = from {
+            return Some((from, today));
+        }
+    }
+    None
+}
+
+/// Bare year mention like "deposits in 2026" — no month, no relative word.
+fn bare_year_range(message: &str) -> Option<(NaiveDate, NaiveDate)> {
+    let tokens: Vec<&str> = message
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.iter().any(|t| month_number(t).is_some()) {
+        return None;
+    }
+    let year = tokens
+        .iter()
+        .rev()
+        .find_map(|t| t.parse::<i32>().ok().filter(|y| (2000..2100).contains(y)))?;
+    let from = NaiveDate::from_ymd_opt(year, 1, 1)?;
+    let to = NaiveDate::from_ymd_opt(year, 12, 31)?;
+    Some((from, to))
+}
+
+fn previous_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+}
+
+fn subtract_months(date: NaiveDate, n: u32) -> NaiveDate {
+    let mut year = date.year();
+    let mut month = date.month();
+    for _ in 0..n {
+        let (y, m) = previous_month(year, month);
+        year = y;
+        month = m;
+    }
+    NaiveDate::from_ymd_opt(year, month, date.day())
+        .or_else(|| end_of_month(year, month))
+        .unwrap_or(date)
 }
 
 fn month_number(token: &str) -> Option<u32> {
@@ -422,6 +545,122 @@ mod tests {
         assert_eq!(result.outcome, ClassificationOutcome::Matched);
         assert_eq!(result.capability.as_deref(), Some("savings_deposit_top_n"));
         assert_eq!(result.params["limit"], 5);
+    }
+
+    #[test]
+    fn parses_yesterday() {
+        let range = date_range("total deposit yesterday", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_kemarin() {
+        let range = date_range("total setoran kemarin", today()).unwrap();
+        assert_eq!(range.0, NaiveDate::from_ymd_opt(2026, 6, 20).unwrap());
+    }
+
+    #[test]
+    fn parses_this_year_and_ytd() {
+        let r1 = date_range("deposits this year", today()).unwrap();
+        let r2 = date_range("deposits ytd", today()).unwrap();
+        let r3 = date_range("setoran tahun ini", today()).unwrap();
+        let expected = (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), today());
+        assert_eq!(r1, expected);
+        assert_eq!(r2, expected);
+        assert_eq!(r3, expected);
+    }
+
+    #[test]
+    fn parses_last_year() {
+        let range = date_range("deposits last year", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_last_month() {
+        let range = date_range("deposits last month", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_last_month_january_wraps() {
+        let today_jan = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let range = date_range("deposits last month", today_jan).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_last_week() {
+        // today is 2026-06-21 (Sunday). this_monday = 2026-06-15. last_monday = 2026-06-08, last_sunday = 2026-06-14.
+        let range = date_range("deposits last week", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 14).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_last_n_days() {
+        let range = date_range("deposits last 7 days", today()).unwrap();
+        assert_eq!(range.0, today() - chrono::Duration::days(7));
+        assert_eq!(range.1, today());
+    }
+
+    #[test]
+    fn parses_last_n_months_id() {
+        let range = date_range("setoran 3 bulan terakhir", today()).unwrap();
+        // today is 2026-06-21; minus 3 months → 2026-03-21
+        assert_eq!(range.0, NaiveDate::from_ymd_opt(2026, 3, 21).unwrap());
+        assert_eq!(range.1, today());
+    }
+
+    #[test]
+    fn parses_bare_year() {
+        let range = date_range("deposits in 2025", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_month_range_default_year() {
+        // No year token; should default to today.year() = 2026.
+        let range = date_range("deposits from January to September", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_month_range_with_year() {
+        let range = date_range("deposits from January to September 2025", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 9, 30).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn parses_id_month_range_with_sampai() {
+        let range = date_range("setoran dari Januari sampai September 2026", today()).unwrap();
+        assert_eq!(range, (
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+        ));
     }
 
     #[test]

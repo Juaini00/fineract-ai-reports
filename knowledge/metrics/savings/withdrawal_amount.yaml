@@ -1,7 +1,7 @@
 id: savings.withdrawal_amount
 domain: savings
-status: candidate
-description: Sum of non-reversed savings withdrawal transaction amounts. Candidate only; no approved MVP query yet.
+status: approved_mvp
+description: Sum of non-reversed savings withdrawal transaction amounts. Used by savings_withdrawal_total / _top_n capabilities.
 data_areas:
   - savings_transactions
 source_table: m_savings_account_transaction

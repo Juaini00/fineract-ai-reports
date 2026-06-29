@@ -1,0 +1,43 @@
+id: savings_deposit_monthly_top_n
+status: approved_mvp
+domain: savings
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+required_api_capability: savings_deposit_monthly_top_n
+query_id: savings.deposit_monthly_top_n
+metrics:
+  - savings.deposit_amount
+output_mode: monthly_top_n
+examples:
+  - Largest deposit for each month from January to September 2026.
+  - Top 3 deposits per month this year.
+  - Show the biggest savings deposit per month.
+  - Setoran terbesar setiap bulan tahun ini.
+required_parameters:
+  - from_date
+  - to_date
+  - limit
+optional_parameters:
+  - office_ids
+  - currency_code
+  - product_ids
+defaults:
+  exclude_reversed: true
+  default_limit: 1
+guards:
+  require_office_scope: true
+  max_date_range_days: 366
+  max_limit_per_month: 20
+pii:
+  returns_pii: conditional
+  allowed_fields_when_can_view_pii:
+    - client_id
+    - client_display_name
+cost_class: high
+clarification:
+  missing_parameters:
+    - from_date
+    - to_date

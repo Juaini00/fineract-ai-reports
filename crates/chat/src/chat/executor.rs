@@ -110,6 +110,21 @@ fn approved_sql(query_id: &str) -> Result<&'static str> {
         "savings.deposit_top_n" => Ok(include_str!(
             "../../../../queries/savings/deposit_top_n.sql"
         )),
+        "savings.withdrawal_total" => Ok(include_str!(
+            "../../../../queries/savings/withdrawal_total.sql"
+        )),
+        "savings.withdrawal_top_n" => Ok(include_str!(
+            "../../../../queries/savings/withdrawal_top_n.sql"
+        )),
+        "savings.deposit_monthly_breakdown" => Ok(include_str!(
+            "../../../../queries/savings/deposit_monthly_breakdown.sql"
+        )),
+        "savings.deposit_monthly_top_n" => Ok(include_str!(
+            "../../../../queries/savings/deposit_monthly_top_n.sql"
+        )),
+        "savings.balance_summary" => Ok(include_str!(
+            "../../../../queries/savings/balance_summary.sql"
+        )),
         other => bail!("query {other} has no approved SQL binding"),
     }
 }
