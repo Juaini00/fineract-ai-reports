@@ -119,7 +119,7 @@ request
   -> chat job created (chat::chat::service)
   -> deterministic write-intent guard
   -> if API key has allowed capabilities: embed query
-  -> vector search latest catalog version capability rows filtered by allowed_capabilities
+  -> vector search latest catalog version capability/query rows scoped to allowed_capabilities
   -> catalog lexical fallback when embedding/vector search is unavailable
   -> choose one high-confidence capability or ask clarification from close candidates
   -> persist classification.source and classification.candidates in chat_jobs.state_json
@@ -132,10 +132,10 @@ request
 
 ### 4.2 What Vector Search Returns
 
-A ranked list of capability rows from `knowledge_index`. The runtime currently cares about:
+A ranked list of knowledge rows from `knowledge_index` that can resolve to approved capabilities. The runtime currently cares about:
 
-- `source_type` and `source_id` (for example `capability:savings_deposit_total`) — used to look up the typed catalog entry.
-- `metadata_json` — used as derived catalog metadata. The SQL query filters `source_type = capability` and `source_id = ANY(allowed_capabilities)` before candidates reach the classifier fallback.
+- `source_type` and `source_id` (for example `capability:savings_deposit_total` or `query:savings.deposit_total`) — used to resolve the owning approved capability.
+- `metadata_json` — used as derived catalog metadata. Capability rows are filtered by capability id, and query rows are mapped back through capability `query_id` before planning.
 - Similarity score — feeds the planner's confidence calculation.
 - Only the latest `knowledge_catalog_versions` row with status `embedded` or `indexed` is searched. Duplicate capability ids are collapsed before decision-making.
 
@@ -169,6 +169,7 @@ DeepSeek can return only one of: a `capability_id` choice with extracted paramet
 
 - Domain knowledge (concepts and English synonyms).
 - Capability descriptions and example user phrases.
+- Query metadata that maps back to approved capabilities.
 - Metric definitions and aggregation semantics.
 - Schema summaries (table meaning, relationships) for developer mode.
 - Unsupported intent statements (so "create a savings account" can match an unsupported template fast).
@@ -185,18 +186,17 @@ DeepSeek can return only one of: a `capability_id` choice with extracted paramet
 ### Done
 
 - Schema for `knowledge_catalog_versions` and `knowledge_index` with deterministic content hashing, source uniqueness, GIN over metadata, and ivfflat over the embedding column.
-- Catalog loader and validator covering data areas, domains, capabilities, and queries.
+- Catalog loader and validator covering data areas, domains, capabilities, queries, schema, metrics, policies, and responses.
 - Retrieval document builder that flattens catalog entries into searchable text with stable metadata.
 - Voyage embedding client for document embeddings.
 - Sync orchestration that persists retrieval documents, fills embeddings when startup sync is enabled, and records an `indexed` or `embedded` catalog version.
-- Runtime query embedding and capability-only vector classification in chat job creation.
+- Runtime query embedding and capability/query vector classification in chat job creation.
 - `classification.source` and `classification.candidates` persisted in `chat_jobs.state_json` for manual verification.
 
 ### Pending
 
-- Metric / schema / policy / response retrieval documents (current `RetrievalSourceType` enum only covers `data_area | domain | capability | query`; emitter must be extended once those YAML files become typed in Phase 10).
-- Query embedding/vector retrieval for clarification responses (current path is lexical only).
-- DeepSeek planner fallback over retrieved candidates. Context candidates (data_area / domain / query) are already attached to `chat_jobs.state_json.classification.candidates` with their `source_type` for the planner to consume.
+- Field-specific typed Rust schemas for metric / schema / policy / response YAML.
+- DeepSeek planner fallback over retrieved candidates. Context candidates are already attached to `chat_jobs.state_json.classification.candidates` with their `source_type` for the planner to consume.
 
 ### Sequencing Rule
 

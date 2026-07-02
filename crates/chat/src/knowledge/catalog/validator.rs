@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Result, bail};
 use sqlx::{AssertSqlSafe, Column, Executor, PgPool, SqlSafeStr, Statement};
 
-use crate::knowledge::model::{KnowledgeCatalog, QueryKnowledge};
+use crate::knowledge::model::{GenericKnowledge, KnowledgeCatalog, QueryKnowledge};
 
 const DATA_AREA_STATUSES: &[&str] = &[
     "included_mvp_foundation",
@@ -56,10 +56,26 @@ impl KnowledgeValidator {
             catalog.domains.iter().map(|item| item.id.as_str()),
         )?;
         validate_unique_ids(
+            "schema",
+            catalog.schemas.iter().map(|item| item.id.as_str()),
+        )?;
+        validate_unique_ids(
+            "metric",
+            catalog.metrics.iter().map(|item| item.id.as_str()),
+        )?;
+        validate_unique_ids(
             "capability",
             catalog.capabilities.iter().map(|item| item.id.as_str()),
         )?;
         validate_unique_ids("query", catalog.queries.iter().map(|item| item.id.as_str()))?;
+        validate_unique_ids(
+            "policy",
+            catalog.policies.iter().map(|item| item.id.as_str()),
+        )?;
+        validate_unique_ids(
+            "response",
+            catalog.responses.iter().map(|item| item.id.as_str()),
+        )?;
 
         for area in &catalog.data_areas {
             validate_status("data area", &area.id, &area.status, DATA_AREA_STATUSES)?;
@@ -121,6 +137,11 @@ impl KnowledgeValidator {
                 &data_area_ids,
             )?;
         }
+
+        validate_generic_layer("schema", &catalog.schemas, &data_area_ids, &domains_ids)?;
+        validate_generic_layer("metric", &catalog.metrics, &data_area_ids, &domains_ids)?;
+        validate_generic_layer("policy", &catalog.policies, &data_area_ids, &domains_ids)?;
+        validate_generic_layer("response", &catalog.responses, &data_area_ids, &domains_ids)?;
 
         for capability in &catalog.capabilities {
             // Snapshot output_modes ("summary") have no user-required params —
@@ -243,6 +264,35 @@ impl KnowledgeValidator {
 
         Ok(())
     }
+}
+
+fn validate_generic_layer(
+    label: &str,
+    items: &[GenericKnowledge],
+    data_area_ids: &HashSet<&str>,
+    domain_ids: &HashSet<&str>,
+) -> Result<()> {
+    for item in items {
+        if item.checks.is_empty() {
+            bail!("{label} {} must declare checks", item.id);
+        }
+
+        validate_refs(
+            label,
+            &item.id,
+            "data area",
+            &item.data_areas,
+            data_area_ids,
+        )?;
+
+        if let Some(domain) = item.domain.as_deref() {
+            if !domain_ids.contains(domain) {
+                bail!("{label} {} references unknown domain {domain}", item.id);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_unique_ids<'a>(label: &str, ids: impl Iterator<Item = &'a str>) -> Result<()> {

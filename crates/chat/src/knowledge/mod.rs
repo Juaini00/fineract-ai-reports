@@ -25,8 +25,12 @@ mod tests {
 
         assert!(!catalog.data_areas.is_empty());
         assert!(!catalog.domains.is_empty());
+        assert!(!catalog.schemas.is_empty());
+        assert!(!catalog.metrics.is_empty());
         assert!(!catalog.capabilities.is_empty());
         assert!(!catalog.queries.is_empty());
+        assert!(!catalog.policies.is_empty());
+        assert!(!catalog.responses.is_empty());
     }
 
     #[test]
@@ -61,6 +65,22 @@ mod tests {
             capability_doc
                 .retrieval_text
                 .contains("Query savings.deposit_total")
+        );
+
+        assert!(
+            documents
+                .iter()
+                .any(|document| document.source_id == "savings.deposit_amount")
+        );
+        assert!(
+            documents
+                .iter()
+                .any(|document| document.source_id == "pii_policy")
+        );
+        assert!(
+            documents
+                .iter()
+                .any(|document| document.source_id == "reporting_responses")
         );
     }
 

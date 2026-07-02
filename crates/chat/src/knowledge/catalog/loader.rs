@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::knowledge::model::{
-    CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, KnowledgeCatalog, QueryKnowledge,
+    CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
+    QueryKnowledge,
 };
 
 pub struct KnowledgeLoader {
@@ -23,16 +24,24 @@ impl KnowledgeLoader {
     pub fn load(&self) -> Result<KnowledgeCatalog> {
         let data_areas = self.load_yaml_dir::<DataAreasKnowledge>("data-scope/areas")?;
         let domains = self.load_yaml_dir::<DomainKnowledge>("domains")?;
+        let schemas = self.load_yaml_dir::<GenericKnowledge>("schema")?;
+        let metrics = self.load_yaml_dir::<GenericKnowledge>("metrics")?;
         let capabilities = self.load_yaml_dir::<CapabilityKnowledge>("capabilities")?;
         let queries = self.load_yaml_dir::<QueryKnowledge>("queries")?;
+        let policies = self.load_yaml_dir::<GenericKnowledge>("policies")?;
+        let responses = self.load_yaml_dir::<GenericKnowledge>("responses")?;
 
         Ok(KnowledgeCatalog {
             root_path: self.root_path.clone(),
             query_path: self.query_path.clone(),
             data_areas,
             domains,
+            schemas,
+            metrics,
             capabilities,
             queries,
+            policies,
+            responses,
         })
     }
 

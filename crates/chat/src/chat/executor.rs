@@ -122,6 +122,12 @@ fn approved_sql(query_id: &str) -> Result<&'static str> {
         "savings.deposit_monthly_top_n" => Ok(include_str!(
             "../../../../queries/savings/deposit_monthly_top_n.sql"
         )),
+        "savings.withdrawal_monthly_breakdown" => Ok(include_str!(
+            "../../../../queries/savings/withdrawal_monthly_breakdown.sql"
+        )),
+        "savings.withdrawal_monthly_top_n" => Ok(include_str!(
+            "../../../../queries/savings/withdrawal_monthly_top_n.sql"
+        )),
         "savings.balance_summary" => Ok(include_str!(
             "../../../../queries/savings/balance_summary.sql"
         )),

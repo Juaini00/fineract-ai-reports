@@ -5,12 +5,12 @@
 
 ## Test status
 
-✅ Passed on 2026-06-28 rerun via Postman MCP runner.
+✅ Passed on 2026-07-02 via Postman-derived local verification.
 
 ✅ Local knowledge checks passed after adding `checks` metadata to every `knowledge/**/*.yaml` file.
 
 - `POST /catalog/validate` returned HTTP 200.
-- Response had `success=true`, `data.valid=true`, `data_areas=13`, `domains=7`, `capabilities=2`, and `queries=2`.
+- Response had `success=true`, `data.valid=true`, `data_areas=13`, `domains=7`, `capabilities=9`, and `queries=9`.
 - Local YAML parse returned `yaml ok`.
 - Local knowledge contract check returned `knowledge contract ok`.
 - `cargo test -p chat knowledge` returned `7 passed`.
@@ -31,19 +31,19 @@ curl -X POST {{BASE_URL}}/catalog/validate \
     "valid": true,
     "data_areas": 13,
     "domains": 7,
-    "capabilities": 7,
-    "queries": 7
+    "capabilities": 9,
+    "queries": 9
   },
   "error": null
 }
 ```
 
-Expected counts after the knowledge expansion + Phase 19 slices 1+2+4:
+Expected counts after the knowledge expansion + Phase 19 savings slices:
 
 - `data_areas: 13` — `organization_foundation`, `client_foundation`, `group_center_foundation`, `savings_core`, `savings_transactions`, `savings_charges_fees`, `loans`, `accounting_gl`, `tax`, `custom_datatables`, `audit_users_operations`, `deferred_areas` (group wrapper), `out_of_scope_areas` (group wrapper).
 - `domains: 7` — `organization`, `client`, `savings`, `group_center`, `loan`, `accounting`, `tax`.
-- `capabilities: 7` — deposit_total, deposit_top_n, withdrawal_total, withdrawal_top_n, deposit_monthly_breakdown, deposit_monthly_top_n, **`savings_balance_summary`** (new in slice 5).
-- `queries: 7` — same plus **`savings.balance_summary`**.
+- `capabilities: 9` — balance_summary, deposit_total/top_n/monthly_breakdown/monthly_top_n, withdrawal_total/top_n/monthly_breakdown/monthly_top_n.
+- `queries: 9` — one approved query per capability above.
 
 If your counts differ, run `git status knowledge/` to see local edits, then re-validate.
 

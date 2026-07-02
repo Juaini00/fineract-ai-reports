@@ -354,7 +354,7 @@ impl JobService {
         candidates: &[RetrievedKnowledgeCandidate],
     ) -> Option<ClassificationResult> {
         let top = candidates.first()?;
-        let top_capability = self.catalog_capability(&top.source_id)?;
+        let top_capability = self.catalog_capability_for_candidate(top)?;
         let confidence = vector_confidence(top.distance);
 
         if confidence < 0.40 {
@@ -363,8 +363,12 @@ impl JobService {
 
         let classification_candidates = candidates
             .iter()
-            .map(|candidate| ClassificationCandidate {
-                capability: candidate.source_id.clone(),
+            .filter_map(|candidate| {
+                self.catalog_capability_for_candidate(candidate)
+                    .map(|capability| (candidate, capability))
+            })
+            .map(|(candidate, capability)| ClassificationCandidate {
+                capability: capability.id.clone(),
                 confidence: vector_confidence(candidate.distance),
                 source_type: Some(candidate.source_type.clone()),
             })
@@ -373,7 +377,7 @@ impl JobService {
         let close_candidates = candidates
             .iter()
             .filter(|candidate| vector_confidence(candidate.distance) >= confidence - 0.05)
-            .filter_map(|candidate| self.catalog_capability(&candidate.source_id))
+            .filter_map(|candidate| self.catalog_capability_for_candidate(candidate))
             .collect::<Vec<_>>();
 
         if close_candidates.len() > 1 || confidence < 0.55 {
@@ -406,6 +410,23 @@ impl JobService {
         self.catalog.capabilities.iter().find(|capability| {
             capability.id == capability_id && capability.status == "approved_mvp"
         })
+    }
+
+    fn catalog_capability_for_candidate(
+        &self,
+        candidate: &RetrievedKnowledgeCandidate,
+    ) -> Option<&CapabilityKnowledge> {
+        if candidate.source_type == "capability" {
+            return self.catalog_capability(&candidate.source_id);
+        }
+
+        if candidate.source_type == "query" {
+            return self.catalog.capabilities.iter().find(|capability| {
+                capability.query_id == candidate.source_id && capability.status == "approved_mvp"
+            });
+        }
+
+        None
     }
 
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]

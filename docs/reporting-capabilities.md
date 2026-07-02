@@ -246,61 +246,25 @@ Planned approved query file path:
 
 - `queries/savings/deposit_top_n.sql`.
 
-## 6. Candidate Savings Capabilities
+## 6. Additional Approved Savings Capabilities
 
-These are likely next capabilities after the two MVP deposit capabilities are implemented and tested.
+The machine-readable catalog is authoritative. These approved MVP capabilities are currently executable in addition to the two detailed deposit sections above.
 
-### 6.1 `savings_withdrawal_total`
+| Capability | Query | Output mode | Required filters |
+| --- | --- | --- | --- |
+| `savings_withdrawal_total` | `queries/savings/withdrawal_total.sql` | `total` | `transaction_type_enum = 2`, `is_reversed = false`, authorized `office_id` |
+| `savings_withdrawal_top_n` | `queries/savings/withdrawal_top_n.sql` | `top_n` | same withdrawal filters plus bounded `limit` |
+| `savings_deposit_monthly_breakdown` | `queries/savings/deposit_monthly_breakdown.sql` | `monthly_breakdown` | deposit filters grouped by `date_trunc('month', transaction_date)` |
+| `savings_deposit_monthly_top_n` | `queries/savings/deposit_monthly_top_n.sql` | `monthly_top_n` | deposit filters plus `ROW_NUMBER()` per month |
+| `savings_withdrawal_monthly_breakdown` | `queries/savings/withdrawal_monthly_breakdown.sql` | `monthly_breakdown` | withdrawal filters grouped by `date_trunc('month', transaction_date)` |
+| `savings_withdrawal_monthly_top_n` | `queries/savings/withdrawal_monthly_top_n.sql` | `monthly_top_n` | withdrawal filters plus `ROW_NUMBER()` per month |
+| `savings_balance_summary` | `queries/savings/balance_summary.sql` | `summary` | active client-owned accounts scoped by authorized office |
 
-Status: `candidate`.
+PII rule: `top_n` and `monthly_top_n` return client identity fields and require `can_view_pii=true`.
 
-Purpose:
+## 7. Candidate Savings Capabilities
 
-- Total savings withdrawals for a date range and authorized office scope.
-
-Required transaction filters:
-
-- `transaction_type_enum = 2` for `WITHDRAWAL`.
-- `is_reversed = false`.
-
-Reason candidate, not MVP:
-
-- Same shape as deposits, but should be added after deposit path proves classifier, guard, SQL execution, and response formatting.
-
-### 6.2 `savings_deposit_monthly_breakdown`
-
-Status: `candidate`.
-
-Purpose:
-
-- Monthly deposit totals over a bounded date range.
-
-Output mode:
-
-- `monthly_breakdown`.
-
-Reason candidate, not MVP:
-
-- Requires period bucketing/output contract and maximum month range rules.
-
-### 6.3 `savings_balance_summary`
-
-Status: `candidate`.
-
-Purpose:
-
-- Current savings account balance summary by authorized office/product/currency.
-
-Primary data:
-
-- `m_savings_account.account_balance_derived`.
-- `m_savings_account.available_balance_derived` when present.
-
-Reason candidate, not MVP:
-
-- Uses account snapshot semantics, not transaction movement semantics.
-
-### 6.4 `savings_charge_outstanding_summary`
+### 7.1 `savings_charge_outstanding_summary`
 
 Status: `candidate`.
 
@@ -317,7 +281,7 @@ Reason candidate, not MVP:
 
 - Savings Charges And Fees is secondary scope and needs charge enum mapping before activation.
 
-## 7. Deferred Capabilities
+## 8. Deferred Capabilities
 
 Deferred until their data scope and business semantics are approved:
 
@@ -331,7 +295,7 @@ Deferred until their data scope and business semantics are approved:
 - Overdraft reporting capabilities.
 - Transfer reporting capabilities.
 
-## 8. Unsupported Requests
+## 9. Unsupported Requests
 
 The service must reject or clarify requests that ask for:
 
@@ -342,15 +306,22 @@ The service must reject or clarify requests that ask for:
 - Loan/accounting/tax/custom-datatable results before those scopes are activated.
 - Office scopes outside the API key's `allowed_office_ids`.
 
-## 9. Implementation Notes
+## 10. Implementation Notes
 
-The first implementation should create a static capability registry in Rust or configuration, with each entry mapping to one approved query file and output contract.
+The implementation uses static approved SQL bindings in Rust, with each executable capability mapped through catalog metadata to one reviewed query file and output contract.
 
-Initial registry entries after SQL files are added:
+Current static approved SQL bindings:
 
 ```text
 savings_deposit_total -> queries/savings/deposit_total.sql
 savings_deposit_top_n -> queries/savings/deposit_top_n.sql
+savings_withdrawal_total -> queries/savings/withdrawal_total.sql
+savings_withdrawal_top_n -> queries/savings/withdrawal_top_n.sql
+savings_deposit_monthly_breakdown -> queries/savings/deposit_monthly_breakdown.sql
+savings_deposit_monthly_top_n -> queries/savings/deposit_monthly_top_n.sql
+savings_withdrawal_monthly_breakdown -> queries/savings/withdrawal_monthly_breakdown.sql
+savings_withdrawal_monthly_top_n -> queries/savings/withdrawal_monthly_top_n.sql
+savings_balance_summary -> queries/savings/balance_summary.sql
 ```
 
 The classifier should only emit capability ids that exist in the registry. The policy guard should validate capability scope, parameters, office scope, PII behavior, and limits before SQL execution.

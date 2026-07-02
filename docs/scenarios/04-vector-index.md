@@ -5,10 +5,10 @@
 
 ## Test status
 
-✅ Passed on 2026-06-28 rerun via Postman MCP runner.
+✅ Passed on 2026-07-02 via Postman-derived local verification.
 
-- `POST /vector-index/rebuild` returned HTTP 200 with `document_count=24`.
-- `GET /vector-index/status` returned HTTP 200 with `status=embedded` and `document_count=24`.
+- `POST /vector-index/rebuild` returned HTTP 200 with `document_count=65`.
+- `GET /vector-index/status` returned HTTP 200 with `status=embedded` and `document_count=65`.
 
 ## Rebuild
 
@@ -24,14 +24,14 @@ curl -X POST {{BASE_URL}}/vector-index/rebuild \
   "data": {
     "catalog_version_id": "<uuid>",
     "content_hash": "<sha256>",
-    "document_count": 34,
+    "document_count": 65,
     "embedding_model": "voyage-3-large"   // or null when Voyage is not configured
   },
   "error": null
 }
 ```
 
-After the knowledge expansion + Phase 19 slices 1+2+4+5, `document_count` is `13 data_area + 7 domain + 7 capability + 7 query = 34`. If you see a smaller number, run `git status knowledge/` to confirm the new YAML files are on disk.
+After the knowledge expansion + Phase 19 savings slices, `document_count` is 65 because retrieval now indexes all loaded catalog layers: data areas, domains, capabilities, queries, schema, metrics, policies, and responses. If you see a smaller number, run `git status knowledge/` and re-run `POST /vector-index/rebuild`.
 
 ## Status
 

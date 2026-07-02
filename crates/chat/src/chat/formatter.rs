@@ -3,52 +3,79 @@ use serde_json::Value;
 use crate::chat::planner::ExecutionPlan;
 
 pub fn format_report_response(plan: &ExecutionPlan, result: &Value) -> Option<String> {
-    let first_row = result.get("rows")?.as_array()?.first()?;
-
     match plan.capability.as_str() {
-        "savings_deposit_total" => Some(format!(
-            "The total savings deposit from {} to {} is {} across {} deposit transaction(s).",
-            first_row.get("from_date")?.as_str()?,
-            first_row.get("to_date")?.as_str()?,
-            first_row.get("total_deposit_amount")?.as_str()?,
-            first_row.get("deposit_count")?.as_i64()?,
-        )),
-        "savings_deposit_top_n" => Some(format!(
-            "Found {} savings deposit transaction(s). The largest amount is {} on {}.",
-            result.get("row_count")?.as_u64()?,
-            first_row.get("amount")?.as_str()?,
-            first_row.get("transaction_date")?.as_str()?,
-        )),
-        "savings_withdrawal_total" => Some(format!(
-            "The total savings withdrawal from {} to {} is {} across {} withdrawal transaction(s).",
-            first_row.get("from_date")?.as_str()?,
-            first_row.get("to_date")?.as_str()?,
-            first_row.get("total_withdrawal_amount")?.as_str()?,
-            first_row.get("withdrawal_count")?.as_i64()?,
-        )),
-        "savings_withdrawal_top_n" => Some(format!(
-            "Found {} savings withdrawal transaction(s). The largest amount is {} on {}.",
-            result.get("row_count")?.as_u64()?,
-            first_row.get("amount")?.as_str()?,
-            first_row.get("transaction_date")?.as_str()?,
-        )),
-        "savings_deposit_monthly_breakdown" => format_monthly_breakdown(result),
-        "savings_deposit_monthly_top_n" => format_monthly_top_n(result),
-        "savings_balance_summary" => Some(format!(
-            "Active client-owned savings portfolio: {} account(s). Total balance {}. Average {}. Largest {}.",
-            first_row.get("account_count")?.as_i64()?,
-            first_row.get("total_balance")?.as_str()?,
-            first_row.get("average_balance")?.as_str()?,
-            first_row.get("max_balance")?.as_str()?,
-        )),
+        "savings_deposit_total" => {
+            format_total(result, "deposit", "total_deposit_amount", "deposit_count")
+        }
+        "savings_deposit_top_n" => format_top_n(result, "deposit"),
+        "savings_withdrawal_total" => format_total(
+            result,
+            "withdrawal",
+            "total_withdrawal_amount",
+            "withdrawal_count",
+        ),
+        "savings_withdrawal_top_n" => format_top_n(result, "withdrawal"),
+        "savings_deposit_monthly_breakdown" => {
+            format_monthly_breakdown(result, "deposit", "total_deposit_amount", "deposit_count")
+        }
+        "savings_deposit_monthly_top_n" => format_monthly_top_n(result, "deposit"),
+        "savings_withdrawal_monthly_breakdown" => format_monthly_breakdown(
+            result,
+            "withdrawal",
+            "total_withdrawal_amount",
+            "withdrawal_count",
+        ),
+        "savings_withdrawal_monthly_top_n" => format_monthly_top_n(result, "withdrawal"),
+        "savings_balance_summary" => {
+            let first_row = first_row(result)?;
+            Some(format!(
+                "Active client-owned savings portfolio: {} account(s). Total balance {}. Average {}. Largest {}.",
+                first_row.get("account_count")?.as_i64()?,
+                first_row.get("total_balance")?.as_str()?,
+                first_row.get("average_balance")?.as_str()?,
+                first_row.get("max_balance")?.as_str()?,
+            ))
+        }
         _ => None,
     }
 }
 
-fn format_monthly_top_n(result: &Value) -> Option<String> {
+fn first_row(result: &Value) -> Option<&Value> {
+    result.get("rows")?.as_array()?.first()
+}
+
+fn format_total(
+    result: &Value,
+    activity: &str,
+    amount_field: &str,
+    count_field: &str,
+) -> Option<String> {
+    let first_row = first_row(result)?;
+    Some(format!(
+        "The total savings {activity} from {} to {} is {} across {} {activity} transaction(s).",
+        first_row.get("from_date")?.as_str()?,
+        first_row.get("to_date")?.as_str()?,
+        first_row.get(amount_field)?.as_str()?,
+        first_row.get(count_field)?.as_i64()?,
+    ))
+}
+
+fn format_top_n(result: &Value, activity: &str) -> Option<String> {
+    let first_row = first_row(result)?;
+    Some(format!(
+        "Found {} savings {activity} transaction(s). The largest amount is {} on {}.",
+        result.get("row_count")?.as_u64()?,
+        first_row.get("amount")?.as_str()?,
+        first_row.get("transaction_date")?.as_str()?,
+    ))
+}
+
+fn format_monthly_top_n(result: &Value, activity: &str) -> Option<String> {
     let rows = result.get("rows")?.as_array()?;
     if rows.is_empty() {
-        return Some("No savings deposit activity in the requested period.".to_string());
+        return Some(format!(
+            "No savings {activity} activity in the requested period."
+        ));
     }
     // Group consecutive rows by month_start; SQL already ORDERs by month then amount DESC.
     let mut lines: Vec<String> = Vec::new();
@@ -75,7 +102,7 @@ fn format_monthly_top_n(result: &Value) -> Option<String> {
         lines.push(format!("... and {} more transaction(s).", rows.len() - 120));
     }
     let header = format!(
-        "Top savings deposits per month ({month_count} month(s), {} transaction(s)):",
+        "Top savings {activity}s per month ({month_count} month(s), {} transaction(s)):",
         rows.len()
     );
     let mut out = vec![header];
@@ -83,13 +110,20 @@ fn format_monthly_top_n(result: &Value) -> Option<String> {
     Some(out.join("\n"))
 }
 
-fn format_monthly_breakdown(result: &Value) -> Option<String> {
+fn format_monthly_breakdown(
+    result: &Value,
+    activity: &str,
+    amount_field: &str,
+    count_field: &str,
+) -> Option<String> {
     let rows = result.get("rows")?.as_array()?;
     if rows.is_empty() {
-        return Some("No savings deposit activity in the requested period.".to_string());
+        return Some(format!(
+            "No savings {activity} activity in the requested period."
+        ));
     }
     let mut lines = vec![format!(
-        "Savings deposit by month ({} month(s)):",
+        "Savings {activity} by month ({} month(s)):",
         rows.len()
     )];
     for row in rows.iter().take(24) {
@@ -97,14 +131,8 @@ fn format_monthly_breakdown(result: &Value) -> Option<String> {
             .get("month_start")
             .and_then(Value::as_str)
             .unwrap_or("?");
-        let amount = row
-            .get("total_deposit_amount")
-            .and_then(Value::as_str)
-            .unwrap_or("0");
-        let count = row
-            .get("deposit_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
+        let amount = row.get(amount_field).and_then(Value::as_str).unwrap_or("0");
+        let count = row.get(count_field).and_then(Value::as_i64).unwrap_or(0);
         lines.push(format!(
             "- {month}: {amount} across {count} transaction(s)."
         ));
@@ -147,6 +175,24 @@ mod tests {
             Some(
                 "The total savings deposit from 2026-06-01 to 2026-06-21 is 200.000000 across 2 deposit transaction(s)."
             )
+        );
+    }
+
+    #[test]
+    fn formats_withdrawal_monthly_breakdown_empty_response() {
+        let plan = ExecutionPlan {
+            plan_type: ExecutionPlanType::Atomic,
+            domain: "savings".to_string(),
+            capability: "savings_withdrawal_monthly_breakdown".to_string(),
+            query_id: "savings.withdrawal_monthly_breakdown".to_string(),
+            output_mode: "monthly_breakdown".to_string(),
+            params: json!({}),
+            requires_policy_check: true,
+        };
+
+        assert_eq!(
+            format_report_response(&plan, &json!({ "rows": [] })).as_deref(),
+            Some("No savings withdrawal activity in the requested period.")
         );
     }
 }

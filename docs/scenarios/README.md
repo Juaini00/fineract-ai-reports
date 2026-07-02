@@ -19,8 +19,8 @@ JOB_ID=<set after 05-chat-session-and-job>
 | `00-setup.md` | Local env, Docker Redis, migrations, bootstrap admin token | ✅ Passed 2026-06-28 rerun |
 | `01-health-ready.md` | `GET /health`, `GET /ready` | ✅ Passed 2026-06-28 rerun |
 | `02-auth-api-keys.md` | API key creation + `GET /auth/me` | ✅ Passed 2026-06-28 rerun |
-| `03-catalog-validate.md` | `POST /catalog/validate` (Phase 10 + Phase 11 runtime prepare) | ✅ Passed 2026-06-28 rerun |
-| `04-vector-index.md` | `POST /vector-index/rebuild`, `GET /vector-index/status` (Phase 18 admin) | ✅ Passed 2026-06-28 rerun |
+| `03-catalog-validate.md` | `POST /catalog/validate` (Phase 10 + Phase 11 runtime prepare) | ✅ Passed 2026-07-02 rerun |
+| `04-vector-index.md` | `POST /vector-index/rebuild`, `GET /vector-index/status` (Phase 18 admin) | ✅ Passed 2026-07-02 rerun |
 | `05-chat-session-and-job.md` | Sessions + happy-path job execute + SSE (Phase 8/9/13/14/16) | ✅ Passed 2026-06-28 rerun |
 | `06-chat-clarification-and-unsupported.md` | Decision policy: clarify + unsupported + clarification respond + deferred-domain detection (loan/accounting/tax/group_center) | ✅ Passed 2026-06-28 rerun |
 | `07-authorization-scope.md` | Capability gate, office scope in SQL, PII rules | ✅ Passed 2026-06-28 rerun |
@@ -37,8 +37,8 @@ JOB_ID=<set after 05-chat-session-and-job>
 
 The catalog now covers more than savings. New scenario expectations (re-run after `POST /vector-index/rebuild`):
 
-- `03`: `data_areas=13, domains=7, capabilities=7, queries=7` after Phase 19 slices 1+2+4+5 (withdrawal_total/top_n, deposit_monthly_breakdown, deposit_monthly_top_n, balance_summary).
-- `04`: `document_count=34` (`13 data_area + 7 domain + 7 capability + 7 query`). Each domain doc is **wider** now — `DomainKnowledge` deserializes `display_name`, `description`, and `concepts` (with `synonyms`); `build_domain_document` flattens all of them into `retrieval_text`. Re-embed via `POST /vector-index/rebuild` to pick up the new content hash.
+- `03`: `data_areas=13, domains=7, capabilities=9, queries=9` after Phase 19 savings slices.
+- `04`: `document_count=65` after indexing all loaded catalog layers. Each domain doc is **wider** now — `DomainKnowledge` deserializes `display_name`, `description`, and `concepts` (with `synonyms`); `build_domain_document` flattens all of them into `retrieval_text`. Re-embed via `POST /vector-index/rebuild` to pick up the new content hash.
 - `05` Top-N: result rows now include `client_id` + `client_display_name` (LEFT JOIN m_client; `client_display_name` is `pii` in the output contract).
 - `06` section E: deferred-domain retrieval is visible in candidates and off-domain override returns `unsupported` for the documented loan/accounting/group-center prompts.
 - `08` (new): breadth + multilingual probe — every domain plus Bahasa Indonesia synonym hits. Includes section F for the new withdrawal capabilities.

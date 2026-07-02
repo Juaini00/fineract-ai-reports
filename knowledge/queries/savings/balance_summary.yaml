@@ -41,3 +41,12 @@ guards:
   snapshot_only: true
 timeout_ms: 5000
 cost_class: medium
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: office_filter_is_bound
+    rule: SQL must constrain authorized office_ids.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.

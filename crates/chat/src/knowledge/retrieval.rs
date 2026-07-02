@@ -2,7 +2,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::knowledge::model::{
-    CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, KnowledgeCatalog, QueryKnowledge,
+    CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
+    QueryKnowledge,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -19,8 +20,12 @@ pub struct RetrievalDocument {
 pub enum RetrievalSourceType {
     DataArea,
     Domain,
+    Schema,
+    Metric,
     Capability,
     Query,
+    Policy,
+    Response,
 }
 
 pub struct RetrievalDocumentBuilder;
@@ -31,10 +36,65 @@ impl RetrievalDocumentBuilder {
 
         documents.extend(catalog.data_areas.iter().map(build_data_area_document));
         documents.extend(catalog.domains.iter().map(build_domain_document));
+        documents.extend(
+            catalog
+                .schemas
+                .iter()
+                .map(|item| build_generic_document(RetrievalSourceType::Schema, "Schema", item)),
+        );
+        documents.extend(
+            catalog
+                .metrics
+                .iter()
+                .map(|item| build_generic_document(RetrievalSourceType::Metric, "Metric", item)),
+        );
         documents.extend(catalog.capabilities.iter().map(build_capability_document));
         documents.extend(catalog.queries.iter().map(build_query_document));
+        documents.extend(
+            catalog
+                .policies
+                .iter()
+                .map(|item| build_generic_document(RetrievalSourceType::Policy, "Policy", item)),
+        );
+        documents.extend(
+            catalog.responses.iter().map(|item| {
+                build_generic_document(RetrievalSourceType::Response, "Response", item)
+            }),
+        );
 
         documents
+    }
+}
+
+fn build_generic_document(
+    source_type: RetrievalSourceType,
+    label: &str,
+    item: &GenericKnowledge,
+) -> RetrievalDocument {
+    let title = format!("{label} {}", item.id);
+    let content = item
+        .content
+        .iter()
+        .map(|(key, value)| format!("{key}: {value}"))
+        .collect::<Vec<_>>();
+    let retrieval_text = compact_lines([
+        title.clone(),
+        optional_value("Status", item.status.as_deref()),
+        optional_value("Domain", item.domain.as_deref()),
+        optional_list("Data areas", &item.data_areas),
+        optional_list("Content", &content),
+    ]);
+
+    RetrievalDocument {
+        source_type,
+        source_id: item.id.clone(),
+        title,
+        retrieval_text,
+        metadata_json: json!({
+            "status": item.status,
+            "domain": item.domain,
+            "data_areas": item.data_areas,
+        }),
     }
 }
 
@@ -202,6 +262,13 @@ fn optional_list(label: &str, values: &[String]) -> String {
     } else {
         format!("{label}: {}.", values.join(", "))
     }
+}
+
+fn optional_value(label: &str, value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("{label}: {value}."))
+        .unwrap_or_default()
 }
 
 fn compact_lines(lines: impl IntoIterator<Item = String>) -> String {

@@ -145,7 +145,11 @@ pub fn retrieval_source_type_name(source_type: &RetrievalSourceType) -> &'static
     match source_type {
         RetrievalSourceType::DataArea => "data_area",
         RetrievalSourceType::Domain => "domain",
+        RetrievalSourceType::Schema => "schema",
+        RetrievalSourceType::Metric => "metric",
         RetrievalSourceType::Capability => "capability",
         RetrievalSourceType::Query => "query",
+        RetrievalSourceType::Policy => "policy",
+        RetrievalSourceType::Response => "response",
     }
 }

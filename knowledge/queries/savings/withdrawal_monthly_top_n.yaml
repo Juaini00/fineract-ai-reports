@@ -75,3 +75,16 @@ guards:
   bounded_per_partition: true
 timeout_ms: 8000
 cost_class: high
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: withdrawal_filter_declared
+    rule: SQL must filter transaction_type_enum = 2 and is_reversed = false.
+  - id: office_filter_is_bound
+    rule: SQL must constrain authorized office_ids.
+  - id: limit_is_bound
+    rule: SQL must use a bound per-month limit.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.

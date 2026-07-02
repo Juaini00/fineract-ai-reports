@@ -36,3 +36,12 @@ clarification:
   missing_parameters:
     - from_date
     - to_date
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: required_parameters_match_query
+    rule: required_parameters must be declared as required query parameters.
+  - id: monthly_range_bounded
+    rule: max_date_range_days must bound the monthly breakdown period.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.

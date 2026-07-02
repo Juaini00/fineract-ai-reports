@@ -745,8 +745,8 @@ Catalog validation:
 5. [x] Required parameters are declared.
 6. [x] Output fields are declared.
 7. [x] Guards are declared in query/capability YAML.
-8. [ ] Schema/metric/policy/response files are loaded into typed Rust models.
-9. [ ] Schema/metric/policy/response references are fully validated by Rust.
+8. [x] Schema/metric/policy/response files are loaded into the runtime catalog.
+9. [ ] Schema/metric/policy/response references are fully validated by typed Rust schemas.
 
 Endpoint:
 
@@ -764,14 +764,15 @@ Initial MVP YAML/SQL files exist and are marked complete for data scope, domains
 Every `knowledge/**/*.yaml` file now declares explicit `checks` metadata.
 Knowledge checks metadata covers capability-query contracts, office scope, PII, SQL safety, data scope, domain runtime status, metrics, responses, enums, and schema joins.
 Loader and validator are implemented under crates/chat/src/knowledge/catalog.
-Current loader/validator coverage includes data areas, domains, capabilities, queries, status values, basic executable capability requirements, parameter types, output sensitivity classes, and static SQL safety checks.
+Current loader coverage includes data areas, domains, schema, metrics, capabilities, queries, policies, and responses.
+Current validator coverage includes ids/checks for every loaded layer, data area/domain refs where declared, status values, basic executable capability requirements, parameter types, output sensitivity classes, and static SQL safety checks.
+Schema, metric, policy, and response layers currently use GenericKnowledge loading; field-specific typed schemas remain pending.
 Retrieval document builder exists under crates/chat/src/knowledge/retrieval.rs.
 Catalog/index persistence exists under crates/chat/src/knowledge/index and writes generated retrieval documents.
 Voyage embedding sync exists for startup sync when CATALOG_SYNC_ON_STARTUP=true and VOYAGEAI_API_KEY is configured.
 POST /catalog/validate is implemented and authenticated.
 
 Still pending for this phase:
-extend typed models/loaders for schema, metrics, policies, and responses
 reject unknown YAML fields after schemas stabilize
 validate guards and policy references more completely
 runtime vector retrieval fallback exists for chat job creation
@@ -1093,15 +1094,16 @@ Retrieval document hashes and index persistence exist.
 Voyage document embeddings are generated when catalog startup sync is enabled.
 Runtime query embedding and capability vector search are wired into chat job creation.
 Catalog lexical retrieval is used as a fallback when embedding/vector search is unavailable.
-Vector search is restricted to capability rows in the caller's allowed_capabilities.
+Vector search is restricted to rows that can map back to the caller's allowed_capabilities.
+Capability rows and query rows can both select approved capabilities; query candidates are mapped back to their owning capability before planning.
 Vector search uses the latest indexed/embedded catalog version and collapses duplicate capability ids.
 Current confidence policy: <0.40 unsupported, 0.40-0.55 clarify, close candidates within 0.05 clarify, clear >=0.55 can execute after policy checks.
 Classification state records source (`local_rule`, `vector`, or clarification source) and vector candidates for manual verification.
 POST /vector-index/rebuild and GET /vector-index/status are implemented (authenticated; rebuild runs KnowledgeSyncService::with_embeddings, status returns the latest knowledge_catalog_versions row).
-Broader retrieval: KnowledgeRepository::search_context queries non-capability rows (data_area, domain, query) from the latest indexed catalog version; results are appended to classification.candidates with their source_type for audit and future DeepSeek planner consumption — they do not influence the local-rule decision.
+Broader retrieval: KnowledgeRepository::search_context queries non-capability rows from the latest indexed catalog version; results are appended to classification.candidates with their source_type for audit and future DeepSeek planner consumption — they do not directly execute SQL.
 
 Important sequencing rule:
-Vector retrieval only selects approved capability candidates. SQL execution still goes through catalog validation, policy guard, and static approved SQL bindings.
+Vector retrieval only selects knowledge candidates that resolve to approved capabilities. SQL execution still goes through catalog validation, policy guard, and static approved SQL bindings.
 ```
 
 ## Phase 19: Reporting Expansion
@@ -1111,7 +1113,7 @@ Goal: add more reporting capabilities after MVP.
 Current status:
 
 ```text
-PARTIALLY DONE (slices 1 + 2)
+PARTIALLY DONE (slices 1 + 2 + 3 + 4 + 5 + withdrawal monthly mirrors)
 
 Slice 1 — withdrawal capabilities:
 savings_withdrawal_total + savings_withdrawal_top_n capability + query YAML.
@@ -1167,8 +1169,14 @@ Classifier classify_retrieved_capability skips date_range for output_mode == "su
 savings.account_balance metric flipped to approved_mvp.
 formatter template emits "Active client-owned savings portfolio: N account(s). Total ... Average ... Largest ...".
 
+Withdrawal monthly mirrors:
+savings_withdrawal_monthly_breakdown capability + query YAML + SQL binding + formatter support.
+savings_withdrawal_monthly_top_n capability + query YAML + SQL binding + formatter support.
+queries/savings/withdrawal_monthly_breakdown.sql and withdrawal_monthly_top_n.sql mirror deposit monthly slices with transaction_type_enum=2.
+Retrieval classification now maps query source rows back to owning capability ids before planning.
+Postman-derived runtime matrix passed all 9 approved savings capabilities on 2026-07-02.
+
 Still pending:
-savings_withdrawal_monthly_breakdown / monthly_top_n (mirror deposit slices 2/4 with enum=2).
 group-owned savings balance summary (requires promoting group_center_foundation out of conditional).
 loan_* and accounting_* capabilities — blocked until those domains move out of deferred.
 ```
@@ -1176,8 +1184,6 @@ loan_* and accounting_* capabilities — blocked until those domains move out of
 Next capabilities (in priority order):
 
 ```text
-savings_withdrawal_monthly_breakdown
-savings_withdrawal_monthly_top_n
 loan_disbursement_total (requires loan domain promotion)
 loan_repayment_total
 ```

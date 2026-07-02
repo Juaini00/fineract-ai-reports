@@ -8,8 +8,32 @@ pub struct KnowledgeCatalog {
     pub query_path: PathBuf,
     pub data_areas: Vec<DataAreasKnowledge>,
     pub domains: Vec<DomainKnowledge>,
+    pub schemas: Vec<GenericKnowledge>,
+    pub metrics: Vec<GenericKnowledge>,
     pub capabilities: Vec<CapabilityKnowledge>,
     pub queries: Vec<QueryKnowledge>,
+    pub policies: Vec<GenericKnowledge>,
+    pub responses: Vec<GenericKnowledge>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenericKnowledge {
+    pub id: String,
+
+    #[serde(default)]
+    pub status: Option<String>,
+
+    #[serde(default)]
+    pub domain: Option<String>,
+
+    #[serde(default)]
+    pub data_areas: Vec<String>,
+
+    #[serde(default)]
+    pub checks: Vec<serde_json::Value>,
+
+    #[serde(flatten)]
+    pub content: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -16,3 +16,10 @@ filters:
   - m_savings_account_transaction.transaction_type_enum = 2
   - m_savings_account_transaction.is_reversed = false
 sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_transactions data scope.
+  - id: withdrawal_filter_declared
+    rule: filters must include transaction_type_enum = 2 and is_reversed = false.
+  - id: public_output_only
+    rule: metric sensitivity must remain public_business.

@@ -114,7 +114,7 @@ curl {{BASE_URL}}/chat/jobs/{{JOB_ID}} -H "Authorization: Bearer {{API_KEY}}"
 }
 ```
 
-`state_json.classification.candidates` now contains BOTH capability rows (decision input) AND non-capability context rows (data_area, domain, query) tagged with `source_type` (Phase 18 broader retrieval).
+`state_json.classification.candidates` now contains capability/query rows that resolve to approved capabilities, plus broader context rows tagged with `source_type` (Phase 18 broader retrieval).
 
 ## 5. Read messages
 

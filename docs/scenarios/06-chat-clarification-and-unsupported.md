@@ -159,7 +159,7 @@ Reading the candidates: the savings capability matched mid-confidence (because o
 ✅ Rerun result: candidates included `group_center_foundation (data_area)` and `group_center (domain)`; job ended `failed` with `source=off_domain_match` and `error_json.code=unsupported_request`.
 
 ### Verification via vector-index
-After `POST /vector-index/rebuild`, `GET /vector-index/status` should show `document_count=24` (`13 data_area + 7 domain + 2 capability + 2 query`).
+After `POST /vector-index/rebuild`, `GET /vector-index/status` should show `document_count=65` for the current expanded catalog.
 
 ### Verification via job state
 For loan / accounting cases, confirm `state_json.classification.source = "off_domain_match"`. For tax, confirm `state_json.classification.source = "vector_no_match"`. Both should have `status: "failed"` and `error_json.code = "unsupported_request"`.

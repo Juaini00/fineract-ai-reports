@@ -174,7 +174,8 @@ Examples:
 
 - `savings_deposit_total`
 - `savings_deposit_top_n`
-- `savings_deposit_monthly_breakdown`, later
+- `savings_deposit_monthly_breakdown`
+- `savings_withdrawal_monthly_top_n`
 
 It contains:
 
@@ -597,10 +598,10 @@ Loaded by typed catalog loader:
 - [x] domains
 - [x] capabilities
 - [x] queries
-- [ ] schema
-- [ ] metrics
-- [ ] policies
-- [ ] responses
+- [x] schema
+- [x] metrics
+- [x] policies
+- [x] responses
 
 Validated by typed catalog validator:
 
@@ -610,6 +611,8 @@ Validated by typed catalog validator:
 - [x] query refs to data areas
 - [x] query SQL existence and static safety
 - [x] query output sensitivity classes
+- [x] schema/metric/policy/response ids and checks presence
+- [x] schema/metric refs to known domains and data areas where declared
 - [ ] schema table/column refs
 - [ ] metric refs to schema tables/columns
 - [ ] policy refs to capabilities/query guards
@@ -773,20 +776,20 @@ retrieval documents can be persisted to knowledge_index
 when CATALOG_SYNC_ON_STARTUP=true, Voyage embeddings are stored in knowledge_index.embedding
 knowledge_catalog_versions records indexed or embedded status
 runtime vector fallback searches the latest indexed/embedded catalog version only
-runtime vector fallback currently searches capability rows only and filters by allowed_capabilities
+runtime vector fallback searches capability/query rows and maps query rows back to approved capabilities
+runtime context search also retrieves non-executable rows such as data_area, domain, schema, metric, policy, and response for audit/planner context
 ```
 
 Still pending:
 
 ```text
-vector rebuild/status endpoint
-broader runtime context assembly beyond capability candidates
+DeepSeek planner fallback consumption of broader context rows
 ```
 
 Sequencing rule:
 
 ```text
-Vector retrieval ranks allowed capability candidates only. It must not drive authorization or execute SQL directly.
+Vector retrieval ranks knowledge candidates only. Query candidates must map back to approved capability ids, and SQL execution still requires catalog validation, API-key capability scope, policy checks, and static approved SQL bindings.
 ```
 
 ### 5.9 Step 9: Use At Runtime

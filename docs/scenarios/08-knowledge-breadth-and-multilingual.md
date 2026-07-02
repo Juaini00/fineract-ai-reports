@@ -85,10 +85,10 @@ The catalog already declares `client_display_name` with `sensitivity: pii` in `k
 curl -X POST {{BASE_URL}}/catalog/validate -H "Authorization: Bearer {{API_KEY}}"
 ```
 
-After the knowledge expansion + Phase 19 first slice the response should report:
+After the knowledge expansion + Phase 19 savings slices the response should report:
 
 ```json
-{ "success": true, "data": { "valid": true, "data_areas": 13, "domains": 7, "capabilities": 4, "queries": 4 }, "error": null }
+{ "success": true, "data": { "valid": true, "data_areas": 13, "domains": 7, "capabilities": 9, "queries": 9 }, "error": null }
 ```
 
 If counts drop, a YAML file is failing to parse — check `RUST_LOG=debug` for the load error.
@@ -161,7 +161,7 @@ Rows beyond 24 months are truncated with `... and N more month(s).` (ponytail: s
 
 New output_mode `monthly_top_n` registered in `OUTPUT_MODES`. SQL uses a CTE with `ROW_NUMBER() OVER (PARTITION BY date_trunc('month', transaction_date) ORDER BY amount DESC)` to pick top-N per month. Validator now accepts SQL that starts with `WITH` and bounds results via `ROW_NUMBER()` instead of a trailing `LIMIT`.
 
-API key must include `savings_deposit_monthly_top_n` in `allowed_capabilities`.
+API key must include the matching monthly top-N capability in `allowed_capabilities`.
 
 | # | Prompt | Expected `outcome` | Expected `capability` | Notes |
 | --- | --- | --- | --- | --- |
@@ -169,6 +169,8 @@ API key must include `savings_deposit_monthly_top_n` in `allowed_capabilities`.
 | H2 | "Top 3 deposits per month this year" | `matched` | `savings_deposit_monthly_top_n` | `limit=3`, range = Jan 1 to today. |
 | H3 | "Setoran terbesar setiap bulan tahun ini" | `matched` | `savings_deposit_monthly_top_n` | ID synonyms hit; default limit 1. |
 | H4 | API key with `can_view_pii=false` runs H1 | `unsupported` | n/a | `planner::evaluate_policy` gates `output_mode.ends_with("top_n")` and denies when `client_display_name (pii)` would be exposed without `can_view_pii`. |
+| H5 | "Top withdrawals per month this month" | `matched` | `savings_withdrawal_monthly_top_n` | Mirrors deposit monthly top-N with `transaction_type_enum = 2`. |
+| H6 | "Monthly withdrawal breakdown this month" | `matched` | `savings_withdrawal_monthly_breakdown` | Mirrors deposit monthly breakdown with withdrawal metrics. |
 
 ### Expected result shape
 

@@ -44,6 +44,61 @@ pub struct ClassificationCandidate {
 pub fn classify_message(message: &str, today: NaiveDate) -> ClassificationResult {
     let normalized = message.to_lowercase();
 
+    if contains_any(
+        &normalized,
+        &[
+            "savings",
+            "deposit",
+            "deposits",
+            "withdrawal",
+            "withdrawals",
+            "money in",
+            "money out",
+            "put into savings",
+        ],
+    ) {
+        if let Some(capability) = inferred_capability(&normalized) {
+            let mut params = json!({ "office_scope": "authorized_scope" });
+            if capability != "savings_balance_summary" {
+                let Some((from_date, to_date)) = date_range(&normalized, today) else {
+                    return ClassificationResult {
+                        outcome: ClassificationOutcome::ClarificationRequired,
+                        domain: Some("savings".to_string()),
+                        capability: None,
+                        confidence: 0.45,
+                        params: json!({}),
+                        clarification: Some(
+                            "Please clarify the report date or period.".to_string(),
+                        ),
+                        options: Vec::new(),
+                        source: Some("local_rule".to_string()),
+                        candidates: Vec::new(),
+                    };
+                };
+                params["from_date"] = json!(from_date.to_string());
+                params["to_date"] = json!(to_date.to_string());
+            }
+            if capability.ends_with("_top_n") {
+                params["limit"] = json!(
+                    limit_from_message(&normalized)
+                        .unwrap_or_else(|| default_limit_for(capability))
+                );
+            }
+
+            return ClassificationResult {
+                outcome: ClassificationOutcome::Matched,
+                domain: Some("savings".to_string()),
+                capability: Some(capability.to_string()),
+                confidence: 0.86,
+                params,
+                clarification: None,
+                options: Vec::new(),
+                source: Some("local_rule".to_string()),
+                candidates: Vec::new(),
+            };
+        }
+    }
+
     if !contains_any(
         &normalized,
         &[
@@ -147,8 +202,11 @@ pub fn classify_clarification_response(
     let normalized = response.to_lowercase();
     if let Some(option) = selected_option(original, &normalized) {
         let mut params = original.params.clone();
-        if option.capability == "savings_deposit_top_n" && params.get("limit").is_none() {
-            params["limit"] = json!(limit_from_message(&normalized).unwrap_or(10));
+        if option.capability.ends_with("_top_n") && params.get("limit").is_none() {
+            params["limit"] = json!(
+                limit_from_message(&normalized)
+                    .unwrap_or_else(|| default_limit_for(&option.capability))
+            );
         }
 
         return ClassificationResult {
@@ -164,13 +222,7 @@ pub fn classify_clarification_response(
         };
     }
 
-    let capability = if contains_any(&normalized, &["total", "amount", "sum"]) {
-        Some("savings_deposit_total")
-    } else if contains_any(&normalized, &["largest", "top", "biggest", "transactions"]) {
-        Some("savings_deposit_top_n")
-    } else {
-        None
-    };
+    let capability = inferred_capability(&normalized);
 
     let Some(capability) = capability else {
         let mut result = original.clone();
@@ -184,8 +236,9 @@ pub fn classify_clarification_response(
     };
 
     let mut params = original.params.clone();
-    if capability == "savings_deposit_top_n" && params.get("limit").is_none() {
-        params["limit"] = json!(limit_from_message(&normalized).unwrap_or(10));
+    if capability.ends_with("_top_n") && params.get("limit").is_none() {
+        params["limit"] =
+            json!(limit_from_message(&normalized).unwrap_or_else(|| default_limit_for(capability)));
     }
 
     ClassificationResult {
@@ -198,6 +251,44 @@ pub fn classify_clarification_response(
         options: Vec::new(),
         source: Some("clarification_rule".to_string()),
         candidates: original.candidates.clone(),
+    }
+}
+
+fn inferred_capability(message: &str) -> Option<&'static str> {
+    if contains_any(message, &["balance", "portfolio"]) {
+        return Some("savings_balance_summary");
+    }
+
+    let activity = if contains_any(message, &["withdrawal", "withdrawals", "money out"]) {
+        "withdrawal"
+    } else {
+        "deposit"
+    };
+    let monthly = contains_any(message, &["monthly", "per month", "by month", "breakdown"]);
+    let top = contains_any(message, &["largest", "top", "biggest", "transactions"]);
+
+    match (activity, monthly, top) {
+        ("deposit", true, true) => Some("savings_deposit_monthly_top_n"),
+        ("deposit", true, false) => Some("savings_deposit_monthly_breakdown"),
+        ("deposit", false, true) => Some("savings_deposit_top_n"),
+        ("deposit", false, false) if contains_any(message, &["total", "amount", "sum"]) => {
+            Some("savings_deposit_total")
+        }
+        ("withdrawal", true, true) => Some("savings_withdrawal_monthly_top_n"),
+        ("withdrawal", true, false) => Some("savings_withdrawal_monthly_breakdown"),
+        ("withdrawal", false, true) => Some("savings_withdrawal_top_n"),
+        ("withdrawal", false, false) if contains_any(message, &["total", "amount", "sum"]) => {
+            Some("savings_withdrawal_total")
+        }
+        _ => None,
+    }
+}
+
+fn default_limit_for(capability: &str) -> u32 {
+    if capability.contains("monthly") {
+        1
+    } else {
+        10
     }
 }
 
@@ -567,6 +658,18 @@ mod tests {
     }
 
     #[test]
+    fn classifies_withdrawal_monthly_top_n() {
+        let result = classify_message("Show top withdrawals per month this month", today());
+
+        assert_eq!(result.outcome, ClassificationOutcome::Matched);
+        assert_eq!(
+            result.capability.as_deref(),
+            Some("savings_withdrawal_monthly_top_n")
+        );
+        assert_eq!(result.params["limit"], 1);
+    }
+
+    #[test]
     fn parses_yesterday() {
         let range = date_range("total deposit yesterday", today()).unwrap();
         assert_eq!(
@@ -740,6 +843,27 @@ mod tests {
         assert_eq!(result.outcome, ClassificationOutcome::Matched);
         assert_eq!(result.capability.as_deref(), Some("savings_deposit_total"));
         assert_eq!(result.params["from_date"], "2026-06-15");
+    }
+
+    #[test]
+    fn classifies_withdrawal_monthly_clarification_response() {
+        let original = clarify_retrieved_capabilities(
+            "Show savings activity this month",
+            today(),
+            Some("savings".to_string()),
+            Vec::new(),
+            0.7,
+            Vec::new(),
+        );
+
+        let result = classify_clarification_response(&original, "monthly withdrawal breakdown");
+
+        assert_eq!(result.outcome, ClassificationOutcome::Matched);
+        assert_eq!(
+            result.capability.as_deref(),
+            Some("savings_withdrawal_monthly_breakdown")
+        );
+        assert_eq!(result.params["from_date"], "2026-06-01");
     }
 
     #[test]

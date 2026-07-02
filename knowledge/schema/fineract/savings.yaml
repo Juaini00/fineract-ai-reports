@@ -60,24 +60,6 @@ tables:
         sensitivity: public_business
       - name: reason_for_block
         sensitivity: free_text_sensitive
-checks:
-  - id: tables_in_data_scope
-    rule: all tables must belong to savings_core or savings_transactions.
-  - id: transaction_type_enum_declared
-    rule: m_savings_account_transaction.transaction_type_enum must be mapped in savings_transaction_type enum knowledge.
-  - id: account_identifiers_excluded
-    rule: account_no, external_id, iban, ref_no, and reason_for_block must not appear in MVP output fields.
-  - id: reversed_filter_required
-    rule: approved movement reports must filter is_reversed = false unless analyzing reversals.
-checks:
-  - id: tables_in_data_scope
-    rule: all tables must belong to savings_core or savings_transactions.
-  - id: transaction_type_enum_declared
-    rule: m_savings_account_transaction.transaction_type_enum must be mapped in savings_transaction_type enum knowledge.
-  - id: account_identifiers_excluded
-    rule: account_no, external_id, iban, ref_no, and reason_for_block must not appear in MVP output fields.
-  - id: reversed_filter_required
-    rule: approved movement reports must filter is_reversed = false unless analyzing reversals.
   - name: m_savings_product
     data_area: savings_core
     meaning: Savings product definition.
@@ -138,3 +120,12 @@ checks:
         sensitivity: sensitive_business_identifier
       - name: reason_for_block
         sensitivity: free_text_sensitive
+checks:
+  - id: tables_in_data_scope
+    rule: all tables must belong to savings_core or savings_transactions.
+  - id: transaction_type_enum_declared
+    rule: m_savings_account_transaction.transaction_type_enum must be mapped in savings_transaction_type enum knowledge.
+  - id: account_identifiers_excluded
+    rule: account_no, external_id, iban, ref_no, and reason_for_block must not appear in MVP output fields.
+  - id: reversed_filter_required
+    rule: approved movement reports must filter is_reversed = false unless analyzing reversals.
