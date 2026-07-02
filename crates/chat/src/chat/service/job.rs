@@ -15,6 +15,7 @@ use crate::chat::classifier::{
 };
 use crate::chat::executor::execute_plan;
 use crate::chat::formatter::format_report_response;
+use crate::chat::llm::{LlmPlannerClient, LlmPlannerDecision};
 use crate::chat::model::{
     ChatJob, ChatMessage, CreateChatJobInput, CreatedChatJob, RespondToChatJobInput,
 };
@@ -32,6 +33,7 @@ pub struct JobService {
     catalog: Arc<KnowledgeCatalog>,
     knowledge: KnowledgeRepository,
     embedding_client: VoyageEmbeddingClient,
+    llm_planner: LlmPlannerClient,
     redis: Option<redis::Client>,
 }
 
@@ -43,6 +45,7 @@ impl JobService {
         fineract_pool: PgPool,
         catalog: Arc<KnowledgeCatalog>,
         embedding_client: VoyageEmbeddingClient,
+        llm_planner: LlmPlannerClient,
         redis: Option<redis::Client>,
     ) -> Self {
         Self {
@@ -52,6 +55,7 @@ impl JobService {
             catalog,
             knowledge: KnowledgeRepository::new(app_pool),
             embedding_client,
+            llm_planner,
             redis,
         }
     }
@@ -258,6 +262,9 @@ impl JobService {
                         result = unsupported_result("off_domain_match", candidates);
                     }
                     attach_context_candidates(&mut result, &context);
+                    result = self
+                        .llm_clarification_fallback(message, today, result)
+                        .await;
                     return result;
                 }
                 Err(error) => {
@@ -270,8 +277,64 @@ impl JobService {
         }
 
         let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 3);
-        self.classify_from_candidates(message, today, &candidates)
-            .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates))
+        let result = self
+            .classify_from_candidates(message, today, &candidates)
+            .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
+        self.llm_clarification_fallback(message, today, result)
+            .await
+    }
+
+    async fn llm_clarification_fallback(
+        &self,
+        message: &str,
+        today: chrono::NaiveDate,
+        result: ClassificationResult,
+    ) -> ClassificationResult {
+        if result.outcome != ClassificationOutcome::ClarificationRequired
+            || result.options.is_empty()
+            || !self.llm_planner.is_enabled()
+        {
+            return result;
+        }
+
+        match self
+            .llm_planner
+            .choose_capability(message, &result.options)
+            .await
+        {
+            Ok(LlmPlannerDecision::Capability(capability_id)) => {
+                let Some(capability) = self.catalog_capability(&capability_id) else {
+                    return result;
+                };
+                let mut classification = classify_retrieved_capability(
+                    message,
+                    today,
+                    &capability.domain,
+                    &capability.id,
+                    &capability.output_mode,
+                    0.74,
+                    result.candidates.clone(),
+                );
+                classification.source = Some("llm_planner".to_string());
+                classification
+            }
+            Ok(LlmPlannerDecision::Clarify(question)) => ClassificationResult {
+                clarification: Some(question),
+                source: Some("llm_planner".to_string()),
+                ..result
+            },
+            Ok(LlmPlannerDecision::Unsupported) => ClassificationResult {
+                outcome: ClassificationOutcome::Unsupported,
+                clarification: None,
+                options: Vec::new(),
+                source: Some("llm_planner".to_string()),
+                ..result
+            },
+            Err(error) => {
+                warn!(error = %error, "LLM planner fallback failed; keeping deterministic classification");
+                result
+            }
+        }
     }
 
     /// Returns true when the top context candidate (a non-capability row from
@@ -752,7 +815,7 @@ fn unsupported_result(
 
 /// Append non-capability retrieval rows (data_area, domain, query) to the
 /// classification's candidate list for audit/observability. They do not
-/// influence the local-rule decision, but DeepSeek planner fallback can read
+/// influence the local-rule decision, but LLM planner fallback can read
 /// them off `chat_jobs.state_json.classification.candidates`.
 fn attach_context_candidates(
     result: &mut ClassificationResult,

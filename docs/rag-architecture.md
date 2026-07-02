@@ -39,7 +39,7 @@ RETRIEVAL (per user message)
     -> embed query (Voyage)             [pending]
     -> top-k vector search over knowledge_index
     -> filter to candidates the API key can use
-    -> local classifier / DeepSeek planner picks capability_id
+    -> local classifier / LLM planner picks capability_id
     -> policy guard (capability / office / PII)
     -> bind params to approved SQL in queries/
     -> execute on Fineract read-only pool
@@ -153,15 +153,17 @@ A vector-retrieved capability is still a candidate. The policy guard in `crates/
 
 When clarification options are returned, the user can answer with the option text, the capability id, or a 1-based option number such as `1` or `2`.
 
-### 4.4 Where DeepSeek Fits
+### 4.4 Where The LLM Provider Fits
 
-DeepSeek is **not** part of the retrieval store. It is a planner fallback when the local classifier's confidence is low, and a formatter for natural-language responses over the structured SQL result. It receives:
+The LLM provider is **not** part of the retrieval store. It is a planner fallback when the local classifier's confidence is low, and later a formatter for natural-language responses over the structured SQL result. The current/default provider is DeepSeek, but the client uses an OpenAI-compatible chat-completions contract. It receives:
 
 - The user message.
 - The top-k retrieved capability/domain descriptors (descriptions + example phrases + parameter schemas) — never raw SQL, never raw Fineract rows beyond the approved query output contract.
 - `ClientContext` capability scope so it cannot recommend a capability the caller is not allowed to run.
 
-DeepSeek can return only one of: a `capability_id` choice with extracted parameters, a clarification question, or an `unsupported` verdict. It cannot author new SQL.
+The LLM can return only one of: a `capability_id` choice with extracted parameters, a clarification question, or an `unsupported` verdict. It cannot author new SQL.
+
+Current implementation is narrower: the LLM planner fallback is called only after Rust has already produced a clarification with approved options. It receives the user message and those options, and any returned capability must be one of the provided option capability ids.
 
 ## 5. What Is Indexed, What Is Not
 
@@ -196,7 +198,7 @@ DeepSeek can return only one of: a `capability_id` choice with extracted paramet
 ### Pending
 
 - Field-specific typed Rust schemas for metric / schema / policy / response YAML.
-- DeepSeek planner fallback over retrieved candidates. Context candidates are already attached to `chat_jobs.state_json.classification.candidates` with their `source_type` for the planner to consume.
+- LLM planner fallback over broader retrieved context beyond approved clarification options. Context candidates are already attached to `chat_jobs.state_json.classification.candidates` with their `source_type` for future planner consumption.
 
 ### Sequencing Rule
 

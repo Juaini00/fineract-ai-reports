@@ -231,7 +231,7 @@ Preferred implementation rule:
 
 ## 11. AI Prompt Safety
 
-DeepSeek or any other AI provider must not receive:
+The configured LLM provider must not receive:
 
 - Raw PII unless the user is authorized and the prompt path explicitly requires it.
 - Secrets or credentials under any condition.

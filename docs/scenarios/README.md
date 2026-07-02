@@ -25,6 +25,7 @@ JOB_ID=<set after 05-chat-session-and-job>
 | `06-chat-clarification-and-unsupported.md` | Decision policy: clarify + unsupported + clarification respond + deferred-domain detection (loan/accounting/tax/group_center) | ✅ Passed 2026-06-28 rerun |
 | `07-authorization-scope.md` | Capability gate, office scope in SQL, PII rules | ✅ Passed 2026-06-28 rerun |
 | `08-knowledge-breadth-and-multilingual.md` | Domain breadth probe + Bahasa Indonesia synonyms + write-intent breadth + PII placeholder + catalog-validate breadth assertion | 🆕 Added after knowledge expansion; not yet rerun |
+| `09-llm-planner-fallback.md` | Constrained LLM planner fallback over approved clarification options | ✅ Passed 2026-07-02 local smoke |
 
 ## Latest run
 

@@ -783,7 +783,7 @@ runtime context search also retrieves non-executable rows such as data_area, dom
 Still pending:
 
 ```text
-DeepSeek planner fallback consumption of broader context rows
+LLM planner fallback consumption of broader context rows
 ```
 
 Sequencing rule:

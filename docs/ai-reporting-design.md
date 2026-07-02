@@ -21,7 +21,7 @@ The system should understand the request, determine whether the report is suppor
 1. The AI must never execute arbitrary SQL against the Fineract database.
 2. Runtime queries must come from approved capabilities and approved query definitions.
 3. Rust is the main validator, planner, policy enforcer, and executor.
-4. DeepSeek is used for AI planning fallback and response formatting, not as a SQL executor.
+4. The LLM provider is used for AI planning fallback and response formatting, not as a SQL executor. Current/default provider: DeepSeek through an OpenAI-compatible chat-completions endpoint.
 5. Vector search is used to find relevant knowledge, not to search transactional numbers. See `docs/rag-architecture.md` for the full RAG indexing and retrieval design.
 6. Unsupported requests must be rejected safely.
 7. Heavy reports must be rejected, clarified, or executed as asynchronous jobs.
@@ -803,7 +803,7 @@ Client sends request with API key
   -> audit log is stored
 ```
 
-DeepSeek fallback should be added after the local pipeline works.
+LLM fallback should be added only after the local pipeline works.
 
 ## 16. Implementation Prompt
 
@@ -821,7 +821,7 @@ Important constraints:
 - Runtime execution must use approved capabilities and approved SQL query files.
 - Runtime SQL execution must use static approved query bindings; do not pass arbitrary runtime SQL strings to SQLx.
 - Rust is responsible for validation, planning, policy enforcement, execution, audit logging, and result shaping.
-- DeepSeek is used only for AI planning fallback and response formatting.
+- The LLM provider is used only for AI planning fallback and response formatting. DeepSeek is the current/default provider; other OpenAI-compatible providers can be configured with `LLM_*` environment variables.
 - pgvector is used for semantic knowledge retrieval, not for transactional numeric data.
 - Authentication uses application-managed API keys.
 - Every protected request must include Authorization: Bearer <api_key> or X-API-Key.
@@ -862,7 +862,7 @@ Implement in this order:
 15. Query executor with parameter binding, statement timeout, and row limit.
 16. Audit logging.
 17. Template response formatter.
-18. DeepSeek client for later planner/formatter fallback.
+18. LLM client for later planner/formatter fallback.
 
 Keep the implementation small and testable. Do not introduce dynamic SQL generation. If a request is unsupported, return a safe unsupported response.
 ```

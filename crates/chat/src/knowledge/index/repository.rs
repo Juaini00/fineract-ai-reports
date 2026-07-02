@@ -128,7 +128,7 @@ impl KnowledgeRepository {
 
     /// Non-capability context (data_area, domain, query) from the latest indexed
     /// catalog version. Returned alongside capability candidates for audit and
-    /// future DeepSeek planner context — never drives execution.
+    /// future LLM planner context — never drives execution.
     pub async fn search_context(
         &self,
         embedding: Vec<f32>,

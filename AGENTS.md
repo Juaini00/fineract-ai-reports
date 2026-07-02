@@ -81,9 +81,9 @@
 
 - Follow `docs/implementation-steps.md` as the active roadmap.
 - Completed: baseline, app bootstrap, DB pools/readiness, API key generation/authentication, reporting scope/capability/PII docs, chat session/job migrations, workspace alignment to `app` + `core` + `chat`, and current chat module split.
-- Partially done: Phase 10 catalog foundation (typed loaders for schema/metrics/policies/responses still pending), Phase 18 retrieval breadth (capability-only, broader sources pending), DeepSeek planner fallback.
-- Done since last update: Phase 9 background worker + Redis-backed SSE (`JobService::emit_event` + spawned `run_pipeline`), Phase 11 runtime SQL validation via `validate_runtime` wired into `POST /catalog/validate`, Phase 18 admin endpoints `POST /vector-index/rebuild` and `GET /vector-index/status`.
-- Next: broaden retrieval to domain/metric/schema/policy rows, then DeepSeek planner fallback, then Phase 19 new capabilities.
+- Partially done: Phase 10 catalog foundation (schema/metrics/policies/responses load as generic knowledge; typed field schemas still pending), Phase 17 LLM provider integration (constrained OpenAI-compatible planner fallback; response formatting fallback pending), Phase 18 retrieval breadth.
+- Done since last update: Phase 9 background worker + Redis-backed SSE (`JobService::emit_event` + spawned `run_pipeline`), Phase 11 runtime SQL validation via `validate_runtime` wired into `POST /catalog/validate`, Phase 18 admin endpoints `POST /vector-index/rebuild` and `GET /vector-index/status`, Phase 19 savings runtime matrix with 9 approved capabilities.
+- Next: typed schema/metric/policy/response validation, broader LLM context consumption, then new non-savings capabilities after data-scope promotion.
 
 ## Important References
 

@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     pub auth: AuthConfig,
     pub query: QueryConfig,
+    pub llm: LlmConfig,
     pub voyage_ai: VoyageAiConfig,
     pub catalog: CatalogConfig,
 }
@@ -36,6 +37,17 @@ pub struct AuthConfig {
 #[derive(Clone, Debug)]
 pub struct QueryConfig {
     pub default_timeout_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct LlmConfig {
+    pub provider: String,
+    pub api_key: String,
+    pub chat_completions_url: String,
+    pub model: String,
+    pub timeout_ms: u64,
+    pub max_output_tokens: u32,
+    pub temperature: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +99,36 @@ impl AppConfig {
                 default_timeout_ms: get_env_or("QUERY_DEFAULT_TIMEOUT_MS", "3000")
                     .parse()
                     .context("QUERY_DEFAULT_TIMEOUT_MS must be an integer")?,
+            },
+            llm: LlmConfig {
+                provider: get_env_or("LLM_PROVIDER", "deepseek"),
+                api_key: get_env_or("LLM_API_KEY", &get_env_or("DEEPSEEK_API_KEY", "")),
+                chat_completions_url: get_env_or(
+                    "LLM_CHAT_COMPLETIONS_URL",
+                    &get_env_or(
+                        "DEEPSEEK_CHAT_COMPLETIONS_URL",
+                        "https://api.deepseek.com/chat/completions",
+                    ),
+                ),
+                model: get_env_or("LLM_MODEL", &get_env_or("DEEPSEEK_MODEL", "deepseek-chat")),
+                timeout_ms: get_env_or(
+                    "LLM_TIMEOUT_MS",
+                    &get_env_or("DEEPSEEK_TIMEOUT_MS", "30000"),
+                )
+                .parse()
+                .context("LLM_TIMEOUT_MS must be an integer")?,
+                max_output_tokens: get_env_or(
+                    "LLM_MAX_OUTPUT_TOKENS",
+                    &get_env_or("DEEPSEEK_MAX_OUTPUT_TOKENS", "2000"),
+                )
+                .parse()
+                .context("LLM_MAX_OUTPUT_TOKENS must be an integer")?,
+                temperature: get_env_or(
+                    "LLM_TEMPERATURE",
+                    &get_env_or("DEEPSEEK_TEMPERATURE", "0.1"),
+                )
+                .parse()
+                .context("LLM_TEMPERATURE must be a number")?,
             },
             voyage_ai: VoyageAiConfig {
                 api_key: get_env_or("VOYAGEAI_API_KEY", ""),

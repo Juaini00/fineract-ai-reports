@@ -4,6 +4,7 @@ use app_core::api::AppState;
 use app_core::auth::service::AuthService;
 use axum::{Router, extract::FromRef};
 
+use crate::chat::llm::LlmPlannerClient;
 use crate::chat::repository::{JobRepository, MessageRepository, SessionRepository};
 use crate::chat::service::{JobService, MessageService, SessionService};
 use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator};
@@ -64,6 +65,7 @@ impl ChatAppState {
         let message_repo = MessageRepository::new(pool.clone());
         let job_repo = JobRepository::new(pool, session_repo.clone());
         let runtime_embedding_client = VoyageEmbeddingClient::new(&core.config.voyage_ai)?;
+        let llm_planner = LlmPlannerClient::new(&core.config.llm)?;
 
         let chat = ChatServices {
             sessions: SessionService::new(session_repo),
@@ -75,6 +77,7 @@ impl ChatAppState {
                 core.pools.fineract.clone(),
                 catalog.clone(),
                 runtime_embedding_client,
+                llm_planner,
                 core.pools.redis.clone(),
             ),
         };

@@ -11,7 +11,7 @@ Goal: ensure the project compiles and the local environment is ready.
 Tasks:
 
 1. Confirm Rust project builds with installed dependencies.
-2. Confirm `.env` contains required application, database, DeepSeek, auth, and guard settings.
+2. Confirm `.env` contains required application, database, LLM provider, auth, and guard settings.
 3. Confirm PostgreSQL database `ai_reports` exists.
 4. Confirm `pgvector` extension is enabled in `ai_reports`.
 5. Confirm Fineract database connection values are present in `.env`.
@@ -61,7 +61,7 @@ Required config groups:
 Application config
 App database config
 Fineract database config
-DeepSeek config
+LLM provider config
 Auth config
 Query/report guard config
 Redis config, optional
@@ -1003,7 +1003,7 @@ MVP response strategy:
 
 ```text
 template first
-DeepSeek later
+LLM provider later
 ```
 
 Example:
@@ -1033,10 +1033,10 @@ currency/decimal formatting
 PII-aware top-N templates beyond MVP fields
 empty-result templates
 response knowledge YAML usage
-DeepSeek formatting fallback for complex responses
+LLM formatting fallback for complex responses
 ```
 
-## Phase 17: DeepSeek Integration
+## Phase 17: LLM Provider Integration
 
 Goal: add AI only after the deterministic pipeline works.
 
@@ -1046,12 +1046,35 @@ Initial use cases:
 2. Clarification question generation.
 3. Natural-language response formatting for complex results.
 
-Do not use DeepSeek for:
+Do not use the LLM provider for:
 
 ```text
 raw SQL generation at runtime
 unbounded schema exploration
 large result computation
+```
+
+Current status:
+
+```text
+PARTIALLY DONE
+
+Implemented:
+LLM config is loaded from LLM_* environment variables, with legacy DEEPSEEK_* fallback for local compatibility.
+crates/chat/src/chat/llm.rs provides a constrained OpenAI-compatible planner fallback client.
+Current/default provider is DeepSeek (`LLM_PROVIDER=deepseek`, `LLM_MODEL=deepseek-chat`).
+Other OpenAI-compatible providers can be used by changing `LLM_CHAT_COMPLETIONS_URL`, `LLM_MODEL`, and `LLM_API_KEY`.
+JobService invokes the LLM only after deterministic/vector classification returns clarification with approved options.
+The LLM may return only: one provided capability id, a clarification question, or unsupported.
+Returned capability ids are checked against the provided approved options before planning.
+Rust still extracts parameters, runs policy checks, and executes only static approved SQL bindings.
+
+Verified 2026-07-02:
+Ambiguous prompt "Show customer savings activity this week" returned clarification_required with source=llm_planner and did not execute SQL.
+
+Still pending:
+response formatting fallback for complex results
+broader prompt context consumption beyond clarification options
 ```
 
 ## Phase 18: Vector Indexing
@@ -1100,7 +1123,7 @@ Vector search uses the latest indexed/embedded catalog version and collapses dup
 Current confidence policy: <0.40 unsupported, 0.40-0.55 clarify, close candidates within 0.05 clarify, clear >=0.55 can execute after policy checks.
 Classification state records source (`local_rule`, `vector`, or clarification source) and vector candidates for manual verification.
 POST /vector-index/rebuild and GET /vector-index/status are implemented (authenticated; rebuild runs KnowledgeSyncService::with_embeddings, status returns the latest knowledge_catalog_versions row).
-Broader retrieval: KnowledgeRepository::search_context queries non-capability rows from the latest indexed catalog version; results are appended to classification.candidates with their source_type for audit and future DeepSeek planner consumption — they do not directly execute SQL.
+Broader retrieval: KnowledgeRepository::search_context queries non-capability rows from the latest indexed catalog version; results are appended to classification.candidates with their source_type for audit and future LLM planner consumption — they do not directly execute SQL.
 
 Important sequencing rule:
 Vector retrieval only selects knowledge candidates that resolve to approved capabilities. SQL execution still goes through catalog validation, policy guard, and static approved SQL bindings.
@@ -1217,7 +1240,7 @@ Phase 13 -> Execution Plan And Policy Guard
 Phase 14 -> Query Executor MVP
 Phase 15 -> Audit Logging
 Phase 16 -> Response Formatting
-Phase 17 -> DeepSeek Integration
+Phase 17 -> LLM Provider Integration
 Phase 18 -> Vector Indexing
 Phase 19 -> Reporting Expansion
 ```
