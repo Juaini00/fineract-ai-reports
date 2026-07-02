@@ -236,7 +236,11 @@ pub fn classify_retrieved_capability(
     // parameter. Defaults: 10 for atomic top_n, 1 for monthly_top_n (one row per
     // month unless the user asks for top-N per month).
     if output_mode.ends_with("top_n") {
-        let default_limit = if output_mode == "monthly_top_n" { 1 } else { 10 };
+        let default_limit = if output_mode == "monthly_top_n" {
+            1
+        } else {
+            10
+        };
         params["limit"] = json!(limit_from_message(&normalized).unwrap_or(default_limit));
     }
 
@@ -359,7 +363,12 @@ fn month_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)
     let year = tokens
         .iter()
         .rev()
-        .find_map(|token| token.parse::<i32>().ok().filter(|y| (2000..2100).contains(y)))
+        .find_map(|token| {
+            token
+                .parse::<i32>()
+                .ok()
+                .filter(|y| (2000..2100).contains(y))
+        })
         .unwrap_or_else(|| today.year());
 
     match months.as_slice() {
@@ -390,7 +399,13 @@ fn relative_literal_range(message: &str, today: NaiveDate) -> Option<(NaiveDate,
     }
     if contains_any(
         message,
-        &["this year", "tahun ini", "year to date", "year-to-date", "ytd"],
+        &[
+            "this year",
+            "tahun ini",
+            "year to date",
+            "year-to-date",
+            "ytd",
+        ],
     ) {
         let from = NaiveDate::from_ymd_opt(today.year(), 1, 1)?;
         return Some((from, today));
@@ -458,7 +473,11 @@ fn bare_year_range(message: &str) -> Option<(NaiveDate, NaiveDate)> {
 }
 
 fn previous_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
 }
 
 fn subtract_months(date: NaiveDate, n: u32) -> NaiveDate {
@@ -550,10 +569,13 @@ mod tests {
     #[test]
     fn parses_yesterday() {
         let range = date_range("total deposit yesterday", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
+            )
+        );
     }
 
     #[test]
@@ -576,39 +598,51 @@ mod tests {
     #[test]
     fn parses_last_year() {
         let range = date_range("deposits last year", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            )
+        );
     }
 
     #[test]
     fn parses_last_month() {
         let range = date_range("deposits last month", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            )
+        );
     }
 
     #[test]
     fn parses_last_month_january_wraps() {
         let today_jan = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
         let range = date_range("deposits last month", today_jan).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            )
+        );
     }
 
     #[test]
     fn parses_last_week() {
         // today is 2026-06-21 (Sunday). this_monday = 2026-06-15. last_monday = 2026-06-08, last_sunday = 2026-06-14.
         let range = date_range("deposits last week", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 6, 14).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 6, 14).unwrap(),
+            )
+        );
     }
 
     #[test]
@@ -629,38 +663,50 @@ mod tests {
     #[test]
     fn parses_bare_year() {
         let range = date_range("deposits in 2025", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            )
+        );
     }
 
     #[test]
     fn parses_month_range_default_year() {
         // No year token; should default to today.year() = 2026.
         let range = date_range("deposits from January to September", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+            )
+        );
     }
 
     #[test]
     fn parses_month_range_with_year() {
         let range = date_range("deposits from January to September 2025", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 9, 30).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 9, 30).unwrap(),
+            )
+        );
     }
 
     #[test]
     fn parses_id_month_range_with_sampai() {
         let range = date_range("setoran dari Januari sampai September 2026", today()).unwrap();
-        assert_eq!(range, (
-            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
-        ));
+        assert_eq!(
+            range,
+            (
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+            )
+        );
     }
 
     #[test]

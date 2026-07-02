@@ -55,7 +55,10 @@ fn format_monthly_top_n(result: &Value) -> Option<String> {
     let mut last_month: Option<&str> = None;
     let mut month_count = 0usize;
     for row in rows.iter().take(120) {
-        let month = row.get("month_start").and_then(Value::as_str).unwrap_or("?");
+        let month = row
+            .get("month_start")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
         if last_month != Some(month) {
             month_count += 1;
             lines.push(format!("{month}:"));
@@ -90,13 +93,21 @@ fn format_monthly_breakdown(result: &Value) -> Option<String> {
         rows.len()
     )];
     for row in rows.iter().take(24) {
-        let month = row.get("month_start").and_then(Value::as_str).unwrap_or("?");
+        let month = row
+            .get("month_start")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
         let amount = row
             .get("total_deposit_amount")
             .and_then(Value::as_str)
             .unwrap_or("0");
-        let count = row.get("deposit_count").and_then(Value::as_i64).unwrap_or(0);
-        lines.push(format!("- {month}: {amount} across {count} transaction(s)."));
+        let count = row
+            .get("deposit_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        lines.push(format!(
+            "- {month}: {amount} across {count} transaction(s)."
+        ));
     }
     if rows.len() > 24 {
         lines.push(format!("... and {} more month(s).", rows.len() - 24));

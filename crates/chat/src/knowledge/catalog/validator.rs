@@ -373,7 +373,10 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
 
     // Allow SELECT or WITH ... SELECT (CTE). Both are read-only.
     if !(upper.starts_with("SELECT") || upper.starts_with("WITH")) {
-        bail!("query {} SQL must start with SELECT or WITH (CTE)", query.id);
+        bail!(
+            "query {} SQL must start with SELECT or WITH (CTE)",
+            query.id
+        );
     }
 
     let without_final_semicolon = trimmed.strip_suffix(';').unwrap_or(trimmed);
