@@ -9,6 +9,7 @@ resolver = "3"
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
+license = "MIT"
 
 # CI enforces `-D warnings` on all clippy lints. These two are ergonomic
 # non-defects in a service crate with wide constructors and typed pools.
