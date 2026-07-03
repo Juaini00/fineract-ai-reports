@@ -128,7 +128,8 @@ impl JobService {
         });
         let classification = self.classify_with_retrieval(&message, &input.client).await;
         let execution_plan = build_execution_plan(&classification, &self.catalog);
-        let policy_decision = evaluate_policy(&input.client, execution_plan.as_ref());
+        let policy_decision =
+            evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
         let classification_json = serde_json::to_value(&classification)?;
         let execution_plan_json = serde_json::to_value(&execution_plan)?;
         let policy_decision_json = serde_json::to_value(&policy_decision)?;
@@ -565,7 +566,8 @@ impl JobService {
         {
             let classification = classify_clarification_response(&original, &response.content);
             let execution_plan = build_execution_plan(&classification, &self.catalog);
-            let policy_decision = evaluate_policy(&input.client, execution_plan.as_ref());
+            let policy_decision =
+                evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
 
             self.jobs
                 .update_plan_state(
@@ -692,7 +694,9 @@ impl JobService {
                     result.insert("latency_ms".to_string(), json!(latency_ms));
                 }
 
-                if let Some(content) = format_report_response(plan, &result) {
+                if let Some(content) =
+                    format_report_response(&self.catalog, plan, policy_decision, &result)
+                {
                     self.messages
                         .insert_assistant_response(session_id, job_id, content)
                         .await?;
@@ -827,6 +831,7 @@ fn capability_option(capability: &CapabilityKnowledge, message: &str) -> Clarifi
     ClarificationOption {
         label: capability_option_label(capability, message),
         capability: capability.id.clone(),
+        output_mode: Some(capability.output_mode.clone()),
     }
 }
 
@@ -922,32 +927,6 @@ fn attach_context_candidates(
         }));
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn capability_option_label_uses_requested_period_not_catalog_example() {
-        let capability = CapabilityKnowledge {
-            id: "savings_deposit_total".to_string(),
-            status: "approved_mvp".to_string(),
-            domain: "savings".to_string(),
-            query_id: "savings.deposit_total".to_string(),
-            output_mode: "total".to_string(),
-            data_areas: Vec::new(),
-            metrics: Vec::new(),
-            examples: vec!["What is the total deposit this month?".to_string()],
-            required_parameters: Vec::new(),
-            optional_parameters: Vec::new(),
-        };
-
-        assert_eq!(
-            capability_option_label(&capability, "Show customer savings activity this week"),
-            "Total deposit this week"
-        );
-    }
-}
-
 fn capability_retrieval_text(capability: &CapabilityKnowledge) -> String {
     [
         capability.id.clone(),
@@ -989,3 +968,6 @@ fn is_write_intent(message: &str) -> bool {
 fn contains_any_local(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
+
+#[cfg(test)]
+mod tests;

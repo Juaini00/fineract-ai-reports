@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Runs before `git push`. Unit tests only — integration tests need Postgres
+# and belong to CI.
+#
+# Skip in an emergency: `git push --no-verify`.
+
+set -euo pipefail
+
+echo "[pre-push] cargo test --workspace --lib --bins ..."
+cargo test --workspace --lib --bins --locked
+
+echo "[pre-push] OK"

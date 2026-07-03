@@ -3,6 +3,9 @@ name = "core"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true

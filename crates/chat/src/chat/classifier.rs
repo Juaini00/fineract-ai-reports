@@ -29,6 +29,8 @@ pub struct ClassificationResult {
 pub struct ClarificationOption {
     pub label: String,
     pub capability: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,160 +43,6 @@ pub struct ClassificationCandidate {
     pub source_type: Option<String>,
 }
 
-pub fn classify_message(message: &str, today: NaiveDate) -> ClassificationResult {
-    let normalized = message.to_lowercase();
-
-    if contains_any(
-        &normalized,
-        &[
-            "savings",
-            "deposit",
-            "deposits",
-            "withdrawal",
-            "withdrawals",
-            "money in",
-            "money out",
-            "put into savings",
-        ],
-    ) {
-        if let Some(capability) = inferred_capability(&normalized) {
-            let mut params = json!({ "office_scope": "authorized_scope" });
-            if capability != "savings_balance_summary" {
-                let Some((from_date, to_date)) = date_range(&normalized, today) else {
-                    return ClassificationResult {
-                        outcome: ClassificationOutcome::ClarificationRequired,
-                        domain: Some("savings".to_string()),
-                        capability: None,
-                        confidence: 0.45,
-                        params: json!({}),
-                        clarification: Some(
-                            "Please clarify the report date or period.".to_string(),
-                        ),
-                        options: Vec::new(),
-                        source: Some("local_rule".to_string()),
-                        candidates: Vec::new(),
-                    };
-                };
-                params["from_date"] = json!(from_date.to_string());
-                params["to_date"] = json!(to_date.to_string());
-            }
-            if capability.ends_with("_top_n") {
-                params["limit"] = json!(
-                    limit_from_message(&normalized)
-                        .unwrap_or_else(|| default_limit_for(capability))
-                );
-            }
-
-            return ClassificationResult {
-                outcome: ClassificationOutcome::Matched,
-                domain: Some("savings".to_string()),
-                capability: Some(capability.to_string()),
-                confidence: 0.86,
-                params,
-                clarification: None,
-                options: Vec::new(),
-                source: Some("local_rule".to_string()),
-                candidates: Vec::new(),
-            };
-        }
-    }
-
-    if !contains_any(
-        &normalized,
-        &[
-            "deposit",
-            "money in",
-            "put into savings",
-            "savings accounts",
-        ],
-    ) {
-        return unsupported();
-    }
-
-    let Some((from_date, to_date)) = date_range(&normalized, today) else {
-        return ClassificationResult {
-            outcome: ClassificationOutcome::ClarificationRequired,
-            domain: Some("savings".to_string()),
-            capability: None,
-            confidence: 0.45,
-            params: json!({}),
-            clarification: Some("Please clarify the deposit report date or period.".to_string()),
-            options: Vec::new(),
-            source: Some("local_rule".to_string()),
-            candidates: Vec::new(),
-        };
-    };
-
-    if contains_any(&normalized, &["top", "largest", "biggest"]) {
-        return ClassificationResult {
-            outcome: ClassificationOutcome::Matched,
-            domain: Some("savings".to_string()),
-            capability: Some("savings_deposit_top_n".to_string()),
-            confidence: 0.86,
-            params: json!({
-                "from_date": from_date.to_string(),
-                "to_date": to_date.to_string(),
-                "office_scope": "authorized_scope",
-                "limit": limit_from_message(&normalized).unwrap_or(10),
-            }),
-            clarification: None,
-            options: Vec::new(),
-            source: Some("local_rule".to_string()),
-            candidates: Vec::new(),
-        };
-    }
-
-    if contains_any(&normalized, &["total", "how much"]) {
-        return ClassificationResult {
-            outcome: ClassificationOutcome::Matched,
-            domain: Some("savings".to_string()),
-            capability: Some("savings_deposit_total".to_string()),
-            confidence: 0.86,
-            params: json!({
-                "from_date": from_date.to_string(),
-                "to_date": to_date.to_string(),
-                "office_scope": "authorized_scope",
-            }),
-            clarification: None,
-            options: Vec::new(),
-            source: Some("local_rule".to_string()),
-            candidates: Vec::new(),
-        };
-    }
-
-    ClassificationResult {
-        outcome: ClassificationOutcome::ClarificationRequired,
-        domain: Some("savings".to_string()),
-        capability: None,
-        confidence: 0.5,
-        params: json!({
-            "from_date": from_date.to_string(),
-            "to_date": to_date.to_string(),
-        }),
-        clarification: Some(
-            "Please clarify whether you want the total deposit amount or the largest deposit transactions."
-                .to_string(),
-        ),
-        options: deposit_options(),
-        source: Some("local_rule".to_string()),
-        candidates: Vec::new(),
-    }
-}
-
-fn unsupported() -> ClassificationResult {
-    ClassificationResult {
-        outcome: ClassificationOutcome::Unsupported,
-        domain: None,
-        capability: None,
-        confidence: 0.0,
-        params: json!({}),
-        clarification: None,
-        options: Vec::new(),
-        source: Some("local_rule".to_string()),
-        candidates: Vec::new(),
-    }
-}
-
 pub fn classify_clarification_response(
     original: &ClassificationResult,
     response: &str,
@@ -202,11 +50,10 @@ pub fn classify_clarification_response(
     let normalized = response.to_lowercase();
     if let Some(option) = selected_option(original, &normalized) {
         let mut params = original.params.clone();
-        if option.capability.ends_with("_top_n") && params.get("limit").is_none() {
-            params["limit"] = json!(
-                limit_from_message(&normalized)
-                    .unwrap_or_else(|| default_limit_for(&option.capability))
-            );
+        if option_needs_limit(option) && params.get("limit").is_none() {
+            params["limit"] = json!(limit_from_message(&normalized).unwrap_or_else(|| {
+                default_limit_for_output_mode(option.output_mode.as_deref())
+            }));
         }
 
         return ClassificationResult {
@@ -222,74 +69,9 @@ pub fn classify_clarification_response(
         };
     }
 
-    let capability = inferred_capability(&normalized);
-
-    let Some(capability) = capability else {
-        let mut result = original.clone();
-        result.clarification = Some(
-            "Please choose either total deposits or largest deposit transactions.".to_string(),
-        );
-        if result.options.is_empty() {
-            result.options = deposit_options();
-        }
-        return result;
-    };
-
-    let mut params = original.params.clone();
-    if capability.ends_with("_top_n") && params.get("limit").is_none() {
-        params["limit"] =
-            json!(limit_from_message(&normalized).unwrap_or_else(|| default_limit_for(capability)));
-    }
-
-    ClassificationResult {
-        outcome: ClassificationOutcome::Matched,
-        domain: Some("savings".to_string()),
-        capability: Some(capability.to_string()),
-        confidence: 0.78,
-        params,
-        clarification: None,
-        options: Vec::new(),
-        source: Some("clarification_rule".to_string()),
-        candidates: original.candidates.clone(),
-    }
-}
-
-fn inferred_capability(message: &str) -> Option<&'static str> {
-    if contains_any(message, &["balance", "portfolio"]) {
-        return Some("savings_balance_summary");
-    }
-
-    let activity = if contains_any(message, &["withdrawal", "withdrawals", "money out"]) {
-        "withdrawal"
-    } else {
-        "deposit"
-    };
-    let monthly = contains_any(message, &["monthly", "per month", "by month", "breakdown"]);
-    let top = contains_any(message, &["largest", "top", "biggest", "transactions"]);
-
-    match (activity, monthly, top) {
-        ("deposit", true, true) => Some("savings_deposit_monthly_top_n"),
-        ("deposit", true, false) => Some("savings_deposit_monthly_breakdown"),
-        ("deposit", false, true) => Some("savings_deposit_top_n"),
-        ("deposit", false, false) if contains_any(message, &["total", "amount", "sum"]) => {
-            Some("savings_deposit_total")
-        }
-        ("withdrawal", true, true) => Some("savings_withdrawal_monthly_top_n"),
-        ("withdrawal", true, false) => Some("savings_withdrawal_monthly_breakdown"),
-        ("withdrawal", false, true) => Some("savings_withdrawal_top_n"),
-        ("withdrawal", false, false) if contains_any(message, &["total", "amount", "sum"]) => {
-            Some("savings_withdrawal_total")
-        }
-        _ => None,
-    }
-}
-
-fn default_limit_for(capability: &str) -> u32 {
-    if capability.contains("monthly") {
-        1
-    } else {
-        10
-    }
+    let mut result = original.clone();
+    result.clarification = Some("Please choose one of the available report options.".to_string());
+    result
 }
 
 pub fn classify_retrieved_capability(
@@ -391,9 +173,47 @@ fn selected_option<'a>(
     }
 
     original.options.iter().find(|option| {
-        normalized_response.contains(&option.capability.to_lowercase())
-            || normalized_response.contains(&option.label.to_lowercase())
+        let capability = option.capability.to_lowercase();
+        let label = option.label.to_lowercase();
+        normalized_response.contains(&capability)
+            || normalized_response.contains(&label)
+            || label.contains(normalized_response)
+            || tokens_match(normalized_response, &label)
     })
+}
+
+fn tokens_match(response: &str, label: &str) -> bool {
+    let response_tokens = comparable_tokens(response);
+    if response_tokens.is_empty() {
+        return false;
+    }
+    let label_tokens = comparable_tokens(label);
+    response_tokens
+        .iter()
+        .all(|token| label_tokens.iter().any(|label_token| label_token == token))
+}
+
+fn comparable_tokens(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.trim_end_matches('s').to_string())
+        .collect()
+}
+
+fn option_needs_limit(option: &ClarificationOption) -> bool {
+    option
+        .output_mode
+        .as_deref()
+        .is_some_and(|mode| mode.ends_with("top_n"))
+}
+
+fn default_limit_for_output_mode(output_mode: Option<&str>) -> u32 {
+    if output_mode == Some("monthly_top_n") {
+        1
+    } else {
+        10
+    }
 }
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
@@ -611,19 +431,6 @@ fn end_of_month(year: i32, month: u32) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(next_year, next_month, 1).map(|date| date - chrono::Duration::days(1))
 }
 
-fn deposit_options() -> Vec<ClarificationOption> {
-    vec![
-        ClarificationOption {
-            label: "Total deposits".to_string(),
-            capability: "savings_deposit_total".to_string(),
-        },
-        ClarificationOption {
-            label: "Largest deposit transactions".to_string(),
-            capability: "savings_deposit_top_n".to_string(),
-        },
-    ]
-}
-
 fn limit_from_message(message: &str) -> Option<u32> {
     message
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -631,296 +438,4 @@ fn limit_from_message(message: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn today() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 6, 21).unwrap()
-    }
-
-    #[test]
-    fn classifies_total_deposit_today() {
-        let result = classify_message("How much is the total deposit today?", today());
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(result.capability.as_deref(), Some("savings_deposit_total"));
-        assert_eq!(result.params["from_date"], "2026-06-21");
-        assert_eq!(result.params["to_date"], "2026-06-21");
-    }
-
-    #[test]
-    fn classifies_top_deposit_today() {
-        let result = classify_message("Top 5 largest deposits today", today());
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(result.capability.as_deref(), Some("savings_deposit_top_n"));
-        assert_eq!(result.params["limit"], 5);
-    }
-
-    #[test]
-    fn classifies_withdrawal_monthly_top_n() {
-        let result = classify_message("Show top withdrawals per month this month", today());
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(
-            result.capability.as_deref(),
-            Some("savings_withdrawal_monthly_top_n")
-        );
-        assert_eq!(result.params["limit"], 1);
-    }
-
-    #[test]
-    fn parses_yesterday() {
-        let range = date_range("total deposit yesterday", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 6, 20).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_kemarin() {
-        let range = date_range("total setoran kemarin", today()).unwrap();
-        assert_eq!(range.0, NaiveDate::from_ymd_opt(2026, 6, 20).unwrap());
-    }
-
-    #[test]
-    fn parses_this_year_and_ytd() {
-        let r1 = date_range("deposits this year", today()).unwrap();
-        let r2 = date_range("deposits ytd", today()).unwrap();
-        let r3 = date_range("setoran tahun ini", today()).unwrap();
-        let expected = (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), today());
-        assert_eq!(r1, expected);
-        assert_eq!(r2, expected);
-        assert_eq!(r3, expected);
-    }
-
-    #[test]
-    fn parses_last_year() {
-        let range = date_range("deposits last year", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_last_month() {
-        let range = date_range("deposits last month", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_last_month_january_wraps() {
-        let today_jan = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
-        let range = date_range("deposits last month", today_jan).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_last_week() {
-        // today is 2026-06-21 (Sunday). this_monday = 2026-06-15. last_monday = 2026-06-08, last_sunday = 2026-06-14.
-        let range = date_range("deposits last week", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2026, 6, 8).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 6, 14).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_last_n_days() {
-        let range = date_range("deposits last 7 days", today()).unwrap();
-        assert_eq!(range.0, today() - chrono::Duration::days(7));
-        assert_eq!(range.1, today());
-    }
-
-    #[test]
-    fn parses_last_n_months_id() {
-        let range = date_range("setoran 3 bulan terakhir", today()).unwrap();
-        // today is 2026-06-21; minus 3 months → 2026-03-21
-        assert_eq!(range.0, NaiveDate::from_ymd_opt(2026, 3, 21).unwrap());
-        assert_eq!(range.1, today());
-    }
-
-    #[test]
-    fn parses_bare_year() {
-        let range = date_range("deposits in 2025", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_month_range_default_year() {
-        // No year token; should default to today.year() = 2026.
-        let range = date_range("deposits from January to September", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_month_range_with_year() {
-        let range = date_range("deposits from January to September 2025", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2025, 9, 30).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn parses_id_month_range_with_sampai() {
-        let range = date_range("setoran dari Januari sampai September 2026", today()).unwrap();
-        assert_eq!(
-            range,
-            (
-                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
-            )
-        );
-    }
-
-    #[test]
-    fn asks_clarification_when_date_missing() {
-        let result = classify_message("How much is the total deposit?", today());
-
-        assert_eq!(result.outcome, ClassificationOutcome::ClarificationRequired);
-        assert!(result.clarification.is_some());
-    }
-
-    #[test]
-    fn asks_clarification_for_ambiguous_money_in() {
-        let result = classify_message(
-            "What did customers put into savings accounts this week?",
-            today(),
-        );
-
-        assert_eq!(result.outcome, ClassificationOutcome::ClarificationRequired);
-        assert_eq!(result.options.len(), 2);
-        assert_eq!(result.params["from_date"], "2026-06-15");
-    }
-
-    #[test]
-    fn classifies_clarification_response_with_original_dates() {
-        let original = classify_message(
-            "What did customers put into savings accounts this week?",
-            today(),
-        );
-        let result = classify_clarification_response(&original, "Total deposits");
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(result.capability.as_deref(), Some("savings_deposit_total"));
-        assert_eq!(result.params["from_date"], "2026-06-15");
-    }
-
-    #[test]
-    fn classifies_withdrawal_monthly_clarification_response() {
-        let original = clarify_retrieved_capabilities(
-            "Show savings activity this month",
-            today(),
-            Some("savings".to_string()),
-            Vec::new(),
-            0.7,
-            Vec::new(),
-        );
-
-        let result = classify_clarification_response(&original, "monthly withdrawal breakdown");
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(
-            result.capability.as_deref(),
-            Some("savings_withdrawal_monthly_breakdown")
-        );
-        assert_eq!(result.params["from_date"], "2026-06-01");
-    }
-
-    #[test]
-    fn parses_indonesian_month_range() {
-        let result = classify_retrieved_capability(
-            "saya mau tau deposit bulan mei - september 2025",
-            today(),
-            "savings",
-            "savings_deposit_total",
-            "total",
-            0.7,
-            Vec::new(),
-        );
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(result.params["from_date"], "2025-05-01");
-        assert_eq!(result.params["to_date"], "2025-09-30");
-    }
-
-    #[test]
-    fn classifies_retrieved_top_n_capability_with_params() {
-        let result = classify_retrieved_capability(
-            "Show customer savings activity this week top 7",
-            today(),
-            "savings",
-            "savings_deposit_top_n",
-            "top_n",
-            0.72,
-            Vec::new(),
-        );
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(result.capability.as_deref(), Some("savings_deposit_top_n"));
-        assert_eq!(result.params["from_date"], "2026-06-15");
-        assert_eq!(result.params["limit"], 7);
-    }
-
-    #[test]
-    fn classifies_numeric_clarification_option() {
-        let mut original = classify_message(
-            "What did customers put into savings accounts this week?",
-            today(),
-        );
-        original.options = vec![
-            ClarificationOption {
-                label: "Total deposits".to_string(),
-                capability: "savings_deposit_total".to_string(),
-            },
-            ClarificationOption {
-                label: "Largest deposits".to_string(),
-                capability: "savings_deposit_top_n".to_string(),
-            },
-        ];
-
-        let result = classify_clarification_response(&original, "2");
-
-        assert_eq!(result.outcome, ClassificationOutcome::Matched);
-        assert_eq!(result.capability.as_deref(), Some("savings_deposit_top_n"));
-    }
-}
+mod tests;

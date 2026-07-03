@@ -285,10 +285,10 @@ fn validate_generic_layer(
             data_area_ids,
         )?;
 
-        if let Some(domain) = item.domain.as_deref() {
-            if !domain_ids.contains(domain) {
-                bail!("{label} {} references unknown domain {domain}", item.id);
-            }
+        if let Some(domain) = item.domain.as_deref()
+            && !domain_ids.contains(domain)
+        {
+            bail!("{label} {} references unknown domain {domain}", item.id);
         }
     }
 
@@ -443,22 +443,23 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
 
     validate_placeholders(query, trimmed)?;
 
-    if has_parameter(query, "office_ids") {
-        if !upper.contains("OFFICE_ID") || !upper.contains("ANY($") {
-            bail!(
-                "query {} SQL must constrain authorized office ids",
-                query.id
-            );
-        }
+    if has_parameter(query, "office_ids")
+        && (!upper.contains("OFFICE_ID") || !upper.contains("ANY($"))
+    {
+        bail!(
+            "query {} SQL must constrain authorized office ids",
+            query.id
+        );
     }
 
-    if has_parameter(query, "from_date") && has_parameter(query, "to_date") {
-        if !upper.contains("TRANSACTION_DATE") || !upper.contains("BETWEEN") {
-            bail!(
-                "query {} SQL must constrain transaction date range",
-                query.id
-            );
-        }
+    if has_parameter(query, "from_date")
+        && has_parameter(query, "to_date")
+        && (!upper.contains("TRANSACTION_DATE") || !upper.contains("BETWEEN"))
+    {
+        bail!(
+            "query {} SQL must constrain transaction date range",
+            query.id
+        );
     }
 
     // Bound result size via LIMIT (atomic top_n) or ROW_NUMBER()/RANK() over a
@@ -566,10 +567,10 @@ fn placeholder_numbers(sql: &str) -> HashSet<usize> {
             end += 1;
         }
 
-        if start != end {
-            if let Ok(number) = sql[start..end].parse::<usize>() {
-                placeholders.insert(number);
-            }
+        if start != end
+            && let Ok(number) = sql[start..end].parse::<usize>()
+        {
+            placeholders.insert(number);
         }
 
         index = end;

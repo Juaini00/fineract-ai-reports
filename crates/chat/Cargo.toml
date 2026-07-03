@@ -3,6 +3,9 @@ name = "chat"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 app_core = {package = "core", path = "../core"}
 anyhow.workspace = true
@@ -22,3 +25,10 @@ pgvector.workspace = true
 reqwest.workspace = true
 redis.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+reqwest = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+serde_json = { workspace = true }

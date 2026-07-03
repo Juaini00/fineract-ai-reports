@@ -874,15 +874,13 @@ PARTIALLY DONE
 
 Implemented:
 crates/chat/src/chat/classifier.rs
-Rule-based classification for savings deposit total and top-N examples.
-Supports English-only `today` and `this month` date ranges.
+Savings-specific local capability rules were removed; runtime capability selection now comes from vector/catalog retrieval plus approved clarification options.
+Classifier still owns generic parameter extraction for date ranges and top-N limits after a catalog capability is selected.
 Stores the classification result in chat_jobs.state_json.classification when a job is created.
 
 Still pending:
-month-name/date-range extraction such as January to September 2026
-execution-plan conversion
-using clarification output to create assistant clarification messages
-runtime continuation after clarification responses
+typed parameter extraction from query metadata beyond date range and top-N limit
+confidence calibration for broader domains as more approved capabilities are added
 ```
 
 ## Phase 13: Execution Plan And Policy Guard
@@ -1028,10 +1026,10 @@ crates/chat/src/chat/formatter.rs
 Successful report execution inserts an assistant chat_messages row with a simple English template response.
 GET /chat/sessions/{session_id}/messages now shows user and assistant messages after successful execution.
 Savings formatter returns empty-result messages for total/top-N/monthly report shapes and only prefixes amounts with a runtime `currency_code` when one is present in query output or request params.
-Top-N templates include `client_display_name` when the approved PII-gated query returns it; no-policy API keys remain blocked before execution.
+Response formatting is now catalog-driven by `query_id`, `output_mode`, declared `output_fields`, and response field labels instead of hardcoded capability IDs.
+PII/secret output fields are omitted by the generic formatter unless a future explicit PII-aware formatter is added.
 
 Still pending:
-response knowledge YAML usage
 LLM formatting fallback for complex responses
 ```
 

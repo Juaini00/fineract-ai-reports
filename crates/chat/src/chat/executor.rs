@@ -1,11 +1,13 @@
+use std::path::{Component, Path, PathBuf};
+
 use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
-use sqlx::{PgPool, Row};
+use sqlx::{AssertSqlSafe, PgPool, Row, SqlSafeStr};
 
 use crate::chat::planner::{ExecutionPlan, PolicyDecision, PolicyDecisionStatus};
-use crate::knowledge::model::KnowledgeCatalog;
+use crate::knowledge::model::{KnowledgeCatalog, QueryParameter};
 
 pub async fn execute_plan(
     pool: &PgPool,
@@ -25,41 +27,16 @@ pub async fn execute_plan(
         .iter()
         .find(|query| query.id == plan.query_id)
         .with_context(|| format!("query {} not found in catalog", plan.query_id))?;
-    let sql = approved_sql(&query.id)?;
-    let mut sql_query = sqlx::query(sql);
+    let sql = read_approved_sql(catalog, query.sql_file.as_str())?;
+    let mut sql_query = sqlx::query(AssertSqlSafe(sql).into_sql_str());
 
     for parameter in &query.parameters {
-        match parameter.name.as_str() {
-            "from_date" | "to_date" => {
-                let value = plan
-                    .params
-                    .get(&parameter.name)
-                    .and_then(Value::as_str)
-                    .with_context(|| format!("missing parameter {}", parameter.name))?;
-                sql_query = sql_query.bind(NaiveDate::parse_from_str(value, "%Y-%m-%d")?);
-            }
-            "office_ids" => {
-                sql_query = sql_query.bind(policy.office_ids.clone());
-            }
-            "limit" => {
-                let value = plan
-                    .params
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .context("missing parameter limit")?;
-                sql_query = sql_query.bind(value as i64);
-            }
-            "currency_code" => {
-                let value = plan.params.get("currency_code").and_then(Value::as_str);
-                sql_query = sql_query.bind(value);
-            }
-            "product_ids" => {
-                let value = plan.params.get("product_ids").and_then(|value| {
-                    value
-                        .as_array()
-                        .map(|items| items.iter().filter_map(Value::as_i64).collect::<Vec<_>>())
-                });
-                sql_query = sql_query.bind(value);
+        match parameter.kind.as_str() {
+            "date" => sql_query = sql_query.bind(date_param(plan, parameter)?),
+            "integer" => sql_query = sql_query.bind(integer_param(plan, parameter)?),
+            "string" => sql_query = sql_query.bind(string_param(plan, parameter)?),
+            "array_bigint" => {
+                sql_query = sql_query.bind(array_bigint_param(plan, policy, parameter)?)
             }
             other => bail!("unsupported query parameter {other}"),
         }
@@ -102,35 +79,101 @@ pub async fn execute_plan(
     }))
 }
 
-fn approved_sql(query_id: &str) -> Result<&'static str> {
-    match query_id {
-        "savings.deposit_total" => Ok(include_str!(
-            "../../../../queries/savings/deposit_total.sql"
-        )),
-        "savings.deposit_top_n" => Ok(include_str!(
-            "../../../../queries/savings/deposit_top_n.sql"
-        )),
-        "savings.withdrawal_total" => Ok(include_str!(
-            "../../../../queries/savings/withdrawal_total.sql"
-        )),
-        "savings.withdrawal_top_n" => Ok(include_str!(
-            "../../../../queries/savings/withdrawal_top_n.sql"
-        )),
-        "savings.deposit_monthly_breakdown" => Ok(include_str!(
-            "../../../../queries/savings/deposit_monthly_breakdown.sql"
-        )),
-        "savings.deposit_monthly_top_n" => Ok(include_str!(
-            "../../../../queries/savings/deposit_monthly_top_n.sql"
-        )),
-        "savings.withdrawal_monthly_breakdown" => Ok(include_str!(
-            "../../../../queries/savings/withdrawal_monthly_breakdown.sql"
-        )),
-        "savings.withdrawal_monthly_top_n" => Ok(include_str!(
-            "../../../../queries/savings/withdrawal_monthly_top_n.sql"
-        )),
-        "savings.balance_summary" => Ok(include_str!(
-            "../../../../queries/savings/balance_summary.sql"
-        )),
-        other => bail!("query {other} has no approved SQL binding"),
+fn date_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Option<NaiveDate>> {
+    let Some(value) = plan.params.get(&parameter.name).and_then(Value::as_str) else {
+        return required_or_null(parameter);
+    };
+
+    Ok(Some(NaiveDate::parse_from_str(value, "%Y-%m-%d")?))
+}
+
+fn integer_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Option<i64>> {
+    let Some(value) = plan.params.get(&parameter.name).and_then(Value::as_i64) else {
+        return required_or_null(parameter);
+    };
+
+    Ok(Some(value))
+}
+
+fn string_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Option<String>> {
+    let Some(value) = plan.params.get(&parameter.name).and_then(Value::as_str) else {
+        return required_or_null(parameter);
+    };
+
+    Ok(Some(value.to_string()))
+}
+
+fn array_bigint_param(
+    plan: &ExecutionPlan,
+    policy: &PolicyDecision,
+    parameter: &QueryParameter,
+) -> Result<Option<Vec<i64>>> {
+    if parameter.source.as_deref() == Some("authorized_scope") {
+        return Ok(Some(policy.office_ids.clone()));
+    }
+
+    let Some(value) = plan.params.get(&parameter.name) else {
+        return required_or_null(parameter);
+    };
+    let Some(items) = value.as_array() else {
+        bail!("parameter {} must be an array", parameter.name);
+    };
+
+    let mut parsed = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(value) = item.as_i64() else {
+            bail!("parameter {} must contain only integers", parameter.name);
+        };
+        parsed.push(value);
+    }
+
+    Ok(Some(parsed))
+}
+
+fn required_or_null<T>(parameter: &QueryParameter) -> Result<Option<T>> {
+    if parameter.required {
+        bail!("missing parameter {}", parameter.name);
+    }
+
+    Ok(None)
+}
+
+fn read_approved_sql(catalog: &KnowledgeCatalog, sql_file: &str) -> Result<String> {
+    let path = resolve_sql_path(&catalog.query_path, sql_file)?;
+    std::fs::read_to_string(&path).with_context(|| format!("read approved SQL {}", path.display()))
+}
+
+fn resolve_sql_path(query_root: &Path, sql_file: &str) -> Result<PathBuf> {
+    let relative = sql_file.strip_prefix("queries/").unwrap_or(sql_file);
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("invalid SQL file path");
+    }
+
+    Ok(query_root.join(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::resolve_sql_path;
+
+    #[test]
+    fn resolves_catalog_sql_path_under_query_root() {
+        assert_eq!(
+            resolve_sql_path(Path::new("/repo/queries"), "queries/savings/report.sql").unwrap(),
+            Path::new("/repo/queries/savings/report.sql")
+        );
+    }
+
+    #[test]
+    fn rejects_sql_path_traversal() {
+        assert!(resolve_sql_path(Path::new("/repo/queries"), "../secret.sql").is_err());
+        assert!(resolve_sql_path(Path::new("/repo/queries"), "/tmp/secret.sql").is_err());
     }
 }

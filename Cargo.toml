@@ -10,6 +10,12 @@ resolver = "3"
 version = "0.0.1"
 edition = "2024"
 
+# CI enforces `-D warnings` on all clippy lints. These two are ergonomic
+# non-defects in a service crate with wide constructors and typed pools.
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+
 [workspace.dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"

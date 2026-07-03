@@ -39,6 +39,7 @@ pub struct PolicyDecision {
     pub status: PolicyDecisionStatus,
     pub reason: Option<String>,
     pub office_ids: Vec<i64>,
+    pub can_view_pii: bool,
 }
 
 pub fn build_execution_plan(
@@ -70,12 +71,17 @@ pub fn build_execution_plan(
     })
 }
 
-pub fn evaluate_policy(client: &ClientContext, plan: Option<&ExecutionPlan>) -> PolicyDecision {
+pub fn evaluate_policy(
+    client: &ClientContext,
+    plan: Option<&ExecutionPlan>,
+    catalog: &KnowledgeCatalog,
+) -> PolicyDecision {
     let Some(plan) = plan else {
         return PolicyDecision {
             status: PolicyDecisionStatus::NotApplicable,
             reason: None,
             office_ids: Vec::new(),
+            can_view_pii: false,
         };
     };
 
@@ -88,10 +94,17 @@ pub fn evaluate_policy(client: &ClientContext, plan: Option<&ExecutionPlan>) -> 
         Err(error) => return blocked(error.to_string()),
     };
 
-    // PII gate applies to any output_mode that returns transactional rows with
-    // optional client identity. Both `top_n` (atomic) and `monthly_top_n`
-    // (per-month) join m_client and expose `client_display_name` (pii).
-    if let Err(error) = ensure_pii_allowed(client, plan.output_mode.ends_with("top_n")) {
+    let output_requires_pii = catalog
+        .queries
+        .iter()
+        .find(|query| query.id == plan.query_id)
+        .is_some_and(|query| {
+            query
+                .output_fields
+                .iter()
+                .any(|field| field.sensitivity == "pii")
+        });
+    if let Err(error) = ensure_pii_allowed(client, output_requires_pii) {
         return blocked(error.to_string());
     }
 
@@ -99,6 +112,7 @@ pub fn evaluate_policy(client: &ClientContext, plan: Option<&ExecutionPlan>) -> 
         status: PolicyDecisionStatus::Allowed,
         reason: None,
         office_ids,
+        can_view_pii: client.can_view_pii,
     }
 }
 
@@ -107,101 +121,9 @@ fn blocked(reason: String) -> PolicyDecision {
         status: PolicyDecisionStatus::Blocked,
         reason: Some(reason),
         office_ids: Vec::new(),
+        can_view_pii: false,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use chrono::NaiveDate;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::chat::classifier::classify_message;
-    use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator};
-
-    #[test]
-    fn builds_atomic_plan_for_total_deposit() {
-        let classification = classify_message(
-            "How much is the total deposit today?",
-            NaiveDate::from_ymd_opt(2026, 6, 21).unwrap(),
-        );
-
-        let catalog = catalog();
-        let plan = build_execution_plan(&classification, &catalog).expect("execution plan");
-
-        assert_eq!(plan.plan_type, ExecutionPlanType::Atomic);
-        assert_eq!(plan.capability, "savings_deposit_total");
-        assert_eq!(plan.query_id, "savings.deposit_total");
-        assert!(plan.requires_policy_check);
-    }
-
-    #[test]
-    fn skips_plan_when_clarification_required() {
-        let classification = classify_message(
-            "How much is the total deposit?",
-            NaiveDate::from_ymd_opt(2026, 6, 21).unwrap(),
-        );
-
-        let catalog = catalog();
-        assert!(build_execution_plan(&classification, &catalog).is_none());
-    }
-
-    #[test]
-    fn allows_policy_for_configured_client() {
-        let classification = classify_message(
-            "How much is the total deposit today?",
-            NaiveDate::from_ymd_opt(2026, 6, 21).unwrap(),
-        );
-        let catalog = catalog();
-        let plan = build_execution_plan(&classification, &catalog);
-        let decision = evaluate_policy(&client(), plan.as_ref());
-
-        assert_eq!(decision.status, PolicyDecisionStatus::Allowed);
-        assert_eq!(decision.office_ids, vec![1, 2]);
-    }
-
-    #[test]
-    fn blocks_policy_for_missing_capability() {
-        let mut client = client();
-        client.allowed_capabilities.clear();
-        let classification = classify_message(
-            "How much is the total deposit today?",
-            NaiveDate::from_ymd_opt(2026, 6, 21).unwrap(),
-        );
-        let catalog = catalog();
-        let plan = build_execution_plan(&classification, &catalog);
-        let decision = evaluate_policy(&client, plan.as_ref());
-
-        assert_eq!(decision.status, PolicyDecisionStatus::Blocked);
-    }
-
-    fn client() -> ClientContext {
-        ClientContext {
-            api_key_id: Uuid::nil(),
-            name: "test".to_string(),
-            owner: "test".to_string(),
-            key_prefix: "air_test".to_string(),
-            allowed_office_ids: vec![1, 2],
-            allowed_capabilities: vec!["savings_deposit_total".to_string()],
-            can_view_pii: false,
-            expires_at: None,
-        }
-    }
-
-    fn catalog() -> KnowledgeCatalog {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let workspace_root = manifest_dir
-            .parent()
-            .and_then(|path| path.parent())
-            .unwrap();
-        let catalog = KnowledgeLoader::new(
-            workspace_root.join("knowledge"),
-            workspace_root.join("queries"),
-        )
-        .load()
-        .unwrap();
-
-        KnowledgeValidator::validate(&catalog).unwrap();
-        catalog
-    }
-}
+mod tests;

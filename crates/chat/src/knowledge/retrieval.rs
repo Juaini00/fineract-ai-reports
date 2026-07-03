@@ -172,10 +172,10 @@ fn concept_line(concepts: &[crate::knowledge::model::DomainConcept]) -> String {
     let mut parts = Vec::new();
     for concept in concepts {
         parts.push(concept.id.clone());
-        if let Some(meaning) = concept.meaning.as_deref() {
-            if !meaning.trim().is_empty() {
-                parts.push(meaning.to_string());
-            }
+        if let Some(meaning) = concept.meaning.as_deref()
+            && !meaning.trim().is_empty()
+        {
+            parts.push(meaning.to_string());
         }
         parts.extend(concept.synonyms.iter().cloned());
     }

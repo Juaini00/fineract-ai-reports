@@ -3,6 +3,9 @@ name = "app"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 app_core = { package = "core", path = "../core" }

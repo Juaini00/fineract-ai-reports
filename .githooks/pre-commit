@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Fast pre-commit check. Runs on every `git commit`.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+#
+# Skip in an emergency: `git commit --no-verify` — but the CI will still block.
+
+set -euo pipefail
+
+echo "[pre-commit] cargo fmt --check ..."
+cargo fmt --all -- --check
+
+echo "[pre-commit] cargo clippy (workspace, all targets, warnings=error) ..."
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+echo "[pre-commit] OK"
