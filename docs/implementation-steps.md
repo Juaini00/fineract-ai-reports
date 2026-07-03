@@ -1027,11 +1027,10 @@ Implemented:
 crates/chat/src/chat/formatter.rs
 Successful report execution inserts an assistant chat_messages row with a simple English template response.
 GET /chat/sessions/{session_id}/messages now shows user and assistant messages after successful execution.
+Savings formatter returns empty-result messages for total/top-N/monthly report shapes and only prefixes amounts with a runtime `currency_code` when one is present in query output or request params.
+Top-N templates include `client_display_name` when the approved PII-gated query returns it; no-policy API keys remain blocked before execution.
 
 Still pending:
-currency/decimal formatting
-PII-aware top-N templates beyond MVP fields
-empty-result templates
 response knowledge YAML usage
 LLM formatting fallback for complex responses
 ```

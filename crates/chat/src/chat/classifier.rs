@@ -372,7 +372,7 @@ pub fn clarify_retrieved_capabilities(
         capability: None,
         confidence,
         params,
-        clarification: Some("Please clarify which report you want.".to_string()),
+        clarification: Some("Please choose one of the available report options.".to_string()),
         options,
         source: Some("vector".to_string()),
         candidates,

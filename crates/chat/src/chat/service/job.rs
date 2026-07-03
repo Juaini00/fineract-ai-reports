@@ -252,7 +252,12 @@ impl JobService {
                         .map(|candidate| vector_confidence(candidate.distance))
                         .unwrap_or(0.0);
                     let mut result = self
-                        .classify_from_candidates(message, today, &candidates)
+                        .classify_from_candidates(
+                            message,
+                            today,
+                            &client.allowed_capabilities,
+                            &candidates,
+                        )
                         .unwrap_or_else(|| {
                             unsupported_result("vector_no_match", candidates.clone())
                         });
@@ -278,7 +283,7 @@ impl JobService {
 
         let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 3);
         let result = self
-            .classify_from_candidates(message, today, &candidates)
+            .classify_from_candidates(message, today, &client.allowed_capabilities, &candidates)
             .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
         self.llm_clarification_fallback(message, today, result)
             .await
@@ -414,6 +419,7 @@ impl JobService {
         &self,
         message: &str,
         today: chrono::NaiveDate,
+        allowed_capabilities: &[String],
         candidates: &[RetrievedKnowledgeCandidate],
     ) -> Option<ClassificationResult> {
         let top = candidates.first()?;
@@ -444,10 +450,14 @@ impl JobService {
             .collect::<Vec<_>>();
 
         if close_candidates.len() > 1 || confidence < 0.55 {
-            let options = close_candidates
-                .into_iter()
-                .map(capability_option)
-                .collect::<Vec<_>>();
+            let options = if is_activity_request(message) {
+                self.activity_options(message, &top_capability.domain, allowed_capabilities)
+            } else {
+                close_candidates
+                    .into_iter()
+                    .map(|capability| capability_option(capability, message))
+                    .collect::<Vec<_>>()
+            };
             return Some(clarify_retrieved_capabilities(
                 message,
                 today,
@@ -490,6 +500,34 @@ impl JobService {
         }
 
         None
+    }
+
+    fn activity_options(
+        &self,
+        message: &str,
+        domain: &str,
+        allowed_capabilities: &[String],
+    ) -> Vec<ClarificationOption> {
+        let output_modes = if contains_any_local(
+            &message.to_lowercase(),
+            &["monthly", "per month", "by month", "breakdown"],
+        ) {
+            ["monthly_breakdown", "monthly_top_n"].as_slice()
+        } else {
+            ["total", "top_n"].as_slice()
+        };
+
+        self.catalog
+            .capabilities
+            .iter()
+            .filter(|capability| {
+                capability.status == "approved_mvp"
+                    && capability.domain == domain
+                    && output_modes.contains(&capability.output_mode.as_str())
+                    && allowed_capabilities.iter().any(|id| id == &capability.id)
+            })
+            .map(|capability| capability_option(capability, message))
+            .collect()
     }
 
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
@@ -778,14 +816,68 @@ fn vector_confidence(distance: f64) -> f32 {
     (1.0 - distance).clamp(0.0, 1.0) as f32
 }
 
-fn capability_option(capability: &CapabilityKnowledge) -> ClarificationOption {
+fn is_activity_request(message: &str) -> bool {
+    contains_any_local(
+        &message.to_lowercase(),
+        &["activity", "activities", "transaction", "transactions"],
+    )
+}
+
+fn capability_option(capability: &CapabilityKnowledge, message: &str) -> ClarificationOption {
     ClarificationOption {
-        label: capability
-            .examples
-            .first()
-            .cloned()
-            .unwrap_or_else(|| capability.id.clone()),
+        label: capability_option_label(capability, message),
         capability: capability.id.clone(),
+    }
+}
+
+fn capability_option_label(capability: &CapabilityKnowledge, message: &str) -> String {
+    let format = match capability.output_mode.as_str() {
+        "total" => "Total",
+        "top_n" => "Largest",
+        "monthly_breakdown" => "Monthly total",
+        "monthly_top_n" => "Monthly largest",
+        _ => return capability.id.clone(),
+    };
+    let subject = capability_subject(capability);
+    let period = period_label(message);
+
+    format!("{format} {subject}{period}")
+}
+
+fn capability_subject(capability: &CapabilityKnowledge) -> String {
+    let without_domain = capability
+        .id
+        .strip_prefix(&format!("{}_", capability.domain))
+        .unwrap_or(&capability.id);
+    let without_mode = without_domain
+        .strip_suffix("_monthly_breakdown")
+        .or_else(|| without_domain.strip_suffix("_monthly_top_n"))
+        .or_else(|| without_domain.strip_suffix("_top_n"))
+        .or_else(|| without_domain.strip_suffix("_total"))
+        .unwrap_or(without_domain);
+
+    without_mode.replace('_', " ")
+}
+
+fn period_label(message: &str) -> &'static str {
+    let message = message.to_lowercase();
+    if contains_any_local(&message, &["today"]) {
+        " today"
+    } else if contains_any_local(&message, &["this week", "minggu ini"]) {
+        " this week"
+    } else if contains_any_local(&message, &["last week", "minggu lalu"]) {
+        " last week"
+    } else if contains_any_local(&message, &["this month", "bulan ini"]) {
+        " this month"
+    } else if contains_any_local(&message, &["last month", "bulan lalu", "bulan kemarin"]) {
+        " last month"
+    } else if contains_any_local(
+        &message,
+        &["this year", "year to date", "year-to-date", "ytd"],
+    ) {
+        " this year"
+    } else {
+        " for the requested period"
     }
 }
 
@@ -828,6 +920,32 @@ fn attach_context_candidates(
             confidence: vector_confidence(candidate.distance),
             source_type: Some(candidate.source_type.clone()),
         }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_option_label_uses_requested_period_not_catalog_example() {
+        let capability = CapabilityKnowledge {
+            id: "savings_deposit_total".to_string(),
+            status: "approved_mvp".to_string(),
+            domain: "savings".to_string(),
+            query_id: "savings.deposit_total".to_string(),
+            output_mode: "total".to_string(),
+            data_areas: Vec::new(),
+            metrics: Vec::new(),
+            examples: vec!["What is the total deposit this month?".to_string()],
+            required_parameters: Vec::new(),
+            optional_parameters: Vec::new(),
+        };
+
+        assert_eq!(
+            capability_option_label(&capability, "Show customer savings activity this week"),
+            "Total deposit this week"
+        );
+    }
 }
 
 fn capability_retrieval_text(capability: &CapabilityKnowledge) -> String {
