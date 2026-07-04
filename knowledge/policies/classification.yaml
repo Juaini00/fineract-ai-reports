@@ -1,0 +1,24 @@
+id: classification_policy
+source_doc: docs/reporting-capabilities.md#9-classification-thresholds
+# Gap-based classifier decision.
+#
+# Given top-N capability retrieval scores sorted DESC by confidence:
+#   * If top1.confidence < min_floor -> outcome = unsupported (off-domain).
+#   * Else if (top1.confidence - top2.confidence) >= min_gap -> outcome = matched
+#     with capability = top1.
+#   * Else -> outcome = clarification_required with options = top-N mapped to
+#     capability + `others_key` at the end. User picks the number OR "Others"
+#     to describe a different intent.
+min_gap: 0.05
+min_floor: 0.40
+others_key: other_activity
+others_label: "Something else - let me describe it differently"
+checks:
+  - id: gap_in_open_interval
+    rule: min_gap must be in the open interval (0, 1).
+  - id: floor_in_open_interval
+    rule: min_floor must be in the open interval (0, 1).
+  - id: others_key_non_empty
+    rule: others_key must be non-empty and not collide with any capability id.
+  - id: others_label_non_empty
+    rule: others_label must be non-empty.

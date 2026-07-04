@@ -75,9 +75,9 @@ Run the same top-N job from `05-chat-session-and-job.md` Top-N variant with each
 | Key | Expected `result_json.rows[0].client_display_name` |
 | --- | --- |
 | `{{API_KEY_PII}}` | populated (e.g. `"John Doe"`) |
-| `{{API_KEY_NO_PII}}` | populated today; ⚠ should be masked/omitted once Phase 16 PII formatter lands |
+| `{{API_KEY_NO_PII}}` | no result rows; job fails policy before execution because selected query output declares `client_display_name` as `pii` |
 
-The catalog already declares `client_display_name` with `sensitivity: pii` in `knowledge/queries/savings/deposit_top_n.yaml`. The runtime gate that strips it for `can_view_pii=false` is a Phase 16 expansion. D documents the latent invariant — re-run after that change to confirm masking actually fires.
+The catalog declares `client_display_name` with `sensitivity: pii` in `knowledge/queries/savings/deposit_top_n.yaml`. Runtime policy computes PII requirement from selected query output fields, so `can_view_pii=false` keys are blocked before execution.
 
 ## E. Catalog-validate breadth assertion
 
@@ -85,10 +85,10 @@ The catalog already declares `client_display_name` with `sensitivity: pii` in `k
 curl -X POST {{BASE_URL}}/catalog/validate -H "Authorization: Bearer {{API_KEY}}"
 ```
 
-After the knowledge expansion + Phase 19 savings slices the response should report:
+After the knowledge expansion + Phase 19 savings and foundation slices the response should report:
 
 ```json
-{ "success": true, "data": { "valid": true, "data_areas": 13, "domains": 7, "capabilities": 9, "queries": 9 }, "error": null }
+{ "success": true, "data": { "valid": true, "data_areas": 13, "domains": 7, "capabilities": 11, "queries": 11 }, "error": null }
 ```
 
 If counts drop, a YAML file is failing to parse — check `RUST_LOG=debug` for the load error.
@@ -168,7 +168,7 @@ API key must include the matching monthly top-N capability in `allowed_capabilit
 | H1 | "Largest deposit for each month from January to September 2026" | `matched` | `savings_deposit_monthly_top_n` | `limit` defaults to 1 (one row per month) — 9 result rows. |
 | H2 | "Top 3 deposits per month this year" | `matched` | `savings_deposit_monthly_top_n` | `limit=3`, range = Jan 1 to today. |
 | H3 | "Setoran terbesar setiap bulan tahun ini" | `matched` | `savings_deposit_monthly_top_n` | ID synonyms hit; default limit 1. |
-| H4 | API key with `can_view_pii=false` runs H1 | `unsupported` | n/a | `planner::evaluate_policy` gates `output_mode.ends_with("top_n")` and denies when `client_display_name (pii)` would be exposed without `can_view_pii`. |
+| H4 | API key with `can_view_pii=false` runs H1 | `unsupported` | n/a | `planner::evaluate_policy` gates selected query output fields and denies when `client_display_name (pii)` would be exposed without `can_view_pii`. |
 | H5 | "Top withdrawals per month this month" | `matched` | `savings_withdrawal_monthly_top_n` | Mirrors deposit monthly top-N with `transaction_type_enum = 2`. |
 | H6 | "Monthly withdrawal breakdown this month" | `matched` | `savings_withdrawal_monthly_breakdown` | Mirrors deposit monthly breakdown with withdrawal metrics. |
 

@@ -14,6 +14,26 @@ pub struct KnowledgeCatalog {
     pub queries: Vec<QueryKnowledge>,
     pub policies: Vec<GenericKnowledge>,
     pub responses: Vec<GenericKnowledge>,
+    pub classification: ClassificationPolicy,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClassificationPolicy {
+    pub min_gap: f32,
+    pub min_floor: f32,
+    pub others_key: String,
+    pub others_label: String,
+}
+
+impl Default for ClassificationPolicy {
+    fn default() -> Self {
+        Self {
+            min_gap: 0.05,
+            min_floor: 0.40,
+            others_key: "other_activity".to_string(),
+            others_label: "Something else — let me describe it differently".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -96,6 +116,12 @@ pub struct CapabilityKnowledge {
     pub domain: String,
     pub query_id: String,
     pub output_mode: String,
+
+    #[serde(default)]
+    pub display_name: Option<String>,
+
+    #[serde(default)]
+    pub description: Option<String>,
 
     #[serde(default)]
     pub data_areas: Vec<String>,

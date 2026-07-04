@@ -10,6 +10,8 @@ concepts:
     synonyms: [client, customer, member, account holder]
 supported_intents:
   - client-owned savings reporting
+  - client lifecycle summary
+  - active pending and closed client counts by authorized office scope
 unsupported_intents:
   - identity document reporting
   - address-level reporting

@@ -8,6 +8,8 @@ templates:
   missing_office_scope: "Which authorized office scope should this report use?"
   ambiguous_output_mode: "Do you want a combined total, transaction list, or period breakdown?"
   ambiguous_savings_deposit: "Do you want total deposits or the largest deposit transactions?"
+  ambiguous_activity_report: "Which report would you like? Reply with the option number, or choose Others to describe it in your own words."
+  others_prompt: "Please describe what you would like to know."
 rules:
   - Clarification must continue the same chat job.
   - Do not create a new job for clarification answers.

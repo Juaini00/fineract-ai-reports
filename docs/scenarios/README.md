@@ -44,9 +44,10 @@ JOB_ID=<set after 05-chat-session-and-job>
 
 The catalog now covers more than savings. New scenario expectations (re-run after `POST /vector-index/rebuild`):
 
-- `03`: `data_areas=13, domains=7, capabilities=9, queries=9` after Phase 19 savings slices.
-- `04`: `document_count=65` after indexing all loaded catalog layers. Each domain doc is **wider** now — `DomainKnowledge` deserializes `display_name`, `description`, and `concepts` (with `synonyms`); `build_domain_document` flattens all of them into `retrieval_text`. Re-embed via `POST /vector-index/rebuild` to pick up the new content hash.
+- `03`: `data_areas=13, domains=7, capabilities=11, queries=11` after Phase 19 savings plus organization/client foundation summaries.
+- `04`: `document_count=72` after indexing all loaded catalog layers. Each domain doc is **wider** now — `DomainKnowledge` deserializes `display_name`, `description`, and `concepts` (with `synonyms`); `build_domain_document` flattens all of them into `retrieval_text`. Re-embed via `POST /vector-index/rebuild` to pick up the new content hash.
 - `05` Top-N: result rows now include `client_id` + `client_display_name` (LEFT JOIN m_client; `client_display_name` is `pii` in the output contract).
+- Organization/client foundation capabilities are now approved: `organization_office_summary`, `client_lifecycle_summary`.
 - `06` section E: deferred-domain retrieval is visible in candidates and off-domain override returns `unsupported` for the documented loan/accounting/group-center prompts.
 - `08` (new): breadth + multilingual probe — every domain plus Bahasa Indonesia synonym hits. Includes section F for the new withdrawal capabilities.
 

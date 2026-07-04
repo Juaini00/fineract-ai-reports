@@ -1,0 +1,35 @@
+id: organization_office_summary
+status: approved_mvp
+domain: organization
+data_areas:
+  - organization_foundation
+required_api_capability: organization_office_summary
+query_id: organization.office_summary
+metrics:
+  - organization.office_count
+  - organization.active_staff_count
+output_mode: summary
+examples:
+  - Show office summary.
+  - How many offices are in my authorized scope?
+  - Show active staff count for my offices.
+required_parameters: []
+optional_parameters:
+  - office_ids
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  snapshot_only: true
+pii:
+  returns_pii: false
+cost_class: low
+clarification:
+  missing_parameters: []
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: no_pii_output
+    rule: query output fields must not expose staff identity.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.

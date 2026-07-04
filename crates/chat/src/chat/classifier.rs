@@ -2,6 +2,57 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub const OTHER_ACTIVITY_CAPABILITY: &str = "other_activity";
+
+/// Append an "Others" escape-hatch option so users can decline all suggestions
+/// and describe their intent in their own words.
+pub fn append_others_option(
+    mut options: Vec<ClarificationOption>,
+    others_label: &str,
+) -> Vec<ClarificationOption> {
+    if !options
+        .iter()
+        .any(|opt| opt.capability == OTHER_ACTIVITY_CAPABILITY)
+    {
+        options.push(ClarificationOption {
+            label: others_label.to_string(),
+            capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+            output_mode: None,
+        });
+    }
+    options
+}
+
+/// Pure decision function for gap-based classifier choice. Given top-N
+/// candidate scores (sorted DESC) and matching capability ids, decide whether
+/// to Match top1, Clarify with options, or return Unsupported.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum DecideOutcome {
+    Match { capability: String },
+    Clarify,
+    Unsupported,
+}
+
+pub fn decide_from_scores(
+    policy: &crate::knowledge::model::ClassificationPolicy,
+    sorted_scores: &[f32],
+    sorted_capabilities: &[&str],
+) -> DecideOutcome {
+    let top = sorted_scores.first().copied().unwrap_or(0.0);
+    if top < policy.min_floor {
+        return DecideOutcome::Unsupported;
+    }
+    let second = sorted_scores.get(1).copied().unwrap_or(0.0);
+    if (top - second) >= policy.min_gap
+        && let Some(cap) = sorted_capabilities.first()
+    {
+        return DecideOutcome::Match {
+            capability: (*cap).to_string(),
+        };
+    }
+    DecideOutcome::Clarify
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassificationOutcome {
@@ -49,6 +100,20 @@ pub fn classify_clarification_response(
 ) -> ClassificationResult {
     let normalized = response.to_lowercase();
     if let Some(option) = selected_option(original, &normalized) {
+        if option.capability == OTHER_ACTIVITY_CAPABILITY {
+            return ClassificationResult {
+                outcome: ClassificationOutcome::ClarificationRequired,
+                domain: original.domain.clone(),
+                capability: None,
+                confidence: 0.6,
+                params: original.params.clone(),
+                clarification: Some("Please describe what you would like to know.".to_string()),
+                options: original.options.clone(),
+                source: Some("clarification_other_selected".to_string()),
+                candidates: original.candidates.clone(),
+            };
+        }
+
         let mut params = original.params.clone();
         if option_needs_limit(option) && params.get("limit").is_none() {
             params["limit"] = json!(limit_from_message(&normalized).unwrap_or_else(|| {
@@ -108,7 +173,7 @@ pub fn classify_retrieved_capability(
     // `top_n` (atomic) and `monthly_top_n` (per-month) both need a `limit`
     // parameter. Defaults: 10 for atomic top_n, 1 for monthly_top_n (one row per
     // month unless the user asks for top-N per month).
-    if output_mode.ends_with("top_n") {
+    if output_mode.ends_with("top_n") || output_mode == "list" {
         let default_limit = if output_mode == "monthly_top_n" {
             1
         } else {
@@ -172,14 +237,90 @@ fn selected_option<'a>(
             .and_then(|index| original.options.get(index));
     }
 
-    original.options.iter().find(|option| {
+    if let Some(option) = original.options.iter().find(|option| {
         let capability = option.capability.to_lowercase();
         let label = option.label.to_lowercase();
         normalized_response.contains(&capability)
             || normalized_response.contains(&label)
             || label.contains(normalized_response)
             || tokens_match(normalized_response, &label)
-    })
+    }) {
+        return Some(option);
+    }
+
+    original
+        .options
+        .iter()
+        .fold(None, |best: Option<(&ClarificationOption, i32)>, option| {
+            let score = option_score(option, normalized_response);
+            if score <= 0 {
+                return best;
+            }
+            match best {
+                Some((_, best_score)) if best_score >= score => best,
+                _ => Some((option, score)),
+            }
+        })
+        .map(|(option, _)| option)
+}
+
+fn option_score(option: &ClarificationOption, response: &str) -> i32 {
+    let mut score = 0;
+    let tokens = comparable_tokens(response);
+    let capability = option.capability.as_str();
+    let output_mode = option.output_mode.as_deref();
+
+    if output_mode.is_some_and(|mode| mode.ends_with("top_n"))
+        && has_any_token(
+            &tokens,
+            &["largest", "biggest", "top", "max", "maximum", "highest"],
+        )
+    {
+        score += 5;
+    }
+    if output_mode.is_some_and(|mode| mode == "list")
+        && (has_any_token(
+            &tokens,
+            &["all", "list", "activity", "activities", "transaction"],
+        ) || tokens
+            .iter()
+            .any(|token| token.starts_with("activ") || token.starts_with("actic")))
+    {
+        score += 8;
+    }
+    if output_mode.is_some_and(|mode| mode == "total" || mode == "monthly_breakdown")
+        && has_any_token(&tokens, &["total", "sum", "aggregate", "overall"])
+    {
+        score += 5;
+    }
+    if capability.contains("deposit") && has_any_token(&tokens, &["deposit", "deposits", "setoran"])
+    {
+        score += 3;
+    }
+    if capability.contains("withdrawal")
+        && has_any_token(&tokens, &["withdrawal", "withdrawals", "withdraw", "tarik"])
+    {
+        score += 3;
+    }
+    if capability == OTHER_ACTIVITY_CAPABILITY {
+        if has_any_token(&tokens, &["other", "others"]) || response.contains("something else") {
+            score += 4;
+        }
+        if has_any_token(
+            &tokens,
+            &["largest", "total", "deposit", "withdrawal", "withdraw"],
+        ) {
+            score -= 3;
+        }
+    }
+
+    score
+}
+
+fn has_any_token(tokens: &[String], needles: &[&str]) -> bool {
+    tokens
+        .iter()
+        .any(|token| needles.iter().any(|needle| token == needle))
 }
 
 fn tokens_match(response: &str, label: &str) -> bool {
@@ -205,7 +346,7 @@ fn option_needs_limit(option: &ClarificationOption) -> bool {
     option
         .output_mode
         .as_deref()
-        .is_some_and(|mode| mode.ends_with("top_n"))
+        .is_some_and(|mode| mode.ends_with("top_n") || mode == "list")
 }
 
 fn default_limit_for_output_mode(output_mode: Option<&str>) -> u32 {

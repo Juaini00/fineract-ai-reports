@@ -8,6 +8,8 @@ fn capability_option_label_uses_requested_period_not_catalog_example() {
         domain: "savings".to_string(),
         query_id: "savings.deposit_total".to_string(),
         output_mode: "total".to_string(),
+        display_name: None,
+        description: None,
         data_areas: Vec::new(),
         metrics: Vec::new(),
         examples: vec!["What is the total deposit this month?".to_string()],
@@ -19,4 +21,18 @@ fn capability_option_label_uses_requested_period_not_catalog_example() {
         capability_option_label(&capability, "Show customer savings activity this week"),
         "Total deposit this week"
     );
+}
+
+#[test]
+fn generic_savings_activity_prompt_is_not_deterministic_list_request() {
+    assert!(!is_savings_activity_request(
+        "Show customer savings activity this week"
+    ));
+}
+
+#[test]
+fn explicit_savings_transactions_prompt_is_deterministic_list_request() {
+    assert!(is_savings_activity_request(
+        "List savings transactions this week"
+    ));
 }

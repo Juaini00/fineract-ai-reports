@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::chat::classifier::{
     ClarificationOption, ClassificationCandidate, ClassificationOutcome, ClassificationResult,
-    clarify_retrieved_capabilities, classify_clarification_response, classify_retrieved_capability,
+    OTHER_ACTIVITY_CAPABILITY, clarify_retrieved_capabilities, classify_clarification_response,
+    classify_retrieved_capability,
 };
 use crate::chat::executor::execute_plan;
 use crate::chat::formatter::format_report_response;
@@ -233,6 +234,10 @@ impl JobService {
             return unsupported_result("no_allowed_capabilities", Vec::new());
         }
 
+        if let Some(result) = self.classify_savings_activity_list(message, today, client) {
+            return result;
+        }
+
         match self.embedding_client.embed_query(message).await {
             Ok(embedding) => match self
                 .knowledge
@@ -288,6 +293,39 @@ impl JobService {
             .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
         self.llm_clarification_fallback(message, today, result)
             .await
+    }
+
+    fn classify_savings_activity_list(
+        &self,
+        message: &str,
+        today: chrono::NaiveDate,
+        client: &ClientContext,
+    ) -> Option<ClassificationResult> {
+        if !is_savings_activity_request(message) {
+            return None;
+        }
+        let capability = self.catalog_capability("savings_activity_list")?;
+        if !client
+            .allowed_capabilities
+            .iter()
+            .any(|allowed| allowed == &capability.id)
+        {
+            return None;
+        }
+
+        Some(classify_retrieved_capability(
+            message,
+            today,
+            &capability.domain,
+            &capability.id,
+            &capability.output_mode,
+            0.95,
+            vec![ClassificationCandidate {
+                capability: capability.id.clone(),
+                confidence: 0.95,
+                source_type: Some("deterministic".to_string()),
+            }],
+        ))
     }
 
     async fn llm_clarification_fallback(
@@ -423,13 +461,10 @@ impl JobService {
         allowed_capabilities: &[String],
         candidates: &[RetrievedKnowledgeCandidate],
     ) -> Option<ClassificationResult> {
+        use crate::chat::classifier::{DecideOutcome, append_others_option, decide_from_scores};
+
         let top = candidates.first()?;
         let top_capability = self.catalog_capability_for_candidate(top)?;
-        let confidence = vector_confidence(top.distance);
-
-        if confidence < 0.40 {
-            return None;
-        }
 
         let classification_candidates = candidates
             .iter()
@@ -444,40 +479,56 @@ impl JobService {
             })
             .collect::<Vec<_>>();
 
-        let close_candidates = candidates
+        let sorted_scores: Vec<f32> = classification_candidates
             .iter()
-            .filter(|candidate| vector_confidence(candidate.distance) >= confidence - 0.05)
-            .filter_map(|candidate| self.catalog_capability_for_candidate(candidate))
-            .collect::<Vec<_>>();
+            .map(|c| c.confidence)
+            .collect();
+        let sorted_ids: Vec<&str> = classification_candidates
+            .iter()
+            .map(|c| c.capability.as_str())
+            .collect();
 
-        if close_candidates.len() > 1 || confidence < 0.55 {
-            let options = if is_activity_request(message) {
-                self.activity_options(message, &top_capability.domain, allowed_capabilities)
-            } else {
-                close_candidates
-                    .into_iter()
-                    .map(|capability| capability_option(capability, message))
-                    .collect::<Vec<_>>()
-            };
-            return Some(clarify_retrieved_capabilities(
-                message,
-                today,
-                Some(top_capability.domain.clone()),
-                options,
-                confidence,
-                classification_candidates,
-            ));
+        let policy = &self.catalog.classification;
+        match decide_from_scores(policy, &sorted_scores, &sorted_ids) {
+            DecideOutcome::Unsupported => None,
+            DecideOutcome::Match { capability } => {
+                let capability = self.catalog_capability(&capability)?;
+                let confidence = sorted_scores.first().copied().unwrap_or(0.0);
+                Some(classify_retrieved_capability(
+                    message,
+                    today,
+                    &capability.domain,
+                    &capability.id,
+                    &capability.output_mode,
+                    confidence,
+                    classification_candidates,
+                ))
+            }
+            DecideOutcome::Clarify => {
+                let close_capabilities = candidates
+                    .iter()
+                    .filter_map(|candidate| self.catalog_capability_for_candidate(candidate))
+                    .collect::<Vec<_>>();
+                let mut options = if is_activity_request(message) {
+                    self.activity_options(message, &top_capability.domain, allowed_capabilities)
+                } else {
+                    close_capabilities
+                        .into_iter()
+                        .map(|capability| capability_option(capability, message))
+                        .collect::<Vec<_>>()
+                };
+                options = append_others_option(options, &policy.others_label);
+                let confidence = sorted_scores.first().copied().unwrap_or(0.0);
+                Some(clarify_retrieved_capabilities(
+                    message,
+                    today,
+                    Some(top_capability.domain.clone()),
+                    options,
+                    confidence,
+                    classification_candidates,
+                ))
+            }
         }
-
-        Some(classify_retrieved_capability(
-            message,
-            today,
-            &top_capability.domain,
-            &top_capability.id,
-            &top_capability.output_mode,
-            confidence,
-            classification_candidates,
-        ))
     }
 
     fn catalog_capability(&self, capability_id: &str) -> Option<&CapabilityKnowledge> {
@@ -515,10 +566,11 @@ impl JobService {
         ) {
             ["monthly_breakdown", "monthly_top_n"].as_slice()
         } else {
-            ["total", "top_n"].as_slice()
+            ["list", "total", "top_n"].as_slice()
         };
 
-        self.catalog
+        let mut options = self
+            .catalog
             .capabilities
             .iter()
             .filter(|capability| {
@@ -528,7 +580,10 @@ impl JobService {
                     && allowed_capabilities.iter().any(|id| id == &capability.id)
             })
             .map(|capability| capability_option(capability, message))
-            .collect()
+            .collect::<Vec<_>>();
+
+        options.push(other_activity_option(message));
+        options
     }
 
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
@@ -564,7 +619,33 @@ impl JobService {
             .get("classification")
             .and_then(|value| serde_json::from_value::<ClassificationResult>(value.clone()).ok())
         {
-            let classification = classify_clarification_response(&original, &response.content);
+            let mut classification = self
+                .classify_savings_activity_list(
+                    &response.content,
+                    Utc::now().date_naive(),
+                    &input.client,
+                )
+                .unwrap_or_else(|| classify_clarification_response(&original, &response.content));
+
+            // Semantic principle: the user's reply is a natural-language
+            // statement of intent, not an ID lookup. If they didn't pick a
+            // listed option (numeric, label, or capability id) — regardless of
+            // whether an Others option was offered or not — treat the reply as
+            // a fresh prompt and run the full semantic retrieval pipeline over
+            // it. Detection is by structured source token, not by matching the
+            // human-facing clarification text.
+            let source = classification.source.as_deref().unwrap_or("");
+            let picked_a_listed_option = matches!(
+                source,
+                "clarification_option" | "clarification_other_selected"
+            );
+            let is_clarification =
+                classification.outcome == ClassificationOutcome::ClarificationRequired;
+            if is_clarification && !picked_a_listed_option {
+                classification = self
+                    .classify_with_retrieval(&response.content, &input.client)
+                    .await;
+            }
             let execution_plan = build_execution_plan(&classification, &self.catalog);
             let policy_decision =
                 evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
@@ -827,6 +908,12 @@ fn is_activity_request(message: &str) -> bool {
     )
 }
 
+fn is_savings_activity_request(message: &str) -> bool {
+    let message = message.to_lowercase();
+    contains_any_local(&message, &["saving", "savings"])
+        && contains_any_local(&message, &["transaction", "transactions"])
+}
+
 fn capability_option(capability: &CapabilityKnowledge, message: &str) -> ClarificationOption {
     ClarificationOption {
         label: capability_option_label(capability, message),
@@ -835,10 +922,19 @@ fn capability_option(capability: &CapabilityKnowledge, message: &str) -> Clarifi
     }
 }
 
+fn other_activity_option(message: &str) -> ClarificationOption {
+    ClarificationOption {
+        label: format!("Other activity{}", period_label(message)),
+        capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+        output_mode: None,
+    }
+}
+
 fn capability_option_label(capability: &CapabilityKnowledge, message: &str) -> String {
     let format = match capability.output_mode.as_str() {
         "total" => "Total",
         "top_n" => "Largest",
+        "list" => "List",
         "monthly_breakdown" => "Monthly total",
         "monthly_top_n" => "Monthly largest",
         _ => return capability.id.clone(),
@@ -859,6 +955,7 @@ fn capability_subject(capability: &CapabilityKnowledge) -> String {
         .or_else(|| without_domain.strip_suffix("_monthly_top_n"))
         .or_else(|| without_domain.strip_suffix("_top_n"))
         .or_else(|| without_domain.strip_suffix("_total"))
+        .or_else(|| without_domain.strip_suffix("_list"))
         .unwrap_or(without_domain);
 
     without_mode.replace('_', " ")

@@ -55,9 +55,9 @@ WHERE ... AND t.office_id = ANY($3::bigint[])
 ### Compare with full-scope key
 Same question with `{{API_KEY}}` (offices `[1, 2, 3]`) should return a larger total only when offices 2 or 3 have matching rows for the requested date window. If local data has matching rows only in office 1, verify the scope through `state_json.policy_decision.office_ids` instead.
 
-## C. PII flag (placeholder)
+## C. PII flag
 
-`can_view_pii: false` is persisted and queryable. PII-aware response masking is **deferred** to Phase 16 expansion — current templates do not yet expose PII fields, so this is a latent guarantee, not an observed mask.
+`can_view_pii: false` is persisted and queryable. Queries with `pii` output fields are blocked by policy before execution unless the API key has `can_view_pii: true`; for allowed PII jobs, the formatter still receives the policy decision and omits PII fields when access is false.
 
 ## D. Job ownership
 

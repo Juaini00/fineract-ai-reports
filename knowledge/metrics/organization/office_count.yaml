@@ -1,0 +1,24 @@
+id: organization.office_count
+domain: organization
+status: approved_mvp
+description: Count of offices in the authorized office scope.
+data_areas:
+  - organization_foundation
+source_table: m_office
+source_columns:
+  - id
+  - parent_id
+  - opening_date
+expression: COUNT(m_office.id)
+filters:
+  - m_office.id constrained to authorized office_ids
+grouping_compatible:
+  - parent_id
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by organization_foundation data scope.
+  - id: office_scope_required
+    rule: metric must only count authorized offices.
+  - id: no_pii_output
+    rule: metric must not expose staff or client identity.

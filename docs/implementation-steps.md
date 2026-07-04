@@ -1133,7 +1133,7 @@ Goal: add more reporting capabilities after MVP.
 Current status:
 
 ```text
-PARTIALLY DONE (slices 1 + 2 + 3 + 4 + 5 + withdrawal monthly mirrors)
+PARTIALLY DONE (savings matrix + organization/client foundation summaries)
 
 Slice 1 — withdrawal capabilities:
 savings_withdrawal_total + savings_withdrawal_top_n capability + query YAML.
@@ -1144,18 +1144,15 @@ Slice 2 — monthly breakdown:
 savings_deposit_monthly_breakdown capability + query YAML.
 queries/savings/deposit_monthly_breakdown.sql (GROUP BY date_trunc('month', transaction_date)).
 OUTPUT_MODES extended with "monthly_breakdown".
-formatter::format_monthly_breakdown emits a multi-line "Savings deposit by month (N month(s))" template, capped at 24 rows with "... and N more month(s)." overflow.
-
-executor approved_sql() match arms updated for all three new query ids.
+Generic catalog-driven formatter renders declared output fields and labels from response catalog.
+Executor resolves SQL from QueryKnowledge.sql_file under queries/; no query-id match arms are required.
 
 Routing: vector retrieval picks the right capability via embedding distance (no classifier
 change needed). classify_retrieved_capability is generic on output_mode — top_n adds limit,
-total and monthly_breakdown only need from_date/to_date. PII gate in planner is keyed on
-output_mode == "top_n", so monthly_breakdown (aggregate) bypasses PII guard correctly.
+total and monthly_breakdown only need from_date/to_date. PII gate in planner is derived from
+the selected query output_fields sensitivity, not output_mode naming.
 
-Lexical fallback in classifier.rs still gates on "deposit" — withdrawal queries during
-embedding outage will degrade to unsupported / clarification. ponytail: expand classifier
-keyword list when vector outage is a real concern.
+Local savings keyword classifier was removed; runtime capability selection comes from vector/catalog retrieval plus approved clarification options.
 
 Slice 3 — date-range parser upgrade (classifier.rs::date_range):
 Added: yesterday/kemarin, this year / tahun ini / ytd / year-to-date, last year / tahun lalu,
@@ -1174,9 +1171,8 @@ Validator: SQL safety check now accepts queries that start with WITH (CTE) in ad
 Validator: limit-bound check now accepts ROW_NUMBER() / RANK() as alternative to trailing LIMIT.
 Classifier classify_retrieved_capability now treats any output_mode ending in "top_n" as the
 top_n shape (adds `limit` param); monthly_top_n default limit is 1, atomic top_n stays at 10.
-Planner PII gate widened: ensure_pii_allowed fires for any output_mode ending in "top_n",
-so monthly_top_n also requires can_view_pii when client identity is included.
-formatter::format_monthly_top_n groups consecutive rows by month, caps at 120 total rows.
+Planner PII gate checks selected query output field sensitivity, so monthly_top_n requires can_view_pii when client identity is included.
+Generic formatter renders monthly_top_n rows from output contract fields.
 
 Slice 5 — snapshot balance summary:
 savings_balance_summary capability + query YAML.
@@ -1187,14 +1183,20 @@ Validator: approved capability with output_mode == "summary" may declare empty r
 (no time/limit/etc. user inputs needed; office scope is implicit from API key).
 Classifier classify_retrieved_capability skips date_range for output_mode == "summary".
 savings.account_balance metric flipped to approved_mvp.
-formatter template emits "Active client-owned savings portfolio: N account(s). Total ... Average ... Largest ...".
+Generic formatter renders the summary from output contract fields and response labels.
 
 Withdrawal monthly mirrors:
-savings_withdrawal_monthly_breakdown capability + query YAML + SQL binding + formatter support.
-savings_withdrawal_monthly_top_n capability + query YAML + SQL binding + formatter support.
+savings_withdrawal_monthly_breakdown capability + query YAML + SQL file + formatter support.
+savings_withdrawal_monthly_top_n capability + query YAML + SQL file + formatter support.
 queries/savings/withdrawal_monthly_breakdown.sql and withdrawal_monthly_top_n.sql mirror deposit monthly slices with transaction_type_enum=2.
 Retrieval classification now maps query source rows back to owning capability ids before planning.
 Postman-derived runtime matrix passed all 9 approved savings capabilities on 2026-07-02.
+
+Organization/client foundation summaries:
+organization_office_summary capability + query YAML + queries/organization/office_summary.sql.
+client_lifecycle_summary capability + query YAML + queries/client/lifecycle_summary.sql.
+Metrics added: organization.office_count, organization.active_staff_count, client.lifecycle_count.
+Both SQL files were prepared/executed against FINERACT_DATABASE_URL locally and return non-PII aggregate output only.
 
 Still pending:
 group-owned savings balance summary (requires promoting group_center_foundation out of conditional).
