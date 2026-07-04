@@ -43,6 +43,11 @@ const CAPS: &[&str] = &[
     "savings_deposit_top_n",
     "savings_deposit_monthly_breakdown",
     "savings_withdrawal_total",
+    // ponytail: include activity_list so retrieval can surface the intent-appropriate
+    // capability for "activity" prompts; without it, retrieval returns two deposit
+    // variants whose gap crosses min_gap and the classifier wrongly matches instead
+    // of clarifying — a semantic gap the test is meant to guard against.
+    "savings_activity_list",
 ];
 
 #[tokio::test(flavor = "multi_thread")]
