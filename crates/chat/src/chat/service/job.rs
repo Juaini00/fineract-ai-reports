@@ -234,6 +234,10 @@ impl JobService {
             return unsupported_result("no_allowed_capabilities", Vec::new());
         }
 
+        if let Some(result) = self.classify_savings_activity_list(message, today, client) {
+            return result;
+        }
+
         match self.embedding_client.embed_query(message).await {
             Ok(embedding) => match self
                 .knowledge
@@ -289,6 +293,39 @@ impl JobService {
             .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
         self.llm_clarification_fallback(message, today, result)
             .await
+    }
+
+    fn classify_savings_activity_list(
+        &self,
+        message: &str,
+        today: chrono::NaiveDate,
+        client: &ClientContext,
+    ) -> Option<ClassificationResult> {
+        if !is_savings_activity_request(message) {
+            return None;
+        }
+        let capability = self.catalog_capability("savings_activity_list")?;
+        if !client
+            .allowed_capabilities
+            .iter()
+            .any(|allowed| allowed == &capability.id)
+        {
+            return None;
+        }
+
+        Some(classify_retrieved_capability(
+            message,
+            today,
+            &capability.domain,
+            &capability.id,
+            &capability.output_mode,
+            0.95,
+            vec![ClassificationCandidate {
+                capability: capability.id.clone(),
+                confidence: 0.95,
+                source_type: Some("deterministic".to_string()),
+            }],
+        ))
     }
 
     async fn llm_clarification_fallback(
@@ -529,7 +566,7 @@ impl JobService {
         ) {
             ["monthly_breakdown", "monthly_top_n"].as_slice()
         } else {
-            ["total", "top_n"].as_slice()
+            ["list", "total", "top_n"].as_slice()
         };
 
         let mut options = self
@@ -582,7 +619,13 @@ impl JobService {
             .get("classification")
             .and_then(|value| serde_json::from_value::<ClassificationResult>(value.clone()).ok())
         {
-            let classification = classify_clarification_response(&original, &response.content);
+            let classification = self
+                .classify_savings_activity_list(
+                    &response.content,
+                    Utc::now().date_naive(),
+                    &input.client,
+                )
+                .unwrap_or_else(|| classify_clarification_response(&original, &response.content));
             let execution_plan = build_execution_plan(&classification, &self.catalog);
             let policy_decision =
                 evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
@@ -845,6 +888,21 @@ fn is_activity_request(message: &str) -> bool {
     )
 }
 
+fn is_savings_activity_request(message: &str) -> bool {
+    let message = message.to_lowercase();
+    contains_any_local(&message, &["saving", "savings"])
+        && contains_any_local(
+            &message,
+            &[
+                "activity",
+                "activities",
+                "acticity",
+                "transaction",
+                "transactions",
+            ],
+        )
+}
+
 fn capability_option(capability: &CapabilityKnowledge, message: &str) -> ClarificationOption {
     ClarificationOption {
         label: capability_option_label(capability, message),
@@ -865,6 +923,7 @@ fn capability_option_label(capability: &CapabilityKnowledge, message: &str) -> S
     let format = match capability.output_mode.as_str() {
         "total" => "Total",
         "top_n" => "Largest",
+        "list" => "List",
         "monthly_breakdown" => "Monthly total",
         "monthly_top_n" => "Monthly largest",
         _ => return capability.id.clone(),
@@ -885,6 +944,7 @@ fn capability_subject(capability: &CapabilityKnowledge) -> String {
         .or_else(|| without_domain.strip_suffix("_monthly_top_n"))
         .or_else(|| without_domain.strip_suffix("_top_n"))
         .or_else(|| without_domain.strip_suffix("_total"))
+        .or_else(|| without_domain.strip_suffix("_list"))
         .unwrap_or(without_domain);
 
     without_mode.replace('_', " ")

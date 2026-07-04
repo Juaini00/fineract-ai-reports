@@ -12,6 +12,7 @@ field_labels:
   deposit_count: Deposit count
   transaction_date: Transaction date
   amount: Amount
+  transaction_type: Transaction type
   currency_code: Currency
   office_name: Office
   product_name: Product

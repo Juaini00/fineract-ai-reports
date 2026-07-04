@@ -257,16 +257,26 @@ fn classifies_numeric_clarification_option() {
 }
 
 #[test]
-fn classifies_other_activity_clarification_prompts_for_free_text() {
+fn classifies_all_activity_clarification_by_meaning() {
     let original = clarify_retrieved_capabilities(
         "Show customer activity this week",
         today(),
         Some("savings".to_string()),
         vec![
             ClarificationOption {
+                label: "List activity this week".to_string(),
+                capability: "savings_activity_list".to_string(),
+                output_mode: Some("list".to_string()),
+            },
+            ClarificationOption {
                 label: "Largest deposit this week".to_string(),
                 capability: "savings_deposit_top_n".to_string(),
                 output_mode: Some("top_n".to_string()),
+            },
+            ClarificationOption {
+                label: "Total deposit this week".to_string(),
+                capability: "savings_deposit_total".to_string(),
+                output_mode: Some("total".to_string()),
             },
             ClarificationOption {
                 label: "Other activity this week".to_string(),
@@ -280,13 +290,42 @@ fn classifies_other_activity_clarification_prompts_for_free_text() {
 
     let result = classify_clarification_response(&original, "all acticity for this week");
 
-    assert_eq!(result.outcome, ClassificationOutcome::ClarificationRequired);
-    assert_eq!(
-        result.source.as_deref(),
-        Some("clarification_other_selected")
+    assert_eq!(result.outcome, ClassificationOutcome::Matched);
+    assert_eq!(result.capability.as_deref(), Some("savings_activity_list"));
+}
+
+#[test]
+fn classifies_explicit_other_then_free_text_with_original_options() {
+    let original = clarify_retrieved_capabilities(
+        "Show customer activity this week",
+        today(),
+        Some("savings".to_string()),
+        vec![
+            ClarificationOption {
+                label: "List activity this week".to_string(),
+                capability: "savings_activity_list".to_string(),
+                output_mode: Some("list".to_string()),
+            },
+            ClarificationOption {
+                label: "Total deposit this week".to_string(),
+                capability: "savings_deposit_total".to_string(),
+                output_mode: Some("total".to_string()),
+            },
+            ClarificationOption {
+                label: "Other activity this week".to_string(),
+                capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+                output_mode: None,
+            },
+        ],
+        0.7,
+        Vec::new(),
     );
-    assert!(result.options.is_empty());
-    assert!(result.clarification.is_some());
+
+    let other = classify_clarification_response(&original, "other");
+    let result = classify_clarification_response(&other, "all acticity for this week");
+
+    assert_eq!(result.outcome, ClassificationOutcome::Matched);
+    assert_eq!(result.capability.as_deref(), Some("savings_activity_list"));
 }
 
 #[test]

@@ -26,6 +26,7 @@ const OUTPUT_MODES: &[&str] = &[
     "top_n",
     "monthly_breakdown",
     "monthly_top_n",
+    "list",
     "summary",
 ];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];

@@ -16,6 +16,7 @@ use uuid::Uuid;
 const POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const SCENARIO_CAPABILITIES: &[&str] = &[
+    "savings_activity_list",
     "savings_deposit_total",
     "savings_deposit_top_n",
     "savings_withdrawal_total",
@@ -121,68 +122,27 @@ async fn missing_date_range_triggers_clarification_and_continues_same_job() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn other_activity_clarification_does_not_loop() {
+async fn all_activity_request_returns_activity_list() {
     let app = spawn_app().await;
     let key = app
         .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
         .await;
 
     let job = create_job(&app, &key.raw, "Show customer savings activity this week").await;
-    let waiting = wait_for_terminal(&app, &key.raw, &job).await;
-    assert_eq!(waiting["status"], "waiting_for_user_input", "{waiting}");
-
-    let options = waiting["state_json"]["classification"]["options"]
-        .as_array()
-        .expect("clarification options");
-    assert!(
-        options
-            .iter()
-            .any(|option| option["capability"] == "other_activity"),
-        "missing other_activity option: {options:?}"
-    );
-
-    let job_id = job["job_id"].as_str().unwrap();
-    let resp = app
-        .post_json(
-            &format!("/chat/jobs/{job_id}/responses"),
-            Some(&key.raw),
-            &json!({ "message": "all acticity for this week" }),
-        )
-        .await;
-    assert_eq!(
-        resp.status(),
-        201,
-        "{}",
-        resp.text().await.unwrap_or_default()
-    );
-
-    // New contract: selecting Others keeps the job in waiting_for_user_input
-    // with source=clarification_other_selected. The wait_for_final_after_response
-    // helper predates this contract and would time out here, so we fetch once
-    // after a short delay for the pipeline to persist state.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    let final_job = app
-        .get(&format!("/chat/jobs/{job_id}"), Some(&key.raw))
-        .await;
-    let final_json: Value = final_job.json().await.unwrap();
-    let final_job = final_json["data"].clone();
-    // New contract: selecting Others prompts the user to describe intent
-    // (ClarificationRequired), not a hard fail. Accept both statuses so the
-    // test tolerates future planner tweaks that route the free-text differently.
+    let final_job = wait_for_terminal(&app, &key.raw, &job).await;
     let status = final_job["status"].as_str().unwrap_or("");
     let source = final_job["state_json"]["classification"]["source"]
         .as_str()
         .unwrap_or("");
-    assert!(
-        matches!(status, "waiting_for_user_input" | "failed"),
-        "unexpected final status {status}: {final_job}"
-    );
-    assert!(
-        matches!(
-            source,
-            "clarification_other_selected" | "clarification_other"
-        ),
-        "unexpected classification source {source}: {final_job}"
+    let capability = final_job["state_json"]["classification"]["capability"]
+        .as_str()
+        .unwrap_or("");
+    assert_eq!(status, "completed", "{final_job}");
+    assert_eq!(source, "vector", "{final_job}");
+    assert_eq!(capability, "savings_activity_list", "{final_job}");
+    assert_eq!(
+        final_job["state_json"]["execution_plan"]["output_mode"],
+        "list"
     );
 }
 

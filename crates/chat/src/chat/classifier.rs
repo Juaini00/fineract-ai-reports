@@ -108,7 +108,7 @@ pub fn classify_clarification_response(
                 confidence: 0.6,
                 params: original.params.clone(),
                 clarification: Some("Please describe what you would like to know.".to_string()),
-                options: Vec::new(),
+                options: original.options.clone(),
                 source: Some("clarification_other_selected".to_string()),
                 candidates: original.candidates.clone(),
             };
@@ -173,7 +173,7 @@ pub fn classify_retrieved_capability(
     // `top_n` (atomic) and `monthly_top_n` (per-month) both need a `limit`
     // parameter. Defaults: 10 for atomic top_n, 1 for monthly_top_n (one row per
     // month unless the user asks for top-N per month).
-    if output_mode.ends_with("top_n") {
+    if output_mode.ends_with("top_n") || output_mode == "list" {
         let default_limit = if output_mode == "monthly_top_n" {
             1
         } else {
@@ -278,6 +278,16 @@ fn option_score(option: &ClarificationOption, response: &str) -> i32 {
     {
         score += 5;
     }
+    if output_mode.is_some_and(|mode| mode == "list")
+        && (has_any_token(
+            &tokens,
+            &["all", "list", "activity", "activities", "transaction"],
+        ) || tokens
+            .iter()
+            .any(|token| token.starts_with("activ") || token.starts_with("actic")))
+    {
+        score += 8;
+    }
     if output_mode.is_some_and(|mode| mode == "total" || mode == "monthly_breakdown")
         && has_any_token(&tokens, &["total", "sum", "aggregate", "overall"])
     {
@@ -293,12 +303,7 @@ fn option_score(option: &ClarificationOption, response: &str) -> i32 {
         score += 3;
     }
     if capability == OTHER_ACTIVITY_CAPABILITY {
-        if has_any_token(&tokens, &["other", "others", "all"])
-            || tokens
-                .iter()
-                .any(|token| token.starts_with("activ") || token.starts_with("actic"))
-            || has_any_token(&tokens, &["transaction", "transactions"])
-        {
+        if has_any_token(&tokens, &["other", "others"]) || response.contains("something else") {
             score += 4;
         }
         if has_any_token(
@@ -341,7 +346,7 @@ fn option_needs_limit(option: &ClarificationOption) -> bool {
     option
         .output_mode
         .as_deref()
-        .is_some_and(|mode| mode.ends_with("top_n"))
+        .is_some_and(|mode| mode.ends_with("top_n") || mode == "list")
 }
 
 fn default_limit_for_output_mode(output_mode: Option<&str>) -> u32 {
