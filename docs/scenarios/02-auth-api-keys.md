@@ -22,7 +22,16 @@ curl -X POST {{BASE_URL}}/auth/api-keys \
     "allowed_office_ids": [1, 2, 3],
     "allowed_capabilities": [
       "savings_deposit_total",
-      "savings_deposit_top_n"
+      "savings_deposit_top_n",
+      "savings_withdrawal_total",
+      "savings_withdrawal_top_n",
+      "savings_deposit_monthly_breakdown",
+      "savings_deposit_monthly_top_n",
+      "savings_withdrawal_monthly_breakdown",
+      "savings_withdrawal_monthly_top_n",
+      "savings_balance_summary",
+      "organization_office_summary",
+      "client_lifecycle_summary"
     ],
     "can_view_pii": true
   }'
@@ -65,7 +74,7 @@ curl {{BASE_URL}}/auth/me -H "X-API-Key: {{API_KEY}}"
       "api_key_id": "key_...",
       "owner": "Antun",
       "allowed_office_ids": [1, 2, 3],
-      "allowed_capabilities": ["savings_deposit_total", "savings_deposit_top_n"],
+      "allowed_capabilities": ["savings_deposit_total", "savings_deposit_top_n", "savings_withdrawal_total", "savings_withdrawal_top_n", "savings_deposit_monthly_breakdown", "savings_deposit_monthly_top_n", "savings_withdrawal_monthly_breakdown", "savings_withdrawal_monthly_top_n", "savings_balance_summary", "organization_office_summary", "client_lifecycle_summary"],
       "can_view_pii": true
     }
   },

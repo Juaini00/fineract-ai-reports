@@ -20,6 +20,24 @@ async fn health_returns_ok() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn ready_reports_dependency_status() {
+    // Scenario 01: /ready checks app_database, fineract_database, pgvector,
+    // and redis. Redis is disabled in the harness → status "disabled" but
+    // overall still "ready".
+    let app = spawn_app().await;
+
+    let resp = app.get("/ready", None).await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["checks"]["app_database"], "ok");
+    assert_eq!(body["checks"]["fineract_database"], "ok");
+    assert_eq!(body["checks"]["pgvector"], "ok");
+    assert_eq!(body["checks"]["redis"], "disabled");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn migrations_created_expected_tables() {
     let app = spawn_app().await;
 

@@ -8,6 +8,8 @@ fn capability_option_label_uses_requested_period_not_catalog_example() {
         domain: "savings".to_string(),
         query_id: "savings.deposit_total".to_string(),
         output_mode: "total".to_string(),
+        display_name: None,
+        description: None,
         data_areas: Vec::new(),
         metrics: Vec::new(),
         examples: vec!["What is the total deposit this month?".to_string()],

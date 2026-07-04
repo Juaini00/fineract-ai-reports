@@ -1,0 +1,47 @@
+id: client.lifecycle_summary
+database: fineract
+sql_file: queries/client/lifecycle_summary.sql
+data_areas:
+  - client_foundation
+tables:
+  - m_client
+metrics:
+  - client.lifecycle_count
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+output_fields:
+  - name: client_count
+    type: bigint
+    sensitivity: public_business
+  - name: active_client_count
+    type: bigint
+    sensitivity: public_business
+  - name: pending_client_count
+    type: bigint
+    sensitivity: public_business
+  - name: closed_client_count
+    type: bigint
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  snapshot_only: true
+timeout_ms: 3000
+cost_class: low
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: office_filter_is_bound
+    rule: SQL must constrain c.office_id with authorized office_ids.
+  - id: lifecycle_enum_documented
+    rule: Query may only use client status enum values documented in fineract.enums.client_status.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: no_identity_fields
+    rule: Query must not output client names, account numbers, emails, mobile numbers, or external ids.

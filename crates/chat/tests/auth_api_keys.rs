@@ -6,6 +6,20 @@ mod common;
 use common::spawn_app;
 use serde_json::json;
 
+const SCENARIO_CAPABILITIES: &[&str] = &[
+    "savings_deposit_total",
+    "savings_deposit_top_n",
+    "savings_withdrawal_total",
+    "savings_withdrawal_top_n",
+    "savings_deposit_monthly_breakdown",
+    "savings_deposit_monthly_top_n",
+    "savings_withdrawal_monthly_breakdown",
+    "savings_withdrawal_monthly_top_n",
+    "savings_balance_summary",
+    "organization_office_summary",
+    "client_lifecycle_summary",
+];
+
 #[tokio::test(flavor = "multi_thread")]
 async fn admin_can_create_api_key_and_client_can_call_me() {
     // Arrange
@@ -13,7 +27,7 @@ async fn admin_can_create_api_key_and_client_can_call_me() {
 
     // Act
     let created = app
-        .provision_api_key(&["savings_deposit_total"], vec![1, 2], false)
+        .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
         .await;
 
     let me = app.get("/auth/me", Some(&created.raw)).await;
@@ -25,8 +39,9 @@ async fn admin_can_create_api_key_and_client_can_call_me() {
     assert_eq!(body["data"]["client"]["allowed_office_ids"], json!([1, 2]));
     assert_eq!(
         body["data"]["client"]["allowed_capabilities"],
-        json!(["savings_deposit_total"])
+        json!(SCENARIO_CAPABILITIES)
     );
+    assert_eq!(body["data"]["client"]["can_view_pii"], true);
 }
 
 #[tokio::test(flavor = "multi_thread")]

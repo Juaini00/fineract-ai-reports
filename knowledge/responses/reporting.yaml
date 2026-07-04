@@ -15,6 +15,14 @@ field_labels:
   currency_code: Currency
   office_name: Office
   product_name: Product
+  office_count: Office count
+  root_office_count: Root office count
+  oldest_opening_date: Oldest office opening date
+  active_staff_count: Active staff count
+  client_count: Client count
+  active_client_count: Active client count
+  pending_client_count: Pending client count
+  closed_client_count: Closed client count
 formatting:
   currency: ISO currency code from result when available
   dates: YYYY-MM-DD

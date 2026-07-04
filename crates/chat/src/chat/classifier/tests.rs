@@ -255,3 +255,66 @@ fn classifies_numeric_clarification_option() {
     assert_eq!(result.outcome, ClassificationOutcome::Matched);
     assert_eq!(result.capability.as_deref(), Some("savings_deposit_top_n"));
 }
+
+#[test]
+fn classifies_other_activity_clarification_as_unsupported() {
+    let original = clarify_retrieved_capabilities(
+        "Show customer activity this week",
+        today(),
+        Some("savings".to_string()),
+        vec![
+            ClarificationOption {
+                label: "Largest deposit this week".to_string(),
+                capability: "savings_deposit_top_n".to_string(),
+                output_mode: Some("top_n".to_string()),
+            },
+            ClarificationOption {
+                label: "Other activity this week".to_string(),
+                capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+                output_mode: None,
+            },
+        ],
+        0.7,
+        Vec::new(),
+    );
+
+    let result = classify_clarification_response(&original, "all acticity for this week");
+
+    assert_eq!(result.outcome, ClassificationOutcome::Unsupported);
+    assert_eq!(result.source.as_deref(), Some("clarification_other"));
+    assert!(result.options.is_empty());
+}
+
+#[test]
+fn classifies_free_text_clarification_by_closest_meaning() {
+    let original = clarify_retrieved_capabilities(
+        "Show customer activity this week",
+        today(),
+        Some("savings".to_string()),
+        vec![
+            ClarificationOption {
+                label: "Largest deposit this week".to_string(),
+                capability: "savings_deposit_top_n".to_string(),
+                output_mode: Some("top_n".to_string()),
+            },
+            ClarificationOption {
+                label: "Total deposit this week".to_string(),
+                capability: "savings_deposit_total".to_string(),
+                output_mode: Some("total".to_string()),
+            },
+            ClarificationOption {
+                label: "Other activity this week".to_string(),
+                capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+                output_mode: None,
+            },
+        ],
+        0.7,
+        Vec::new(),
+    );
+
+    let result =
+        classify_clarification_response(&original, "Maybe the largest deposit is good choice");
+
+    assert_eq!(result.outcome, ClassificationOutcome::Matched);
+    assert_eq!(result.capability.as_deref(), Some("savings_deposit_top_n"));
+}

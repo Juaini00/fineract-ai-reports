@@ -2,6 +2,8 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub const OTHER_ACTIVITY_CAPABILITY: &str = "other_activity";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassificationOutcome {
@@ -49,6 +51,23 @@ pub fn classify_clarification_response(
 ) -> ClassificationResult {
     let normalized = response.to_lowercase();
     if let Some(option) = selected_option(original, &normalized) {
+        if option.capability == OTHER_ACTIVITY_CAPABILITY {
+            return ClassificationResult {
+                outcome: ClassificationOutcome::Unsupported,
+                domain: original.domain.clone(),
+                capability: None,
+                confidence: 0.8,
+                params: original.params.clone(),
+                clarification: Some(
+                    "That activity report is not available yet. Please choose deposit, withdrawal, monthly breakdown, or largest transaction reports."
+                        .to_string(),
+                ),
+                options: Vec::new(),
+                source: Some("clarification_other".to_string()),
+                candidates: original.candidates.clone(),
+            };
+        }
+
         let mut params = original.params.clone();
         if option_needs_limit(option) && params.get("limit").is_none() {
             params["limit"] = json!(limit_from_message(&normalized).unwrap_or_else(|| {
@@ -172,14 +191,85 @@ fn selected_option<'a>(
             .and_then(|index| original.options.get(index));
     }
 
-    original.options.iter().find(|option| {
+    if let Some(option) = original.options.iter().find(|option| {
         let capability = option.capability.to_lowercase();
         let label = option.label.to_lowercase();
         normalized_response.contains(&capability)
             || normalized_response.contains(&label)
             || label.contains(normalized_response)
             || tokens_match(normalized_response, &label)
-    })
+    }) {
+        return Some(option);
+    }
+
+    original
+        .options
+        .iter()
+        .fold(None, |best: Option<(&ClarificationOption, i32)>, option| {
+            let score = option_score(option, normalized_response);
+            if score <= 0 {
+                return best;
+            }
+            match best {
+                Some((_, best_score)) if best_score >= score => best,
+                _ => Some((option, score)),
+            }
+        })
+        .map(|(option, _)| option)
+}
+
+fn option_score(option: &ClarificationOption, response: &str) -> i32 {
+    let mut score = 0;
+    let tokens = comparable_tokens(response);
+    let capability = option.capability.as_str();
+    let output_mode = option.output_mode.as_deref();
+
+    if output_mode.is_some_and(|mode| mode.ends_with("top_n"))
+        && has_any_token(
+            &tokens,
+            &["largest", "biggest", "top", "max", "maximum", "highest"],
+        )
+    {
+        score += 5;
+    }
+    if output_mode.is_some_and(|mode| mode == "total" || mode == "monthly_breakdown")
+        && has_any_token(&tokens, &["total", "sum", "aggregate", "overall"])
+    {
+        score += 5;
+    }
+    if capability.contains("deposit") && has_any_token(&tokens, &["deposit", "deposits", "setoran"])
+    {
+        score += 3;
+    }
+    if capability.contains("withdrawal")
+        && has_any_token(&tokens, &["withdrawal", "withdrawals", "withdraw", "tarik"])
+    {
+        score += 3;
+    }
+    if capability == OTHER_ACTIVITY_CAPABILITY {
+        if has_any_token(&tokens, &["other", "others", "all"])
+            || tokens
+                .iter()
+                .any(|token| token.starts_with("activ") || token.starts_with("actic"))
+            || has_any_token(&tokens, &["transaction", "transactions"])
+        {
+            score += 4;
+        }
+        if has_any_token(
+            &tokens,
+            &["largest", "total", "deposit", "withdrawal", "withdraw"],
+        ) {
+            score -= 3;
+        }
+    }
+
+    score
+}
+
+fn has_any_token(tokens: &[String], needles: &[&str]) -> bool {
+    tokens
+        .iter()
+        .any(|token| needles.iter().any(|needle| token == needle))
 }
 
 fn tokens_match(response: &str, label: &str) -> bool {

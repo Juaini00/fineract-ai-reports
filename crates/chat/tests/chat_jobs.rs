@@ -15,6 +15,12 @@ use uuid::Uuid;
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+const SCENARIO_CAPABILITIES: &[&str] = &[
+    "savings_deposit_total",
+    "savings_deposit_top_n",
+    "savings_withdrawal_total",
+    "savings_withdrawal_top_n",
+];
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_job_without_api_key_is_unauthorized() {
@@ -114,6 +120,50 @@ async fn missing_date_range_triggers_clarification_and_continues_same_job() {
     assert_eq!(got_json["data"]["id"], job1_id);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn other_activity_clarification_does_not_loop() {
+    let app = spawn_app().await;
+    let key = app
+        .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
+        .await;
+
+    let job = create_job(&app, &key.raw, "Show customer savings activity this week").await;
+    let waiting = wait_for_terminal(&app, &key.raw, &job).await;
+    assert_eq!(waiting["status"], "waiting_for_user_input", "{waiting}");
+
+    let options = waiting["state_json"]["classification"]["options"]
+        .as_array()
+        .expect("clarification options");
+    assert!(
+        options
+            .iter()
+            .any(|option| option["capability"] == "other_activity"),
+        "missing other_activity option: {options:?}"
+    );
+
+    let job_id = job["job_id"].as_str().unwrap();
+    let resp = app
+        .post_json(
+            &format!("/chat/jobs/{job_id}/responses"),
+            Some(&key.raw),
+            &json!({ "message": "all acticity for this week" }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        201,
+        "{}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let final_job = wait_for_final_after_response(&app, &key.raw, job_id).await;
+    assert_eq!(final_job["status"], "failed", "{final_job}");
+    assert_eq!(
+        final_job["state_json"]["classification"]["source"],
+        "clarification_other"
+    );
+}
+
 async fn create_job(app: &TestApp, api_key: &str, message: &str) -> Value {
     let resp = app
         .post_json("/chat/jobs", Some(api_key), &json!({ "message": message }))
@@ -147,6 +197,29 @@ async fn wait_for_terminal(app: &TestApp, api_key: &str, initial: &Value) -> Val
         }
         if Instant::now() >= deadline {
             panic!("job did not reach terminal state within {POLL_TIMEOUT:?}: {body}");
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_final_after_response(app: &TestApp, api_key: &str, job_id: &str) -> Value {
+    let deadline = Instant::now() + POLL_TIMEOUT;
+    loop {
+        let resp = app
+            .get(&format!("/chat/jobs/{job_id}"), Some(api_key))
+            .await;
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        let status = body["data"]["status"].as_str().unwrap_or("").to_string();
+
+        if !matches!(
+            status.as_str(),
+            "queued" | "running" | "waiting_for_user_input"
+        ) {
+            return body["data"].clone();
+        }
+        if Instant::now() >= deadline {
+            panic!("job did not finish clarification response within {POLL_TIMEOUT:?}: {body}");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }

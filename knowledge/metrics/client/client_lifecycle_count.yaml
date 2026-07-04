@@ -1,0 +1,24 @@
+id: client.lifecycle_count
+domain: client
+status: approved_mvp
+description: Count of clients by documented lifecycle status in authorized office scope.
+data_areas:
+  - client_foundation
+source_table: m_client
+source_columns:
+  - id
+  - status_enum
+  - office_id
+expression: COUNT(m_client.id) FILTER (WHERE m_client.status_enum = documented_status)
+filters:
+  - m_client.office_id constrained to authorized office_ids
+grouping_compatible:
+  - status_enum
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by client_foundation data scope.
+  - id: lifecycle_enum_documented
+    rule: status values must be documented in fineract.enums.client_status before use.
+  - id: no_pii_output
+    rule: client identity fields must not be output by this metric.

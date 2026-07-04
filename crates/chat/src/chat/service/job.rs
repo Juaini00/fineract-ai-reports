@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::chat::classifier::{
     ClarificationOption, ClassificationCandidate, ClassificationOutcome, ClassificationResult,
-    clarify_retrieved_capabilities, classify_clarification_response, classify_retrieved_capability,
+    OTHER_ACTIVITY_CAPABILITY, clarify_retrieved_capabilities, classify_clarification_response,
+    classify_retrieved_capability,
 };
 use crate::chat::executor::execute_plan;
 use crate::chat::formatter::format_report_response;
@@ -518,7 +519,8 @@ impl JobService {
             ["total", "top_n"].as_slice()
         };
 
-        self.catalog
+        let mut options = self
+            .catalog
             .capabilities
             .iter()
             .filter(|capability| {
@@ -528,7 +530,10 @@ impl JobService {
                     && allowed_capabilities.iter().any(|id| id == &capability.id)
             })
             .map(|capability| capability_option(capability, message))
-            .collect()
+            .collect::<Vec<_>>();
+
+        options.push(other_activity_option(message));
+        options
     }
 
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
@@ -832,6 +837,14 @@ fn capability_option(capability: &CapabilityKnowledge, message: &str) -> Clarifi
         label: capability_option_label(capability, message),
         capability: capability.id.clone(),
         output_mode: Some(capability.output_mode.clone()),
+    }
+}
+
+fn other_activity_option(message: &str) -> ClarificationOption {
+    ClarificationOption {
+        label: format!("Other activity{}", period_label(message)),
+        capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+        output_mode: None,
     }
 }
 

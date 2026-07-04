@@ -1,0 +1,22 @@
+id: organization.active_staff_count
+domain: organization
+status: approved_mvp
+description: Count of active staff assigned to authorized offices.
+data_areas:
+  - organization_foundation
+source_table: m_staff
+source_columns:
+  - id
+  - office_id
+  - is_active
+expression: COUNT(m_staff.id) FILTER (WHERE m_staff.is_active = true)
+filters:
+  - m_staff.office_id constrained by authorized office_ids through joined offices
+grouping_compatible:
+  - office_id
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by organization_foundation data scope.
+  - id: staff_identity_not_output
+    rule: staff names, emails, mobile numbers, and external ids must not be output by this metric.

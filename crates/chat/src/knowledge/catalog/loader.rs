@@ -31,6 +31,8 @@ impl KnowledgeLoader {
         let policies = self.load_yaml_dir::<GenericKnowledge>("policies")?;
         let responses = self.load_yaml_dir::<GenericKnowledge>("responses")?;
 
+        let classification = self.load_classification_policy()?;
+
         Ok(KnowledgeCatalog {
             root_path: self.root_path.clone(),
             query_path: self.query_path.clone(),
@@ -42,7 +44,21 @@ impl KnowledgeLoader {
             queries,
             policies,
             responses,
+            classification,
         })
+    }
+
+    fn load_classification_policy(&self) -> Result<crate::knowledge::model::ClassificationPolicy> {
+        use crate::knowledge::model::ClassificationPolicy;
+        let path = self.root_path.join("policies").join("classification.yaml");
+        if !path.exists() {
+            return Ok(ClassificationPolicy::default());
+        }
+        let contents =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let policy: ClassificationPolicy = serde_yaml::from_str(&contents)
+            .with_context(|| format!("parse classification policy at {}", path.display()))?;
+        Ok(policy)
     }
 
     fn load_yaml_dir<T>(&self, relative_dir: &str) -> Result<Vec<T>>

@@ -44,6 +44,30 @@ async fn validate_returns_catalog_counts_for_real_knowledge() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["success"], true);
     assert_eq!(body["data"]["valid"], true);
-    assert!(body["data"]["capabilities"].as_u64().unwrap() >= 1);
-    assert!(body["data"]["queries"].as_u64().unwrap() >= 1);
+    assert_eq!(body["data"]["data_areas"], 13);
+    assert_eq!(body["data"]["domains"], 7);
+    assert_eq!(body["data"]["capabilities"], 11);
+    assert_eq!(body["data"]["queries"], 11);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn vector_index_status_requires_authentication() {
+    let app = spawn_app().await;
+
+    let resp = app.get("/vector-index/status", None).await;
+
+    assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn vector_index_status_returns_empty_before_rebuild() {
+    let app = spawn_app().await;
+    let key = app.provision_api_key(&[], vec![1], false).await;
+
+    let resp = app.get("/vector-index/status", Some(&key.raw)).await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["status"], "empty");
 }
