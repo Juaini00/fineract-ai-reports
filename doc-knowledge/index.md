@@ -18,7 +18,7 @@ Every concept here `resource:`-links back to the source of truth. Don't inline S
 
 ## Categories
 
-- [capabilities/](./capabilities/index.md) — 9 approved MVP capabilities (all savings)
+- [capabilities/](./capabilities/index.md) — capabilities mirror. **Currently implemented:** aggregate totals, top-N transactions, and monthly breakdowns for savings deposits and withdrawals, plus a snapshot balance summary. All 9 are savings-only and cover 4 query shapes (snapshot, aggregate total, aggregate by month, top-N — with a per-month variant). Many more query shapes and domains are planned (weekly / daily / custom-bucket breakdowns, activity lists, charge outstanding, hold balance, client demographics, office directory, composite multi-metric). See `../docs/capability-coverage-matrix.md` for the full implemented-vs-planned-vs-deferred picture.
 - [queries/](./queries/index.md) — 9 approved SQL queries (1:1 with capabilities)
 - [metrics/](./metrics/index.md) — 5 savings metrics
 - [policies/](./policies/index.md) — 5 cross-cutting guards (pii, office_scope, query_safety, execution_limits, unsupported_requests)
