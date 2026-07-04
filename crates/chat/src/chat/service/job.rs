@@ -619,13 +619,33 @@ impl JobService {
             .get("classification")
             .and_then(|value| serde_json::from_value::<ClassificationResult>(value.clone()).ok())
         {
-            let classification = self
+            let mut classification = self
                 .classify_savings_activity_list(
                     &response.content,
                     Utc::now().date_naive(),
                     &input.client,
                 )
                 .unwrap_or_else(|| classify_clarification_response(&original, &response.content));
+
+            // Semantic principle: the user's reply is a natural-language
+            // statement of intent, not an ID lookup. If they didn't pick a
+            // listed option (numeric, label, or capability id) — regardless of
+            // whether an Others option was offered or not — treat the reply as
+            // a fresh prompt and run the full semantic retrieval pipeline over
+            // it. Detection is by structured source token, not by matching the
+            // human-facing clarification text.
+            let source = classification.source.as_deref().unwrap_or("");
+            let picked_a_listed_option = matches!(
+                source,
+                "clarification_option" | "clarification_other_selected"
+            );
+            let is_clarification =
+                classification.outcome == ClassificationOutcome::ClarificationRequired;
+            if is_clarification && !picked_a_listed_option {
+                classification = self
+                    .classify_with_retrieval(&response.content, &input.client)
+                    .await;
+            }
             let execution_plan = build_execution_plan(&classification, &self.catalog);
             let policy_decision =
                 evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
