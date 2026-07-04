@@ -4,6 +4,55 @@ use serde_json::{Value, json};
 
 pub const OTHER_ACTIVITY_CAPABILITY: &str = "other_activity";
 
+/// Append an "Others" escape-hatch option so users can decline all suggestions
+/// and describe their intent in their own words.
+pub fn append_others_option(
+    mut options: Vec<ClarificationOption>,
+    others_label: &str,
+) -> Vec<ClarificationOption> {
+    if !options
+        .iter()
+        .any(|opt| opt.capability == OTHER_ACTIVITY_CAPABILITY)
+    {
+        options.push(ClarificationOption {
+            label: others_label.to_string(),
+            capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
+            output_mode: None,
+        });
+    }
+    options
+}
+
+/// Pure decision function for gap-based classifier choice. Given top-N
+/// candidate scores (sorted DESC) and matching capability ids, decide whether
+/// to Match top1, Clarify with options, or return Unsupported.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum DecideOutcome {
+    Match { capability: String },
+    Clarify,
+    Unsupported,
+}
+
+pub fn decide_from_scores(
+    policy: &crate::knowledge::model::ClassificationPolicy,
+    sorted_scores: &[f32],
+    sorted_capabilities: &[&str],
+) -> DecideOutcome {
+    let top = sorted_scores.first().copied().unwrap_or(0.0);
+    if top < policy.min_floor {
+        return DecideOutcome::Unsupported;
+    }
+    let second = sorted_scores.get(1).copied().unwrap_or(0.0);
+    if (top - second) >= policy.min_gap
+        && let Some(cap) = sorted_capabilities.first()
+    {
+        return DecideOutcome::Match {
+            capability: (*cap).to_string(),
+        };
+    }
+    DecideOutcome::Clarify
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassificationOutcome {
@@ -53,17 +102,14 @@ pub fn classify_clarification_response(
     if let Some(option) = selected_option(original, &normalized) {
         if option.capability == OTHER_ACTIVITY_CAPABILITY {
             return ClassificationResult {
-                outcome: ClassificationOutcome::Unsupported,
+                outcome: ClassificationOutcome::ClarificationRequired,
                 domain: original.domain.clone(),
                 capability: None,
-                confidence: 0.8,
+                confidence: 0.6,
                 params: original.params.clone(),
-                clarification: Some(
-                    "That activity report is not available yet. Please choose deposit, withdrawal, monthly breakdown, or largest transaction reports."
-                        .to_string(),
-                ),
+                clarification: Some("Please describe what you would like to know.".to_string()),
                 options: Vec::new(),
-                source: Some("clarification_other".to_string()),
+                source: Some("clarification_other_selected".to_string()),
                 candidates: original.candidates.clone(),
             };
         }

@@ -257,7 +257,7 @@ fn classifies_numeric_clarification_option() {
 }
 
 #[test]
-fn classifies_other_activity_clarification_as_unsupported() {
+fn classifies_other_activity_clarification_prompts_for_free_text() {
     let original = clarify_retrieved_capabilities(
         "Show customer activity this week",
         today(),
@@ -280,9 +280,13 @@ fn classifies_other_activity_clarification_as_unsupported() {
 
     let result = classify_clarification_response(&original, "all acticity for this week");
 
-    assert_eq!(result.outcome, ClassificationOutcome::Unsupported);
-    assert_eq!(result.source.as_deref(), Some("clarification_other"));
+    assert_eq!(result.outcome, ClassificationOutcome::ClarificationRequired);
+    assert_eq!(
+        result.source.as_deref(),
+        Some("clarification_other_selected")
+    );
     assert!(result.options.is_empty());
+    assert!(result.clarification.is_some());
 }
 
 #[test]

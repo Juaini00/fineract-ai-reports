@@ -424,13 +424,10 @@ impl JobService {
         allowed_capabilities: &[String],
         candidates: &[RetrievedKnowledgeCandidate],
     ) -> Option<ClassificationResult> {
+        use crate::chat::classifier::{DecideOutcome, append_others_option, decide_from_scores};
+
         let top = candidates.first()?;
         let top_capability = self.catalog_capability_for_candidate(top)?;
-        let confidence = vector_confidence(top.distance);
-
-        if confidence < 0.40 {
-            return None;
-        }
 
         let classification_candidates = candidates
             .iter()
@@ -445,40 +442,56 @@ impl JobService {
             })
             .collect::<Vec<_>>();
 
-        let close_candidates = candidates
+        let sorted_scores: Vec<f32> = classification_candidates
             .iter()
-            .filter(|candidate| vector_confidence(candidate.distance) >= confidence - 0.05)
-            .filter_map(|candidate| self.catalog_capability_for_candidate(candidate))
-            .collect::<Vec<_>>();
+            .map(|c| c.confidence)
+            .collect();
+        let sorted_ids: Vec<&str> = classification_candidates
+            .iter()
+            .map(|c| c.capability.as_str())
+            .collect();
 
-        if close_candidates.len() > 1 || confidence < 0.55 {
-            let options = if is_activity_request(message) {
-                self.activity_options(message, &top_capability.domain, allowed_capabilities)
-            } else {
-                close_candidates
-                    .into_iter()
-                    .map(|capability| capability_option(capability, message))
-                    .collect::<Vec<_>>()
-            };
-            return Some(clarify_retrieved_capabilities(
-                message,
-                today,
-                Some(top_capability.domain.clone()),
-                options,
-                confidence,
-                classification_candidates,
-            ));
+        let policy = &self.catalog.classification;
+        match decide_from_scores(policy, &sorted_scores, &sorted_ids) {
+            DecideOutcome::Unsupported => None,
+            DecideOutcome::Match { capability } => {
+                let capability = self.catalog_capability(&capability)?;
+                let confidence = sorted_scores.first().copied().unwrap_or(0.0);
+                Some(classify_retrieved_capability(
+                    message,
+                    today,
+                    &capability.domain,
+                    &capability.id,
+                    &capability.output_mode,
+                    confidence,
+                    classification_candidates,
+                ))
+            }
+            DecideOutcome::Clarify => {
+                let close_capabilities = candidates
+                    .iter()
+                    .filter_map(|candidate| self.catalog_capability_for_candidate(candidate))
+                    .collect::<Vec<_>>();
+                let mut options = if is_activity_request(message) {
+                    self.activity_options(message, &top_capability.domain, allowed_capabilities)
+                } else {
+                    close_capabilities
+                        .into_iter()
+                        .map(|capability| capability_option(capability, message))
+                        .collect::<Vec<_>>()
+                };
+                options = append_others_option(options, &policy.others_label);
+                let confidence = sorted_scores.first().copied().unwrap_or(0.0);
+                Some(clarify_retrieved_capabilities(
+                    message,
+                    today,
+                    Some(top_capability.domain.clone()),
+                    options,
+                    confidence,
+                    classification_candidates,
+                ))
+            }
         }
-
-        Some(classify_retrieved_capability(
-            message,
-            today,
-            &top_capability.domain,
-            &top_capability.id,
-            &top_capability.output_mode,
-            confidence,
-            classification_candidates,
-        ))
     }
 
     fn catalog_capability(&self, capability_id: &str) -> Option<&CapabilityKnowledge> {

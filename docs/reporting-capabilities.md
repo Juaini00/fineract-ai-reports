@@ -325,3 +325,12 @@ savings_balance_summary -> queries/savings/balance_summary.sql
 ```
 
 The classifier should only emit capability ids that exist in the registry. The policy guard should validate capability scope, parameters, office scope, PII behavior, and limits before SQL execution.
+
+## 9. Classification thresholds
+
+Loaded from `knowledge/policies/classification.yaml` at boot. Any change requires a vector-index rebuild — via `POST /vector-index/rebuild` or `CATALOG_SYNC_ON_STARTUP=true` on the next boot.
+
+- `min_gap`: minimum confidence gap between top and second candidate for a matched outcome. Below this, classifier clarifies with the top-N candidates.
+- `min_floor`: minimum absolute confidence for the top candidate. Below this, classifier returns unsupported (off-domain).
+- `others_key`: reserved capability id (`other_activity`) that must not collide with any approved capability. Selecting the Others option asks the user to describe intent in their own words.
+- `others_label`: the human-readable label shown as the last option in every clarification list.
