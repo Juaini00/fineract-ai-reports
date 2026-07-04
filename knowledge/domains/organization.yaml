@@ -10,6 +10,8 @@ concepts:
     synonyms: [office, branch, location, organization unit]
 supported_intents:
   - office scoped reporting
+  - office summary
+  - active staff count by authorized office scope
 unsupported_intents:
   - create office
   - update office

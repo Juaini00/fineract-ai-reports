@@ -1,0 +1,92 @@
+id: savings.activity_list
+database: fineract
+sql_file: queries/savings/activity_list.sql
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+tables:
+  - m_savings_account_transaction
+  - m_savings_account
+  - m_savings_product
+  - m_client
+  - m_office
+metrics:
+  - savings.deposit_amount
+  - savings.withdrawal_amount
+parameters:
+  - name: from_date
+    type: date
+    required: true
+  - name: to_date
+    type: date
+    required: true
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: currency_code
+    type: string
+    required: false
+  - name: product_ids
+    type: array_bigint
+    required: false
+  - name: limit
+    type: integer
+    required: true
+required_filters:
+  - m_savings_account_transaction.is_reversed = false
+  - m_savings_account_transaction.transaction_date BETWEEN from_date AND to_date
+  - m_savings_account_transaction.office_id constrained to authorized office_ids
+  - ordered by transaction_date descending, id descending
+  - bounded by limit
+output_fields:
+  - name: transaction_id
+    type: bigint
+    sensitivity: public_business
+  - name: transaction_date
+    type: date
+    sensitivity: public_business
+  - name: transaction_type
+    type: string
+    sensitivity: public_business
+  - name: amount
+    type: decimal
+    sensitivity: public_business
+  - name: currency_code
+    type: string
+    sensitivity: public_business
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: product_id
+    type: bigint
+    sensitivity: public_business
+  - name: product_name
+    type: string
+    sensitivity: public_business
+  - name: client_id
+    type: bigint
+    sensitivity: public_business
+  - name: client_display_name
+    type: string
+    sensitivity: pii
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  timeout_ms: 3000
+cost_class: medium
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: limit_is_bound
+    rule: SQL must use a bound LIMIT parameter.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.

@@ -9,6 +9,7 @@
 
 - ✅ A: `deposits this month` ended `waiting_for_user_input` with `classification.outcome=clarification_required`, `source=vector`, and 2 options.
 - ✅ A.1: response `{ "message": "1" }` returned HTTP 201 and continued the same job to `completed` with `source=clarification_option`.
+- ✅ A.2: `Show customer savings activity this week` includes `other_activity`; free-text response `all acticity for this week` ends `failed` with `source=clarification_other` instead of repeating clarification.
 - ✅ B: write intent `create a new savings account` ended `failed`, `source=write_intent`, `error_json.code=unsupported_request`.
 - ✅ C: API key with `allowed_capabilities=[]` can be created; the job ends `failed`, `source=no_allowed_capabilities`, `error_json.code=unsupported_request`.
 - ✅ D: `banana` ended `failed`, `source=vector_no_match`, `error_json.code=unsupported_request`.
@@ -64,6 +65,30 @@ curl -X POST {{BASE_URL}}/chat/jobs/{{JOB_ID}}/responses \
 - HTTP 201 with the inserted user message.
 - Background pipeline re-runs `classify_clarification_response` → builds plan → executes. **Same `JOB_ID` continues** — no new job is created.
 - Final SSE `update` event reaches `final` step with `status: completed`.
+
+## A.2 Respond with other activity
+
+```bash
+curl -X POST {{BASE_URL}}/chat/jobs \
+  -H "Authorization: Bearer {{API_KEY}}" \
+  -H "Content-Type: application/json" \
+  -d '{ "session_id": "{{SESSION_ID}}", "message": "Show customer savings activity this week" }'
+```
+
+### Expected clarification options
+```json
+[
+  { "capability": "savings_deposit_top_n", "label": "Largest deposit this week" },
+  { "capability": "savings_deposit_total", "label": "Total deposit this week" },
+  { "capability": "savings_withdrawal_top_n", "label": "Largest withdrawal this week" },
+  { "capability": "savings_withdrawal_total", "label": "Total withdrawal this week" },
+  { "capability": "other_activity", "label": "Other activity this week" }
+]
+```
+
+If the user responds with `all acticity for this week`, final job state is `failed` with `state_json.classification.source = "clarification_other"`. It must not ask the same clarification again.
+
+Free text is accepted too: `Maybe the largest deposit is good choice` should select `savings_deposit_top_n`; users do not need to copy option labels exactly.
 
 ## B. Unsupported — write intent
 
@@ -159,7 +184,7 @@ Reading the candidates: the savings capability matched mid-confidence (because o
 ✅ Rerun result: candidates included `group_center_foundation (data_area)` and `group_center (domain)`; job ended `failed` with `source=off_domain_match` and `error_json.code=unsupported_request`.
 
 ### Verification via vector-index
-After `POST /vector-index/rebuild`, `GET /vector-index/status` should show `document_count=65` for the current expanded catalog.
+After `POST /vector-index/rebuild`, `GET /vector-index/status` should show `document_count=72` for the current expanded catalog.
 
 ### Verification via job state
 For loan / accounting cases, confirm `state_json.classification.source = "off_domain_match"`. For tax, confirm `state_json.classification.source = "vector_no_match"`. Both should have `status: "failed"` and `error_json.code = "unsupported_request"`.

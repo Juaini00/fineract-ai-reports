@@ -3,9 +3,15 @@
 //! same validator startup uses. This is the fastest guardrail against any
 //! YAML/SQL drift and doesn't need Postgres or Fineract.
 
+use app_core::auth::model::ClientContext;
+use chat::chat::planner::{
+    ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus, evaluate_policy,
+};
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
 use chat::knowledge::retrieval::RetrievalDocumentBuilder;
+use serde_json::json;
+use uuid::Uuid;
 
 #[test]
 fn real_catalog_loads_and_passes_validation() {
@@ -29,6 +35,49 @@ fn real_catalog_loads_and_passes_validation() {
     assert!(!catalog.queries.is_empty(), "queries empty");
     assert!(!catalog.policies.is_empty(), "policies empty");
     assert!(!catalog.responses.is_empty(), "responses empty");
+}
+
+#[test]
+fn real_catalog_matches_documented_scenario_counts() {
+    let catalog = load_catalog();
+
+    assert_eq!(catalog.data_areas.len(), 13);
+    assert_eq!(catalog.domains.len(), 7);
+    assert_eq!(catalog.metrics.len(), 8);
+    assert_eq!(catalog.capabilities.len(), 12);
+    assert_eq!(catalog.queries.len(), 12);
+    assert_eq!(catalog.policies.len(), 6);
+    assert_eq!(catalog.responses.len(), 3);
+
+    let documents = RetrievalDocumentBuilder::build(&catalog);
+    assert_eq!(documents.len(), 75);
+}
+
+#[test]
+fn approved_catalog_includes_foundation_capabilities() {
+    let catalog = load_catalog();
+
+    for (capability_id, query_id) in [
+        ("organization_office_summary", "organization.office_summary"),
+        ("client_lifecycle_summary", "client.lifecycle_summary"),
+    ] {
+        let capability = catalog
+            .capabilities
+            .iter()
+            .find(|item| item.id == capability_id)
+            .unwrap_or_else(|| panic!("missing capability {capability_id}"));
+        assert_eq!(capability.status, "approved_mvp");
+        assert_eq!(capability.query_id, query_id);
+
+        let query = catalog
+            .queries
+            .iter()
+            .find(|item| item.id == query_id)
+            .unwrap_or_else(|| panic!("missing query {query_id}"));
+        assert_eq!(query.database, "fineract");
+        assert!(query.sql_file.ends_with(".sql"));
+        assert!(!query.sql_file.contains(".."));
+    }
 }
 
 #[test]
@@ -67,14 +116,7 @@ fn every_approved_capability_maps_to_an_approved_query() {
 
 #[test]
 fn retrieval_documents_cover_all_capabilities() {
-    let workspace_root = workspace_root();
-    let catalog = KnowledgeLoader::new(
-        workspace_root.join("knowledge"),
-        workspace_root.join("queries"),
-    )
-    .load()
-    .expect("load knowledge catalog");
-    KnowledgeValidator::validate(&catalog).expect("validate knowledge catalog");
+    let catalog = load_catalog();
 
     let documents = RetrievalDocumentBuilder::build(&catalog);
     assert!(!documents.is_empty());
@@ -85,6 +127,52 @@ fn retrieval_documents_cover_all_capabilities() {
             "capability {} missing from retrieval documents",
             capability.id
         );
+    }
+}
+
+#[test]
+fn pii_policy_uses_selected_query_output_fields() {
+    let catalog = load_catalog();
+    let plan = ExecutionPlan {
+        plan_type: ExecutionPlanType::Atomic,
+        domain: "savings".into(),
+        capability: "savings_deposit_top_n".into(),
+        query_id: "savings.deposit_top_n".into(),
+        output_mode: "top_n".into(),
+        params: json!({}),
+        requires_policy_check: true,
+    };
+
+    let blocked = evaluate_policy(&client(false), Some(&plan), &catalog);
+    assert_eq!(blocked.status, PolicyDecisionStatus::Blocked);
+
+    let allowed = evaluate_policy(&client(true), Some(&plan), &catalog);
+    assert_eq!(allowed.status, PolicyDecisionStatus::Allowed);
+    assert!(allowed.can_view_pii);
+}
+
+fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
+    let workspace_root = workspace_root();
+    let catalog = KnowledgeLoader::new(
+        workspace_root.join("knowledge"),
+        workspace_root.join("queries"),
+    )
+    .load()
+    .expect("load knowledge catalog");
+    KnowledgeValidator::validate(&catalog).expect("validate knowledge catalog");
+    catalog
+}
+
+fn client(can_view_pii: bool) -> ClientContext {
+    ClientContext {
+        api_key_id: Uuid::new_v4(),
+        name: "scenario-test".into(),
+        owner: "integration-tests".into(),
+        key_prefix: "air_test".into(),
+        allowed_office_ids: vec![1, 2, 3],
+        allowed_capabilities: vec!["savings_deposit_top_n".into()],
+        can_view_pii,
+        expires_at: None,
     }
 }
 

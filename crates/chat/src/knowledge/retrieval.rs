@@ -48,7 +48,10 @@ impl RetrievalDocumentBuilder {
                 .iter()
                 .map(|item| build_generic_document(RetrievalSourceType::Metric, "Metric", item)),
         );
-        documents.extend(catalog.capabilities.iter().map(build_capability_document));
+        documents.extend(catalog.capabilities.iter().map(|capability| {
+            let domain = catalog.domains.iter().find(|d| d.id == capability.domain);
+            build_capability_document(capability, domain)
+        }));
         documents.extend(catalog.queries.iter().map(build_query_document));
         documents.extend(
             catalog
@@ -182,16 +185,34 @@ fn concept_line(concepts: &[crate::knowledge::model::DomainConcept]) -> String {
     format!("Concepts: {}.", parts.join(", "))
 }
 
-fn build_capability_document(capability: &CapabilityKnowledge) -> RetrievalDocument {
+fn build_capability_document(
+    capability: &CapabilityKnowledge,
+    domain: Option<&DomainKnowledge>,
+) -> RetrievalDocument {
     let title = format!("Capability {}", capability.id);
+    let concept_synonyms: Vec<String> = domain
+        .map(|d| {
+            d.concepts
+                .iter()
+                .flat_map(|c| c.synonyms.iter().cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+
     let retrieval_text = compact_lines([
         format!("Capability {}", capability.id),
+        format!(
+            "Display name {}",
+            capability.display_name.as_deref().unwrap_or(&capability.id)
+        ),
+        capability.description.clone().unwrap_or_default(),
         format!("Status {}", capability.status),
         format!("Domain {}", capability.domain),
         format!("Query {}", capability.query_id),
         optional_list("Data areas", &capability.data_areas),
         optional_list("Metrics", &capability.metrics),
         optional_list("Examples", &capability.examples),
+        optional_list("Domain concepts", &concept_synonyms),
         optional_list("Required parameters", &capability.required_parameters),
         optional_list("Optional parameters", &capability.optional_parameters),
     ]);
@@ -203,6 +224,8 @@ fn build_capability_document(capability: &CapabilityKnowledge) -> RetrievalDocum
         retrieval_text,
         metadata_json: json!({
             "status": capability.status,
+            "display_name": capability.display_name,
+            "description": capability.description,
             "domain": capability.domain,
             "query_id": capability.query_id,
             "output_mode": capability.output_mode,

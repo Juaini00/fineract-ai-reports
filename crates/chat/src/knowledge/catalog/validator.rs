@@ -26,6 +26,7 @@ const OUTPUT_MODES: &[&str] = &[
     "top_n",
     "monthly_breakdown",
     "monthly_top_n",
+    "list",
     "summary",
 ];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];
@@ -47,6 +48,10 @@ pub struct KnowledgeValidator;
 
 impl KnowledgeValidator {
     pub fn validate(catalog: &KnowledgeCatalog) -> Result<()> {
+        let capability_ids: Vec<String> =
+            catalog.capabilities.iter().map(|c| c.id.clone()).collect();
+        validate_classification_policy_against_catalog(&catalog.classification, &capability_ids)?;
+
         validate_unique_ids(
             "data areas",
             catalog.data_areas.iter().map(|item| item.id.as_str()),
@@ -264,6 +269,44 @@ impl KnowledgeValidator {
 
         Ok(())
     }
+}
+
+pub(crate) fn validate_classification_policy(
+    policy: &crate::knowledge::model::ClassificationPolicy,
+) -> Result<()> {
+    if !(policy.min_gap > 0.0 && policy.min_gap < 1.0) {
+        anyhow::bail!(
+            "classification_policy.min_gap must be in (0, 1); got {}",
+            policy.min_gap
+        );
+    }
+    if !(policy.min_floor > 0.0 && policy.min_floor < 1.0) {
+        anyhow::bail!(
+            "classification_policy.min_floor must be in (0, 1); got {}",
+            policy.min_floor
+        );
+    }
+    if policy.others_key.trim().is_empty() {
+        anyhow::bail!("classification_policy.others_key must be non-empty");
+    }
+    if policy.others_label.trim().is_empty() {
+        anyhow::bail!("classification_policy.others_label must be non-empty");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_classification_policy_against_catalog(
+    policy: &crate::knowledge::model::ClassificationPolicy,
+    capability_ids: &[String],
+) -> Result<()> {
+    validate_classification_policy(policy)?;
+    if capability_ids.iter().any(|id| id == &policy.others_key) {
+        anyhow::bail!(
+            "classification_policy.others_key '{}' must not collide with any capability id",
+            policy.others_key
+        );
+    }
+    Ok(())
 }
 
 fn validate_generic_layer(

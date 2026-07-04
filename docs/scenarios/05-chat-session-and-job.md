@@ -129,7 +129,7 @@ curl {{BASE_URL}}/chat/sessions/{{SESSION_ID}}/messages \
 
 ## Top-N variant
 
-Same flow with `message: "Show the largest deposits today"` → classifier picks `savings_deposit_top_n`, plan binds `limit`, executor returns rows ordered by amount.
+Same flow with `message: "Show the largest deposits today"` → vector/catalog retrieval selects `savings_deposit_top_n`, plan binds `limit`, executor returns rows ordered by amount.
 
 ✅ Passed on 2026-06-28 rerun with `message: "Show the largest deposits this month"`. The `today` variant completed but returned `row_count=0` in the local dataset, so the month variant was used to verify row fields.
 
@@ -150,7 +150,7 @@ After the knowledge expansion the `top_n` output contract includes client identi
 }
 ```
 
-`client_id` is `NULL` for group-owned accounts (LEFT JOIN). `client_display_name` is a PII field per the YAML output contract; Phase 16 expansion will mask it when `client.can_view_pii=false`. Current formatter template does not surface it yet.
+`client_id` is `NULL` for group-owned accounts (LEFT JOIN). `client_display_name` is a PII field per the YAML output contract. API keys without `can_view_pii=true` are blocked by policy before this query executes; API keys with PII access can receive the field and the formatter may include it.
 
 ## Side effects
 - DB `chat_jobs`: status `queued → running → completed`. `state_json` populated; `result_json` written on success.
