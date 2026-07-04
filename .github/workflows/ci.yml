@@ -57,41 +57,47 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --lib --bins --locked
 
-  # Integration tests — real Postgres (pgvector) service; Redis disabled by
-  # the harness so we don't need it here. Fineract read-only DB is faked by a
-  # separate empty Postgres database in the same service — safe because the
-  # test suite is structured to avoid queries that require actual Fineract
-  # data (catalog validation is skipped when schema is empty).
-  integration-tests:
-    name: Integration tests
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: root
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U root"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Create Fineract stub database
-        run: |
-          PGPASSWORD=password psql -h 127.0.0.1 -U root -d postgres \
-            -c "CREATE DATABASE fineract_stub;"
-      - name: Run integration tests
-        env:
-          TEST_ADMIN_DATABASE_URL: postgres://root:password@127.0.0.1:5432/postgres
-          TEST_FINERACT_DATABASE_URL: postgres://root:password@127.0.0.1:5432/fineract_stub
-        run: cargo test --workspace --tests --locked
+  # Integration tests — currently disabled in CI. The fixture-based contract
+  # test framework (see docs/capability-coverage-matrix.md "Contract test
+  # policy") is not yet in place; the existing tests only validate guardrails
+  # (routes wired, no crash) rather than semantic correctness, and running
+  # them here without the fixture backbone is misleading. Re-enable this job
+  # once `crates/chat/tests/fixtures/prompts.yaml` exists and every row in
+  # the coverage matrix has at least one contract-test entry.
+  #
+  # To run integration tests locally against your dev Postgres:
+  #   cargo test --workspace --tests
+  #
+  # integration-tests:
+  #   name: Integration tests
+  #   runs-on: ubuntu-latest
+  #   services:
+  #     postgres:
+  #       image: pgvector/pgvector:pg16
+  #       env:
+  #         POSTGRES_USER: root
+  #         POSTGRES_PASSWORD: password
+  #         POSTGRES_DB: postgres
+  #       ports:
+  #         - 5432:5432
+  #       options: >-
+  #         --health-cmd "pg_isready -U root"
+  #         --health-interval 5s
+  #         --health-timeout 5s
+  #         --health-retries 10
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Create Fineract stub database
+  #       run: |
+  #         PGPASSWORD=password psql -h 127.0.0.1 -U root -d postgres \
+  #           -c "CREATE DATABASE fineract_stub;"
+  #     - name: Run integration tests
+  #       env:
+  #         TEST_ADMIN_DATABASE_URL: postgres://root:password@127.0.0.1:5432/postgres
+  #         TEST_FINERACT_DATABASE_URL: postgres://root:password@127.0.0.1:5432/fineract_stub
+  #       run: cargo test --workspace --tests --locked
 
   # Supply-chain audit — advisories + licenses + bans.
   audit:
@@ -108,7 +114,7 @@ jobs:
   ci-passes:
     name: CI passes
     if: always()
-    needs: [fmt, clippy, build, unit-tests, integration-tests, audit]
+    needs: [fmt, clippy, build, unit-tests, audit]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded

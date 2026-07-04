@@ -8,6 +8,41 @@ Detailed field/table mapping will be added later per area.
 
 This document is the human-approved source of truth for allowed reporting data. The machine-readable counterpart belongs under `knowledge/data-scope/` and is defined by `docs/knowledge-catalog.md`.
 
+## 0. Status Legend And Area Index
+
+Each of the 13 data areas below is tagged with a lifecycle status. Reviewers should update the tag on the area's subsection heading whenever the coverage matrix moves a related capability. Tags are the same across this doc, the runtime `knowledge/data-scope/areas/*.yaml`, and [`docs/capability-coverage-matrix.md`](./capability-coverage-matrix.md).
+
+| Status | Meaning |
+| --- | --- |
+| `in_use` | At least one enabled (runtime `approved_mvp`) capability queries this area today. Tables here are validated as safe to widen incrementally. |
+| `frontier` | Not queried today, but the next `planned` capability will use it. Activation criteria below must be met before flipping to `in_use`. |
+| `conditional` | Queryable but only under a narrower feature flag (e.g. group/center scope only when the tenant enables group workflows). |
+| `deferred` | Whole area is deferred. No capability may reference it. Requires domain-level approval, not just a code change, to activate. |
+| `rejected` | Permanent out-of-scope. Even future roadmap items will not be built against these tables. |
+
+Every in-scope area listed below is a commitment — capabilities that use it are either `implemented` today, `planned` on the roadmap, or `deferred` (activated at a domain-level approval). Area index with current tags (four areas `in_use` today; every other in-scope area has planned capabilities):
+
+| # | Area | Status | Approved capabilities that touch it |
+| --- | --- | --- | --- |
+| 3.1 | Organization Foundation | `in_use` | All 9 approved capabilities (office join for scope) |
+| 3.2 | Client Foundation | `in_use` | All top-N capabilities (client display join) |
+| 3.3 | Group And Center Foundation | `conditional` | none today; enabled per-tenant |
+| 3.4 | Savings Core | `in_use` | `savings_balance_summary` plus every deposit/withdrawal capability |
+| 3.5 | Savings Transactions | `in_use` | All deposit/withdrawal capabilities |
+| 3.6 | Savings Charges And Fees | `frontier` | none today; targets `savings_charge_outstanding_*` (v0.2 – v0.3) |
+| 4.1 | Loans | `deferred` | — |
+| 4.2 | Accounting And General Ledger | `deferred` | — |
+| 4.3 | Tax | `deferred` | — |
+| 4.4 | Custom Datatables | `deferred` | — |
+| 4.5 | Audit, Users, And Operations | `deferred` | — |
+| 5   | Explicitly Out Of Scope | `rejected` | — |
+
+Activation criteria for `frontier` and `conditional` areas — what must be true before flipping to `in_use`:
+
+- **Savings Charges And Fees (`frontier` → `in_use`).** Charge enum mapping (`m_charge.charge_type_enum`, `m_charge.charge_calculation_enum`) must be documented in a schema knowledge file. The `m_savings_account_charge.amount_outstanding_derived` semantics must be reviewed to confirm it is a running balance we can trust across time zones. Sensitivity class of the charge reference identifier must be assigned in `docs/reporting-pii-policy.md` (currently reserved as `sensitive_business_identifier`).
+- **Group And Center Foundation (`conditional` remains `conditional`).** Only queryable when the API key `allowed_capabilities` set includes a group-scoped capability AND the tenant is configured for group workflows. The group office path (`m_group.office_id`) is validated separately from the client office path in the same query.
+- **Any `deferred` area (`deferred` → `frontier`).** A capability YAML must be authored under `knowledge/capabilities/<domain>/`, the coverage matrix must gain an `implemented` entry (row flipped from `deferred`), the domain YAML under `knowledge/domains/` must be moved from deferred to approved, and a PII rule review under `docs/reporting-pii-policy.md` must sign off on every field the new capability will output.
+
 ## 1. Scope Principle
 
 The service must not treat the full Fineract database as available reporting context.
@@ -25,23 +60,23 @@ Rules:
 - Every approved, conditional, deferred, and out-of-scope data area must have a matching machine-readable entry under `knowledge/data-scope/` before catalog validation is considered complete.
 - Knowledge files must not introduce runtime access to tables, columns, joins, metrics, or response fields outside this scope.
 
-## 2. Initial MVP Scope
+## 2. Current In-Scope Reporting Surface
 
-The recommended first reporting scope is:
+The in-scope reporting surface for the AI chatbot is:
 
 ```text
-Client + Organization + Savings
+Organization + Client + Savings + (Group/Center, conditional)
 ```
 
-This gives the service enough context to answer business reporting needs around savings activity while keeping the first implementation bounded and auditable.
+This covers all reasonable savings-activity questions plus foundation lookups (offices, clients, groups). Loan, accounting/GL, tax, custom datatables, and audit/users/operations are deferred domains — inside the product commitment for a future milestone, but not yet activated. See §4 and Category G in the coverage matrix.
 
-The first scope should not include the full loan, accounting, tax, or custom datatable surface.
+The current in-scope surface is not a "first implementation, more to come" ceiling on capability breadth — it defines which Fineract tables approved SQL may touch today. Within this surface, capability shortage is a `planned` gap, not a scope restriction.
 
 ## 3. Included Data Areas
 
-### 3.1 Organization Foundation
+### 3.1 Organization Foundation — status: `in_use`
 
-Status: included in MVP foundation.
+Status: in-scope foundation.
 
 Purpose:
 
@@ -68,9 +103,9 @@ Detail file:
 
 - `docs/reporting-data/organization-foundation.md`.
 
-### 3.2 Client Foundation
+### 3.2 Client Foundation — status: `in_use`
 
-Status: included in MVP foundation.
+Status: in-scope foundation.
 
 Purpose:
 
@@ -109,7 +144,7 @@ Detail file:
 
 - `docs/reporting-data/client-foundation.md`.
 
-### 3.3 Group And Center Foundation
+### 3.3 Group And Center Foundation — status: `conditional`
 
 Status: conditionally included.
 
@@ -143,9 +178,9 @@ Detail file:
 
 - `docs/reporting-data/group-center-foundation.md`.
 
-### 3.4 Savings Core
+### 3.4 Savings Core — status: `in_use`
 
-Status: included in MVP domain.
+Status: in-scope domain.
 
 Purpose:
 
@@ -178,9 +213,9 @@ Detail file:
 
 - `docs/reporting-data/savings-core.md`.
 
-### 3.5 Savings Transactions
+### 3.5 Savings Transactions — status: `in_use`
 
-Status: included in MVP domain.
+Status: in-scope domain.
 
 Purpose:
 
@@ -215,7 +250,7 @@ Detail file:
 
 - `docs/reporting-data/savings-transactions.md`.
 
-### 3.6 Savings Charges And Fees
+### 3.6 Savings Charges And Fees — status: `frontier`
 
 Status: included as secondary savings scope.
 
@@ -251,7 +286,7 @@ Detail file:
 
 ## 4. Deferred Data Areas
 
-### 4.1 Loans
+### 4.1 Loans — status: `deferred`
 
 Status: deferred.
 
@@ -273,7 +308,7 @@ Future high-level data concepts:
 
 Scope rule:
 
-- Do not include loan tables in MVP capabilities until savings reporting and authorization are stable.
+- Do not include loan tables in any executable capability until the loan domain is activated (see coverage matrix Category G).
 
 Verified Fineract table family:
 
@@ -287,7 +322,7 @@ Detail file:
 
 - `docs/reporting-data/loans.md`.
 
-### 4.2 Accounting And General Ledger
+### 4.2 Accounting And General Ledger — status: `deferred`
 
 Status: deferred.
 
@@ -306,7 +341,7 @@ Future high-level data concepts:
 
 Scope rule:
 
-- Do not include accounting tables in MVP capabilities.
+- Do not include accounting tables in any executable capability until the accounting domain is activated.
 - Add only after approved accounting definitions are documented.
 
 Verified Fineract table family:
@@ -321,7 +356,7 @@ Detail file:
 
 - `docs/reporting-data/accounting-gl.md`.
 
-### 4.3 Tax
+### 4.3 Tax — status: `deferred`
 
 Status: deferred.
 
@@ -355,7 +390,7 @@ Detail file:
 
 - `docs/reporting-data/tax.md`.
 
-### 4.4 Custom Datatables
+### 4.4 Custom Datatables — status: `deferred`
 
 Status: deferred.
 
@@ -381,7 +416,7 @@ Detail file:
 
 - `docs/reporting-data/custom-datatables.md`.
 
-### 4.5 Audit, Users, And Operations
+### 4.5 Audit, Users, And Operations — status: `deferred`
 
 Status: deferred except basic created/approved user references when needed.
 
@@ -419,9 +454,9 @@ Detail file:
 
 - `docs/reporting-data/audit-users-operations.md`.
 
-## 5. Explicitly Out Of Scope For MVP
+## 5. Explicitly Out Of Scope (permanent)
 
-The following are out of scope for the first implementation:
+The following are permanently out-of-scope and will never be built:
 
 - Arbitrary SQL exploration.
 - Full Fineract schema search.

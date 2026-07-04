@@ -26,6 +26,12 @@ JOB_ID=<set after 05-chat-session-and-job>
 | `07-authorization-scope.md` | Capability gate, office scope in SQL, PII rules | ✅ Passed 2026-06-28 rerun |
 | `08-knowledge-breadth-and-multilingual.md` | Domain breadth probe + Bahasa Indonesia synonyms + write-intent breadth + PII placeholder + catalog-validate breadth assertion | 🆕 Added after knowledge expansion; not yet rerun |
 | `09-llm-planner-fallback.md` | Constrained LLM planner fallback over approved clarification options | ✅ Passed 2026-07-02 local smoke |
+| `10-planned-features-return-planned_unimplemented.md` | Fourth outcome — planned but not built asks (weekly/daily/composite) map to `planned_unimplemented`, not `unsupported` | 🆕 Slot open; scenario doc drafted, awaits `PlannedUnimplemented` outcome shipping. See `docs/ai-reporting-design.md` §18.3. |
+| `11-savings-activity-list.md` | TODO: individual transaction list — depends on `savings_activity_list` (planned v0.4) and new `list` output_mode with row-level PII gate | 🆕 TODO |
+| `12-weekly-and-daily-breakdown.md` | TODO: bucket-parametric `savings_*_breakdown` capabilities with `bucket ∈ {day, week}` — depends on §18.1 | 🆕 TODO |
+| `13-custom-bucket-breakdown.md` | TODO: `bucket=N_days` with `bucket_days` parameter validation | 🆕 TODO |
+| `14-composite-multi-metric.md` | TODO: one turn, multiple metrics via `ExecutionPlanBatch` and composite output_mode. See §18.2 | 🆕 TODO |
+| `15-charge-outstanding-and-hold-balance.md` | TODO: `savings_charge_outstanding_summary` (v0.2 candidate) and `savings_hold_balance_summary` (v0.3) once activation criteria in `docs/reporting-data-scope.md` §0 are met | 🆕 TODO |
 
 ## Latest run
 
