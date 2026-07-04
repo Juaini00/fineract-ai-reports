@@ -911,16 +911,7 @@ fn is_activity_request(message: &str) -> bool {
 fn is_savings_activity_request(message: &str) -> bool {
     let message = message.to_lowercase();
     contains_any_local(&message, &["saving", "savings"])
-        && contains_any_local(
-            &message,
-            &[
-                "activity",
-                "activities",
-                "acticity",
-                "transaction",
-                "transactions",
-            ],
-        )
+        && contains_any_local(&message, &["transaction", "transactions"])
 }
 
 fn capability_option(capability: &CapabilityKnowledge, message: &str) -> ClarificationOption {

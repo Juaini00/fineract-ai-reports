@@ -22,3 +22,17 @@ fn capability_option_label_uses_requested_period_not_catalog_example() {
         "Total deposit this week"
     );
 }
+
+#[test]
+fn generic_savings_activity_prompt_is_not_deterministic_list_request() {
+    assert!(!is_savings_activity_request(
+        "Show customer savings activity this week"
+    ));
+}
+
+#[test]
+fn explicit_savings_transactions_prompt_is_deterministic_list_request() {
+    assert!(is_savings_activity_request(
+        "List savings transactions this week"
+    ));
+}
