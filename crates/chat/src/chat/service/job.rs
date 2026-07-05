@@ -241,7 +241,7 @@ impl JobService {
         match self.embedding_client.embed_query(message).await {
             Ok(embedding) => match self
                 .knowledge
-                .search_capabilities(embedding.clone(), &client.allowed_capabilities, 3)
+                .search_capabilities(embedding.clone(), &client.allowed_capabilities, 6)
                 .await
             {
                 Ok(candidates) => {
@@ -287,7 +287,7 @@ impl JobService {
             }
         }
 
-        let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 3);
+        let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 6);
         let result = self
             .classify_from_candidates(message, today, &client.allowed_capabilities, &candidates)
             .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
@@ -635,13 +635,22 @@ impl JobService {
             // it. Detection is by structured source token, not by matching the
             // human-facing clarification text.
             let source = classification.source.as_deref().unwrap_or("");
+            let previous_source = original.source.as_deref().unwrap_or("");
             let picked_a_listed_option = matches!(
                 source,
                 "clarification_option" | "clarification_other_selected"
             );
             let is_clarification =
                 classification.outcome == ClassificationOutcome::ClarificationRequired;
-            if is_clarification && !picked_a_listed_option {
+            // Case 1: standard "user typed free text at a normal clarification"
+            //         → retrieve.
+            // Case 2: previous turn was the Others escape hatch (source stored
+            //         as `clarification_other_selected`) — this turn's reply
+            //         is by contract free-form; ALWAYS retrieve, even though
+            //         `classify_clarification_response` falls back to the
+            //         previous state and carries the same source forward.
+            let after_others_free_form = previous_source == "clarification_other_selected";
+            if (is_clarification && !picked_a_listed_option) || after_others_free_form {
                 classification = self
                     .classify_with_retrieval(&response.content, &input.client)
                     .await;
@@ -922,9 +931,12 @@ fn capability_option(capability: &CapabilityKnowledge, message: &str) -> Clarifi
     }
 }
 
-fn other_activity_option(message: &str) -> ClarificationOption {
+fn other_activity_option(_message: &str) -> ClarificationOption {
+    // Free-form escape hatch. Deliberately does NOT bake the period (e.g.
+    // "for two months") into the label — picking this option lets the user
+    // describe an entirely new request.
     ClarificationOption {
-        label: format!("Other activity{}", period_label(message)),
+        label: "Others — let me describe it in my own words".to_string(),
         capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
         output_mode: None,
     }

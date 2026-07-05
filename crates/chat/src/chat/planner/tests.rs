@@ -2,6 +2,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
+use crate::chat::classifier::ClassificationCandidate;
 use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator};
 
 #[test]
@@ -15,6 +16,31 @@ fn builds_atomic_plan_for_total_deposit() {
     assert_eq!(plan.capability, "savings_deposit_total");
     assert_eq!(plan.query_id, "savings.deposit_total");
     assert!(plan.requires_policy_check);
+}
+
+#[test]
+fn plan_contains_modern_rag_stage_outputs() {
+    let mut classification = matched_total_deposit();
+    classification.candidates = vec![ClassificationCandidate {
+        capability: "savings_deposit_total".to_string(),
+        confidence: 0.86,
+        source_type: Some("capability".to_string()),
+    }];
+
+    let catalog = catalog();
+    let plan = build_execution_plan(&classification, &catalog).expect("execution plan");
+
+    assert!(plan.retrieval_plan.vector_query.contains("savings"));
+    assert_eq!(
+        plan.retrieval_plan.metadata_filter.get("capability"),
+        Some(&"savings_deposit_total".to_string())
+    );
+    assert!(plan.evidence_evaluation.enough);
+    assert_eq!(plan.evidence_evaluation.source_types, vec!["capability"]);
+    assert_eq!(
+        plan.answer_plan.sections,
+        vec!["Summary", "Scope", "Evidence"]
+    );
 }
 
 #[test]
