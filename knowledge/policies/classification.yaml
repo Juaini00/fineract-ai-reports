@@ -12,7 +12,7 @@ source_doc: docs/reporting-capabilities.md#9-classification-thresholds
 min_gap: 0.05
 min_floor: 0.40
 others_key: other_activity
-others_label: "Something else - let me describe it differently"
+others_label: "Others — let me describe it in my own words"
 checks:
   - id: gap_in_open_interval
     rule: min_gap must be in the open interval (0, 1).

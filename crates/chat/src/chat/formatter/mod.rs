@@ -1,3 +1,4 @@
+mod activity;
 mod labels;
 mod render;
 
@@ -23,6 +24,15 @@ pub fn format_report_response(
 
     if rows.is_empty() {
         return Some(text.empty_result());
+    }
+
+    // Special-case the savings activity list: users want the flat list
+    // buckets into deposits/withdrawals/charges plus weekly and 2-day
+    // aggregations, all rendered inline in the same response.
+    if plan.query_id == "savings.activity_list"
+        && let Some(rendered) = activity::render(rows)
+    {
+        return Some(rendered);
     }
 
     match plan.output_mode.as_str() {

@@ -2,7 +2,8 @@ use serde_json::json;
 
 use super::*;
 use crate::chat::planner::{
-    ExecutionPlan, ExecutionPlanType, PolicyDecision, PolicyDecisionStatus,
+    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision,
+    PolicyDecisionStatus, RetrievalPlan,
 };
 use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator};
 
@@ -95,6 +96,9 @@ fn plan(capability: &str, query_id: &str, output_mode: &str) -> ExecutionPlan {
         query_id: query_id.to_string(),
         output_mode: output_mode.to_string(),
         params: json!({}),
+        retrieval_plan: RetrievalPlan::default(),
+        evidence_evaluation: EvidenceEvaluation::default(),
+        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     }
 }

@@ -31,7 +31,7 @@ impl Default for ClassificationPolicy {
             min_gap: 0.05,
             min_floor: 0.40,
             others_key: "other_activity".to_string(),
-            others_label: "Something else — let me describe it differently".to_string(),
+            others_label: "Others — let me describe it in my own words".to_string(),
         }
     }
 }

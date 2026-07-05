@@ -295,7 +295,11 @@ fn classifies_all_activity_clarification_by_meaning() {
 }
 
 #[test]
-fn classifies_explicit_other_then_free_text_with_original_options() {
+fn picking_other_resets_state_to_free_form_clarification() {
+    // New semantics: picking Others is an escape hatch. The classifier drops
+    // the prior options, params and domain so the user's next reply is treated
+    // as a brand-new prompt. Re-classification of that next reply is the
+    // service layer's job (`classify_with_retrieval`), not the classifier's.
     let original = clarify_retrieved_capabilities(
         "Show customer activity this week",
         today(),
@@ -312,7 +316,7 @@ fn classifies_explicit_other_then_free_text_with_original_options() {
                 output_mode: Some("total".to_string()),
             },
             ClarificationOption {
-                label: "Other activity this week".to_string(),
+                label: "Others — let me describe it in my own words".to_string(),
                 capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
                 output_mode: None,
             },
@@ -322,10 +326,19 @@ fn classifies_explicit_other_then_free_text_with_original_options() {
     );
 
     let other = classify_clarification_response(&original, "other");
-    let result = classify_clarification_response(&other, "all acticity for this week");
 
-    assert_eq!(result.outcome, ClassificationOutcome::Matched);
-    assert_eq!(result.capability.as_deref(), Some("savings_activity_list"));
+    assert_eq!(other.outcome, ClassificationOutcome::ClarificationRequired);
+    assert!(other.options.is_empty(), "options should be reset");
+    assert_eq!(other.domain, None, "domain should be reset");
+    assert_eq!(
+        other.params,
+        serde_json::json!({}),
+        "params should be reset"
+    );
+    assert_eq!(
+        other.source.as_deref(),
+        Some("clarification_other_selected")
+    );
 }
 
 #[test]

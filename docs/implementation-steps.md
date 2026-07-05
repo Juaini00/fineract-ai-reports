@@ -1082,6 +1082,7 @@ Reference design for the full RAG pipeline (indexing + runtime retrieval):
 
 ```text
 docs/rag-architecture.md
+docs/Modern_RAG_Architecture_Blueprint.md
 ```
 
 Initial vector content:
@@ -1121,6 +1122,7 @@ Current confidence policy: <0.40 unsupported, 0.40-0.55 clarify, close candidate
 Classification state records source (`local_rule`, `vector`, or clarification source) and vector candidates for manual verification.
 POST /vector-index/rebuild and GET /vector-index/status are implemented (authenticated; rebuild runs KnowledgeSyncService::with_embeddings, status returns the latest knowledge_catalog_versions row).
 Broader retrieval: KnowledgeRepository::search_context queries non-capability rows from the latest indexed catalog version; results are appended to classification.candidates with their source_type for audit and future LLM planner consumption — they do not directly execute SQL.
+ExecutionPlan now records structured Modern RAG stage outputs: retrieval_plan, evidence_evaluation, and answer_plan.
 
 Important sequencing rule:
 Vector retrieval only selects knowledge candidates that resolve to approved capabilities. SQL execution still goes through catalog validation, policy guard, and static approved SQL bindings.

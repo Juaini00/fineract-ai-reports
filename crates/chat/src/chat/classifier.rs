@@ -101,14 +101,20 @@ pub fn classify_clarification_response(
     let normalized = response.to_lowercase();
     if let Some(option) = selected_option(original, &normalized) {
         if option.capability == OTHER_ACTIVITY_CAPABILITY {
+            // Free-form escape hatch. Do NOT carry params (like a stale date
+            // range) or the prior options forward — the user's next reply is a
+            // brand-new prompt, re-classified from scratch by the retrieval
+            // pipeline in `respond`.
             return ClassificationResult {
                 outcome: ClassificationOutcome::ClarificationRequired,
-                domain: original.domain.clone(),
+                domain: None,
                 capability: None,
                 confidence: 0.6,
-                params: original.params.clone(),
-                clarification: Some("Please describe what you would like to know.".to_string()),
-                options: original.options.clone(),
+                params: json!({}),
+                clarification: Some(
+                    "Sure — describe what you'd like to know in your own words.".to_string(),
+                ),
+                options: Vec::new(),
                 source: Some("clarification_other_selected".to_string()),
                 candidates: original.candidates.clone(),
             };
@@ -486,9 +492,11 @@ fn relative_count_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, N
         .filter(|t| !t.is_empty())
         .collect();
     for (i, token) in tokens.iter().enumerate() {
-        let Ok(n) = token.parse::<i64>() else {
-            continue;
-        };
+        let n = token
+            .parse::<i64>()
+            .ok()
+            .or_else(|| word_to_number(token))
+            .unwrap_or(-1);
         if !(1..=120).contains(&n) {
             continue;
         }
@@ -543,6 +551,24 @@ fn subtract_months(date: NaiveDate, n: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, date.day())
         .or_else(|| end_of_month(year, month))
         .unwrap_or(date)
+}
+
+fn word_to_number(token: &str) -> Option<i64> {
+    match token {
+        "one" | "satu" => Some(1),
+        "two" | "dua" => Some(2),
+        "three" | "tiga" => Some(3),
+        "four" | "empat" => Some(4),
+        "five" | "lima" => Some(5),
+        "six" | "enam" => Some(6),
+        "seven" | "tujuh" => Some(7),
+        "eight" | "delapan" => Some(8),
+        "nine" | "sembilan" => Some(9),
+        "ten" | "sepuluh" => Some(10),
+        "eleven" | "sebelas" => Some(11),
+        "twelve" | "dua_belas" => Some(12),
+        _ => None,
+    }
 }
 
 fn month_number(token: &str) -> Option<u32> {

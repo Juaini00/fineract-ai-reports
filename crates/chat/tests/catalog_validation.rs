@@ -5,7 +5,8 @@
 
 use app_core::auth::model::ClientContext;
 use chat::chat::planner::{
-    ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus, evaluate_policy,
+    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
+    RetrievalPlan, evaluate_policy,
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
@@ -140,6 +141,9 @@ fn pii_policy_uses_selected_query_output_fields() {
         query_id: "savings.deposit_top_n".into(),
         output_mode: "top_n".into(),
         params: json!({}),
+        retrieval_plan: RetrievalPlan::default(),
+        evidence_evaluation: EvidenceEvaluation::default(),
+        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     };
 
