@@ -30,7 +30,7 @@ pub fn format_report_response(
     // buckets into deposits/withdrawals/charges plus weekly and 2-day
     // aggregations, all rendered inline in the same response.
     if plan.query_id == "savings.activity_list"
-        && let Some(rendered) = activity::render(rows)
+        && let Some(rendered) = activity::render(catalog, plan, rows)
     {
         return Some(rendered);
     }

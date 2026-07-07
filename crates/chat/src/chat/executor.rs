@@ -161,7 +161,35 @@ fn resolve_sql_path(query_root: &Path, sql_file: &str) -> Result<PathBuf> {
 mod tests {
     use std::path::Path;
 
-    use super::resolve_sql_path;
+    use super::{integer_param, resolve_sql_path};
+    use crate::chat::planner::{
+        AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
+    };
+    use crate::knowledge::model::QueryParameter;
+
+    #[test]
+    fn optional_integer_param_returns_none_when_missing() {
+        let plan = ExecutionPlan {
+            plan_type: ExecutionPlanType::Atomic,
+            domain: "savings".to_string(),
+            capability: "savings_activity_list".to_string(),
+            query_id: "savings.activity_list".to_string(),
+            output_mode: "list".to_string(),
+            params: serde_json::json!({}),
+            retrieval_plan: RetrievalPlan::default(),
+            evidence_evaluation: EvidenceEvaluation::default(),
+            answer_plan: AnswerPlan::default(),
+            requires_policy_check: true,
+        };
+        let parameter = QueryParameter {
+            name: "limit".to_string(),
+            kind: "integer".to_string(),
+            required: false,
+            source: None,
+        };
+
+        assert_eq!(integer_param(&plan, &parameter).unwrap(), None);
+    }
 
     #[test]
     fn resolves_catalog_sql_path_under_query_root() {

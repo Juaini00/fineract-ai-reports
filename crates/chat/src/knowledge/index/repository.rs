@@ -32,6 +32,15 @@ pub struct RetrievedKnowledgeCandidate {
     pub distance: f64,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct LatestCatalogIndex {
+    pub id: Uuid,
+    pub content_hash: String,
+    pub status: String,
+    pub embedding_model: Option<String>,
+    pub embedding_dimensions: Option<i32>,
+}
+
 impl KnowledgeRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -68,6 +77,21 @@ impl KnowledgeRepository {
 
         tx.commit().await?;
         Ok(catalog_version_id)
+    }
+
+    pub async fn latest_embedded_catalog(&self) -> Result<Option<LatestCatalogIndex>> {
+        let row = sqlx::query_as::<_, LatestCatalogIndex>(
+            r#"
+            SELECT id, content_hash, status, embedding_model, embedding_dimensions
+            FROM knowledge_catalog_versions
+            WHERE status = 'embedded'
+            ORDER BY synced_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
     }
 
     pub async fn search_capabilities(

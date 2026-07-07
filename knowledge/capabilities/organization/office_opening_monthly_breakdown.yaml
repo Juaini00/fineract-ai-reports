@@ -1,0 +1,48 @@
+id: organization_office_opening_monthly_breakdown
+status: approved_mvp
+domain: organization
+display_name: Office Opening Monthly Breakdown
+description: Return the count of offices opened per month for a date range within the caller's authorized office scope.
+data_areas:
+  - organization_foundation
+required_api_capability: organization_office_opening_monthly_breakdown
+query_id: organization.office_opening_monthly_breakdown
+metrics:
+  - organization.office_count
+output_mode: monthly_breakdown
+examples:
+  - Monthly office openings for 2026.
+  - How many offices opened each month last year?
+  - Show office opening trend from 2026-01-01 to 2026-06-30.
+supported_intents:
+  - monthly office opening counts in a date range
+  - office expansion trend across authorized scope
+unsupported_intents:
+  - office external id lookup
+  - staff identity lookup
+required_parameters:
+  - from_date
+  - to_date
+optional_parameters:
+  - office_ids
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  max_date_range_days: 1096
+pii:
+  returns_pii: false
+cost_class: low
+clarification:
+  missing_parameters:
+    - from_date
+    - to_date
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: required_parameters_match_query
+    rule: required_parameters must be declared as required query parameters.
+  - id: no_pii_output
+    rule: query output fields must not expose office or staff identity.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.

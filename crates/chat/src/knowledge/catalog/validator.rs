@@ -486,23 +486,30 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
 
     validate_placeholders(query, trimmed)?;
 
-    if has_parameter(query, "office_ids")
-        && (!upper.contains("OFFICE_ID") || !upper.contains("ANY($"))
-    {
-        bail!(
-            "query {} SQL must constrain authorized office ids",
-            query.id
-        );
+    if has_parameter(query, "office_ids") {
+        let office_pos = parameter_position(query, "office_ids");
+        let expected = format!("ANY(${office_pos}::BIGINT[])");
+        if !upper.contains(&expected) {
+            bail!(
+                "query {} SQL must constrain authorized office ids via `ANY(${}::bigint[])`",
+                query.id,
+                office_pos
+            );
+        }
     }
 
-    if has_parameter(query, "from_date")
-        && has_parameter(query, "to_date")
-        && (!upper.contains("TRANSACTION_DATE") || !upper.contains("BETWEEN"))
-    {
-        bail!(
-            "query {} SQL must constrain transaction date range",
-            query.id
-        );
+    if has_parameter(query, "from_date") && has_parameter(query, "to_date") {
+        let from_pos = parameter_position(query, "from_date");
+        let to_pos = parameter_position(query, "to_date");
+        let expected = format!("BETWEEN ${from_pos}::DATE AND ${to_pos}::DATE");
+        if !upper.contains(&expected) {
+            bail!(
+                "query {} SQL must constrain a date column with `BETWEEN ${}::date AND ${}::date`",
+                query.id,
+                from_pos,
+                to_pos
+            );
+        }
     }
 
     // Bound result size via LIMIT (atomic top_n) or ROW_NUMBER()/RANK() over a
@@ -591,6 +598,15 @@ fn has_parameter(query: &QueryKnowledge, name: &str) -> bool {
         .parameters
         .iter()
         .any(|parameter| parameter.name == name)
+}
+
+fn parameter_position(query: &QueryKnowledge, name: &str) -> usize {
+    query
+        .parameters
+        .iter()
+        .position(|parameter| parameter.name == name)
+        .map(|index| index + 1)
+        .unwrap_or(0)
 }
 
 fn placeholder_numbers(sql: &str) -> HashSet<usize> {

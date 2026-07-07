@@ -1,6 +1,7 @@
 SELECT
     t.id AS transaction_id,
     t.transaction_date,
+    t.transaction_type_enum::bigint AS transaction_type_enum,
     CASE t.transaction_type_enum
         WHEN 1 THEN 'deposit'
         WHEN 2 THEN 'withdrawal'

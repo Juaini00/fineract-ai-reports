@@ -45,13 +45,13 @@ fn real_catalog_matches_documented_scenario_counts() {
     assert_eq!(catalog.data_areas.len(), 13);
     assert_eq!(catalog.domains.len(), 7);
     assert_eq!(catalog.metrics.len(), 8);
-    assert_eq!(catalog.capabilities.len(), 12);
-    assert_eq!(catalog.queries.len(), 12);
+    assert_eq!(catalog.capabilities.len(), 16);
+    assert_eq!(catalog.queries.len(), 16);
     assert_eq!(catalog.policies.len(), 6);
     assert_eq!(catalog.responses.len(), 3);
 
     let documents = RetrievalDocumentBuilder::build(&catalog);
-    assert_eq!(documents.len(), 75);
+    assert_eq!(documents.len(), 83);
 }
 
 #[test]

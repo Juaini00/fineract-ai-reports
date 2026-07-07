@@ -88,6 +88,81 @@ fn includes_pii_when_policy_allows_it() {
     assert!(response.contains("Amina"));
 }
 
+#[test]
+fn formats_activity_list_as_structured_response_per_currency() {
+    let catalog = catalog();
+    let plan = activity_plan();
+    let result = json!({
+        "row_count": 3,
+        "rows": [
+            {
+                "transaction_id": 1,
+                "transaction_date": "2026-07-05",
+                "transaction_type_enum": 4,
+                "amount": "7.03",
+                "currency_code": "USD",
+                "office_id": 1,
+                "office_name": "Head Office",
+                "product_id": 4,
+                "product_name": "Saving Product - USD"
+            },
+            {
+                "transaction_id": 2,
+                "transaction_date": "2026-07-05",
+                "transaction_type_enum": 5,
+                "amount": "0.09",
+                "currency_code": "AED",
+                "office_id": 1,
+                "office_name": "Head Office",
+                "product_id": 5,
+                "product_name": "Current Account With OD - AED"
+            },
+            {
+                "transaction_id": 3,
+                "transaction_date": "2026-07-04",
+                "transaction_type_enum": 4,
+                "amount": "0.09",
+                "currency_code": "USD",
+                "office_id": 1,
+                "office_name": "Head Office",
+                "product_id": 6,
+                "product_name": "Current Account USD"
+            }
+        ]
+    });
+
+    let response = format_report_response(&catalog, &plan, &policy(false), &result).unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(
+        payload["answer_plan"]["capability"],
+        "savings_activity_list"
+    );
+    assert_eq!(
+        payload["structured"]["by_currency"]["USD"]["charges_paid"]["count"],
+        2
+    );
+    assert_eq!(
+        payload["structured"]["by_currency"]["USD"]["charges_paid"]["total"],
+        "7.12"
+    );
+    assert_eq!(
+        payload["structured"]["by_currency"]["AED"]["charges_paid"]["count"],
+        1
+    );
+    assert_eq!(
+        payload["structured"]["by_currency"]["AED"]["charges_paid"]["total"],
+        "0.09"
+    );
+    assert!(payload["message"].as_str().unwrap().contains("#### USD"));
+    assert!(
+        !payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("total: USD 7.21")
+    );
+}
+
 fn plan(capability: &str, query_id: &str, output_mode: &str) -> ExecutionPlan {
     ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,
@@ -100,6 +175,20 @@ fn plan(capability: &str, query_id: &str, output_mode: &str) -> ExecutionPlan {
         evidence_evaluation: EvidenceEvaluation::default(),
         answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
+    }
+}
+
+fn activity_plan() -> ExecutionPlan {
+    ExecutionPlan {
+        params: json!({
+            "from_date": "2026-07-01",
+            "to_date": "2026-07-05",
+            "limit": 10,
+        }),
+        answer_plan: AnswerPlan {
+            sections: vec!["overview".to_string(), "charges_paid".to_string()],
+        },
+        ..plan("savings_activity_list", "savings.activity_list", "list")
     }
 }
 
