@@ -144,6 +144,30 @@ async fn all_activity_request_returns_activity_list() {
         final_job["state_json"]["execution_plan"]["output_mode"],
         "list"
     );
+
+    let session_id = final_job["session_id"].as_str().unwrap();
+    let messages = app
+        .get(
+            &format!("/chat/sessions/{session_id}/messages"),
+            Some(&key.raw),
+        )
+        .await;
+    assert_eq!(messages.status(), 200);
+    let body: Value = messages.json().await.unwrap();
+    let assistant = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .expect("assistant message");
+    let content = assistant["content"].as_str().unwrap();
+    assert!(content.starts_with("Savings activity from"), "{assistant}");
+    assert!(!content.starts_with('{'), "{assistant}");
+    assert_eq!(assistant["metadata_json"]["type"], "report_response");
+    assert_eq!(
+        assistant["metadata_json"]["report_response"]["answer_plan"]["capability"],
+        "savings_activity_list"
+    );
 }
 
 async fn create_job(app: &TestApp, api_key: &str, message: &str) -> Value {

@@ -102,6 +102,25 @@ values:
     label: Amount Release
     direction: credit
     status: deferred
+buckets:
+  deposits:
+    enums: [1]
+    label: Deposits
+  withdrawals:
+    enums: [2]
+    label: Withdrawals
+  charges_paid:
+    enums: [4, 5, 7, 17, 18]
+    label: Charges paid
+  interest_and_dividends:
+    enums: [3, 8]
+    label: Interest and dividends
+  holds:
+    enums: [20, 21]
+    label: Holds
+fallback:
+  id: other
+  label: Other activity
 default_rules:
   - Use value 1 for MVP deposit reporting.
   - Exclude reversed transactions separately with is_reversed = false.

@@ -53,13 +53,9 @@ impl MessageRepository {
         job_id: Uuid,
         content: String,
     ) -> Result<ChatMessage> {
-        self.insert_assistant_message(
-            session_id,
-            job_id,
-            content,
-            json!({ "type": "report_response" }),
-        )
-        .await
+        let (content, metadata_json) = normalize_report_response(content);
+        self.insert_assistant_message(session_id, job_id, content, metadata_json)
+            .await
     }
 
     pub async fn insert_assistant_message(
@@ -96,6 +92,23 @@ impl MessageRepository {
     }
 }
 
+fn normalize_report_response(content: String) -> (String, serde_json::Value) {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return (content, json!({ "type": "report_response" }));
+    };
+    let Some(message) = payload.get("message").and_then(serde_json::Value::as_str) else {
+        return (content, json!({ "type": "report_response" }));
+    };
+
+    (
+        message.to_string(),
+        json!({
+            "type": "report_response",
+            "report_response": payload,
+        }),
+    )
+}
+
 // Visible inside the chat module so JobRepository's clarification-response
 // transaction can RETURNING-map a chat_messages row without duplicating the type.
 #[derive(Debug, FromRow)]
@@ -120,5 +133,30 @@ impl From<ChatMessageRow> for ChatMessage {
             metadata_json: row.metadata_json,
             created_at: row.created_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalize_report_response;
+
+    #[test]
+    fn report_response_content_uses_human_message_and_metadata_keeps_payload() {
+        let payload = json!({
+            "answer_plan": { "capability": "savings_activity_list" },
+            "structured": { "by_currency": {} },
+            "message": "Savings activity from **2026-05-06** to **2026-07-06**."
+        });
+
+        let (content, metadata) = normalize_report_response(payload.to_string());
+
+        assert_eq!(
+            content,
+            "Savings activity from **2026-05-06** to **2026-07-06**."
+        );
+        assert_eq!(metadata["type"], "report_response");
+        assert_eq!(metadata["report_response"], payload);
     }
 }

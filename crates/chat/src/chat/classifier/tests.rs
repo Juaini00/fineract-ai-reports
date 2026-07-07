@@ -229,6 +229,41 @@ fn classifies_retrieved_top_n_capability_with_params() {
 }
 
 #[test]
+fn list_limit_ignores_relative_date_number() {
+    let result = classify_retrieved_capability(
+        "show me list of saving activity for 3 months ago from now",
+        today(),
+        "savings",
+        "savings_activity_list",
+        "list",
+        0.72,
+        Vec::new(),
+    );
+
+    assert_eq!(result.outcome, ClassificationOutcome::Matched);
+    assert_eq!(result.params["from_date"], "2026-03-21");
+    assert_eq!(result.params["to_date"], "2026-06-21");
+    assert_eq!(result.params["limit"], 10);
+}
+
+#[test]
+fn all_activity_list_has_no_default_limit() {
+    let result = classify_retrieved_capability(
+        "show me the list of all saving activity for this month",
+        today(),
+        "savings",
+        "savings_activity_list",
+        "list",
+        0.72,
+        Vec::new(),
+    );
+
+    assert_eq!(result.outcome, ClassificationOutcome::Matched);
+    assert_eq!(result.params["from_date"], "2026-06-01");
+    assert!(result.params.get("limit").is_none());
+}
+
+#[test]
 fn classifies_numeric_clarification_option() {
     let original = clarify_retrieved_capabilities(
         "Show customer activity this week",

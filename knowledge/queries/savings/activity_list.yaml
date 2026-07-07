@@ -34,19 +34,22 @@ parameters:
     required: false
   - name: limit
     type: integer
-    required: true
+    required: false
 required_filters:
   - m_savings_account_transaction.is_reversed = false
   - m_savings_account_transaction.transaction_date BETWEEN from_date AND to_date
   - m_savings_account_transaction.office_id constrained to authorized office_ids
   - ordered by transaction_date descending, id descending
-  - bounded by limit
+  - bounded by limit when provided
 output_fields:
   - name: transaction_id
     type: bigint
     sensitivity: public_business
   - name: transaction_date
     type: date
+    sensitivity: public_business
+  - name: transaction_type_enum
+    type: bigint
     sensitivity: public_business
   - name: transaction_type
     type: string

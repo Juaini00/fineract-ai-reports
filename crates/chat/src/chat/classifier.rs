@@ -185,7 +185,11 @@ pub fn classify_retrieved_capability(
         } else {
             10
         };
-        params["limit"] = json!(limit_from_message(&normalized).unwrap_or(default_limit));
+        if let Some(limit) = limit_from_message(&normalized) {
+            params["limit"] = json!(limit);
+        } else if output_mode != "list" || !requests_all_rows(&normalized) {
+            params["limit"] = json!(default_limit);
+        }
     }
 
     ClassificationResult {
@@ -365,6 +369,12 @@ fn default_limit_for_output_mode(output_mode: Option<&str>) -> u32 {
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
+}
+
+fn requests_all_rows(message: &str) -> bool {
+    message
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|token| matches!(token, "all" | "semua"))
 }
 
 fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
@@ -599,9 +609,15 @@ fn end_of_month(year: i32, month: u32) -> Option<NaiveDate> {
 }
 
 fn limit_from_message(message: &str) -> Option<u32> {
-    message
+    let tokens = message
         .split(|character: char| !character.is_ascii_alphanumeric())
-        .find_map(|token| token.parse::<u32>().ok())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    tokens.windows(2).find_map(|pair| match pair {
+        ["top" | "limit" | "first", value] => value.parse::<u32>().ok(),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
