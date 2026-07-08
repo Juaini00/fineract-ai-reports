@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use anyhow::{Result, bail};
 use app_core::auth::model::ClientContext;
+use app_core::config::ChatFeatureConfig;
 use chrono::Utc;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -20,6 +21,8 @@ use crate::chat::llm::{LlmPlannerClient, LlmPlannerDecision};
 use crate::chat::model::{
     ChatJob, ChatMessage, CreateChatJobInput, CreatedChatJob, RespondToChatJobInput,
 };
+use crate::chat::pipeline::answer::{GeneratedAnswer, validate_grounded_answer};
+use crate::chat::pipeline::lqr::{LqrInputs, LqrOutcome, run_layered_retrieval};
 use crate::chat::planner::{build_execution_plan, evaluate_policy};
 use crate::chat::repository::{JobRepository, MessageRepository};
 use crate::knowledge::embedding::VoyageEmbeddingClient;
@@ -35,6 +38,8 @@ pub struct JobService {
     knowledge: KnowledgeRepository,
     embedding_client: VoyageEmbeddingClient,
     llm_planner: LlmPlannerClient,
+    chat_features: ChatFeatureConfig,
+    redis_url: String,
     redis: Option<redis::Client>,
 }
 
@@ -47,6 +52,8 @@ impl JobService {
         catalog: Arc<KnowledgeCatalog>,
         embedding_client: VoyageEmbeddingClient,
         llm_planner: LlmPlannerClient,
+        chat_features: ChatFeatureConfig,
+        redis_url: String,
         redis: Option<redis::Client>,
     ) -> Self {
         Self {
@@ -57,6 +64,8 @@ impl JobService {
             knowledge: KnowledgeRepository::new(app_pool),
             embedding_client,
             llm_planner,
+            chat_features,
+            redis_url,
             redis,
         }
     }
@@ -88,7 +97,7 @@ impl JobService {
                     let result: redis::RedisResult<()> =
                         redis::AsyncCommands::set_ex(&mut conn, key, body, 3600).await;
                     if let Err(error) = result {
-                        warn!(job_id = %job_id, error = %error, "redis publish event failed");
+                        warn!(job_id = %job_id, redis_url = %redis_url_log_value(&self.redis_url), error = %error, "redis publish event failed");
                     }
                     if matches!(kind, "final" | "error") {
                         let state_key = format!("chat_job:{job_id}:live_state");
@@ -106,7 +115,9 @@ impl JobService {
                         .await;
                     }
                 }
-                Err(error) => warn!(job_id = %job_id, error = %error, "redis connect failed"),
+                Err(error) => {
+                    warn!(job_id = %job_id, redis_url = %redis_url_log_value(&self.redis_url), error = %error, "redis connect failed")
+                }
             }
         }
         Ok(())
@@ -135,6 +146,7 @@ impl JobService {
         let execution_plan_json = serde_json::to_value(&execution_plan)?;
         let policy_decision_json = serde_json::to_value(&policy_decision)?;
 
+        let worker_message = message.clone();
         let job = self
             .jobs
             .create(
@@ -183,6 +195,7 @@ impl JobService {
                 .run_pipeline(
                     session_id,
                     job_id,
+                    worker_message,
                     classification_for_worker,
                     plan_for_worker,
                     policy_for_worker,
@@ -200,6 +213,7 @@ impl JobService {
         &self,
         session_id: Uuid,
         job_id: Uuid,
+        user_message: String,
         classification: ClassificationResult,
         execution_plan: Option<crate::chat::planner::ExecutionPlan>,
         policy_decision: crate::chat::planner::PolicyDecision,
@@ -211,7 +225,7 @@ impl JobService {
         }
 
         if let Some(plan) = execution_plan.as_ref() {
-            self.execute_and_finish(session_id, job_id, plan, &policy_decision)
+            self.execute_and_finish(session_id, job_id, &user_message, plan, &policy_decision)
                 .await?;
         } else if classification.outcome == ClassificationOutcome::Unsupported {
             self.fail_unsupported(job_id).await?;
@@ -238,6 +252,23 @@ impl JobService {
             return result;
         }
 
+        if should_try_lqr(
+            self.chat_features.lqr_enabled,
+            self.llm_planner.is_enabled(),
+        ) {
+            return self.classify_with_lqr(message, today, client).await;
+        }
+
+        self.classify_with_flat_retrieval(message, today, client)
+            .await
+    }
+
+    async fn classify_with_flat_retrieval(
+        &self,
+        message: &str,
+        today: chrono::NaiveDate,
+        client: &ClientContext,
+    ) -> ClassificationResult {
         match self.embedding_client.embed_query(message).await {
             Ok(embedding) => match self
                 .knowledge
@@ -293,6 +324,92 @@ impl JobService {
             .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
         self.llm_clarification_fallback(message, today, result)
             .await
+    }
+
+    async fn classify_with_lqr(
+        &self,
+        message: &str,
+        today: chrono::NaiveDate,
+        client: &ClientContext,
+    ) -> ClassificationResult {
+        let inputs = LqrInputs {
+            message,
+            client,
+            llm: &self.llm_planner,
+            embedding_client: &self.embedding_client,
+            repository: &self.knowledge,
+            catalog: &self.catalog,
+            today,
+        };
+
+        match run_layered_retrieval(inputs).await {
+            Ok(result) => self.classification_from_lqr_result(message, today, result),
+            Err(error) => {
+                warn!(error = %error, "LQR classification failed; falling back to flat retrieval");
+                self.classify_with_flat_retrieval(message, today, client)
+                    .await
+            }
+        }
+    }
+
+    fn classification_from_lqr_result(
+        &self,
+        message: &str,
+        today: chrono::NaiveDate,
+        result: crate::chat::pipeline::lqr::LqrResult,
+    ) -> ClassificationResult {
+        let layers = result.layers;
+        match result.outcome {
+            LqrOutcome::Matched {
+                capability_id,
+                confidence,
+            } => {
+                let Some(capability) = self.catalog_capability(&capability_id) else {
+                    return unsupported_result("catalog_missing_capability", Vec::new());
+                };
+                let mut classification = classify_retrieved_capability(
+                    message,
+                    today,
+                    &capability.domain,
+                    &capability.id,
+                    &capability.output_mode,
+                    confidence,
+                    Vec::new(),
+                );
+                classification.layers = layers;
+                classification.source = Some("lqr".to_string());
+                classification
+            }
+            LqrOutcome::Ambiguous {
+                options,
+                confidence,
+            } => {
+                let mut classification = clarify_retrieved_capabilities(
+                    message,
+                    today,
+                    None,
+                    options,
+                    confidence,
+                    Vec::new(),
+                );
+                classification.layers = layers;
+                classification.source = Some("lqr".to_string());
+                classification
+            }
+            LqrOutcome::Unsupported { reason } => {
+                let normalized = if reason.starts_with("off_domain_") {
+                    "off_domain_match"
+                } else if reason == "domain_ambiguous" {
+                    "vector_no_match"
+                } else {
+                    reason.as_str()
+                };
+                let mut classification = unsupported_result(normalized, Vec::new());
+                classification.layers = layers;
+                classification.source = Some("lqr".to_string());
+                classification
+            }
+        }
     }
 
     fn classify_savings_activity_list(
@@ -671,11 +788,13 @@ impl JobService {
             let worker = self.clone();
             let session_id = job.session_id;
             let job_id = input.job_id;
+            let response_content = response.content.clone();
             tokio::spawn(async move {
                 if let Err(error) = worker
                     .run_pipeline(
                         session_id,
                         job_id,
+                        response_content,
                         classification,
                         execution_plan,
                         policy_decision,
@@ -768,6 +887,7 @@ impl JobService {
         &self,
         session_id: Uuid,
         job_id: Uuid,
+        user_message: &str,
         plan: &crate::chat::planner::ExecutionPlan,
         policy_decision: &crate::chat::planner::PolicyDecision,
     ) -> Result<()> {
@@ -787,6 +907,7 @@ impl JobService {
                 if let Some(content) =
                     format_report_response(&self.catalog, plan, policy_decision, &result)
                 {
+                    let content = self.apply_llm_answer(user_message, content).await;
                     self.messages
                         .insert_assistant_response(session_id, job_id, content)
                         .await?;
@@ -856,6 +977,73 @@ impl JobService {
 
         Ok(())
     }
+
+    async fn apply_llm_answer(&self, user_message: &str, content: String) -> String {
+        if !self.llm_planner.is_enabled() {
+            return content;
+        }
+        let Ok(payload) = serde_json::from_str::<Value>(&content) else {
+            return content;
+        };
+        let evidence = build_llm_evidence(&payload);
+        match self
+            .llm_planner
+            .generate_answer(user_message, &evidence)
+            .await
+        {
+            Ok(answer) => apply_generated_answer(content.clone(), &answer).unwrap_or(content),
+            Err(error) => {
+                warn!(error = %error, "LLM answer generation failed; using deterministic response");
+                content
+            }
+        }
+    }
+}
+
+fn should_try_lqr(lqr_enabled: bool, llm_enabled: bool) -> bool {
+    lqr_enabled && llm_enabled
+}
+
+pub(crate) fn redis_url_log_value(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some((_, host)) = rest.split_once('@') else {
+        return url.to_string();
+    };
+    format!("{scheme}://***@{host}")
+}
+
+/// Build the compact evidence packet sent to the answer LLM. Blueprint
+/// Step 10 says the LLM should see "retrieved evidence" — aggregated shape —
+/// not the raw row set (rows are rendered by the deterministic formatter).
+/// Drop `structured.rows` and keep the pre-computed aggregates + row_count.
+/// Keeps payload well under `max_tokens` regardless of result set size.
+fn build_llm_evidence(payload: &Value) -> Value {
+    let mut cloned = payload.clone();
+    let Some(structured) = cloned.get_mut("structured") else {
+        return cloned;
+    };
+    let Some(structured_obj) = structured.as_object_mut() else {
+        return cloned;
+    };
+    let row_count = structured_obj
+        .get("rows")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    structured_obj.remove("rows");
+    structured_obj.insert("row_count".to_string(), json!(row_count));
+    cloned
+}
+
+fn apply_generated_answer(content: String, answer: &GeneratedAnswer) -> Option<String> {
+    let mut payload: Value = serde_json::from_str(&content).ok()?;
+    validate_grounded_answer(&payload, answer).ok()?;
+    payload
+        .as_object_mut()?
+        .insert("message".to_string(), json!(answer.message));
+    serde_json::to_string(&payload).ok()
 }
 
 fn is_deferred_context_source(
@@ -1016,6 +1204,7 @@ fn unsupported_result(
                 source_type: Some(candidate.source_type),
             })
             .collect(),
+        layers: Vec::new(),
     }
 }
 

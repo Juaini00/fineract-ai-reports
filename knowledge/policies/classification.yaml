@@ -13,6 +13,16 @@ min_gap: 0.05
 min_floor: 0.40
 others_key: other_activity
 others_label: "Others — let me describe it in my own words"
+lqr:
+  # Voyage cosine similarity clusters tightly (top-K scores often within
+  # 0.02 of each other), so gap thresholds must be small. Reachable-domain
+  # filtering in the orchestrator is the real off-domain gate.
+  domain_min_floor: 0.55
+  domain_min_gap: 0.02
+  capability_min_floor: 0.40
+  capability_min_gap: 0.02
+  retry_budget: 2
+  score_aggregation: min
 checks:
   - id: gap_in_open_interval
     rule: min_gap must be in the open interval (0, 1).

@@ -1,5 +1,9 @@
 # Full RAG Blueprint Strict Implementation Plan
 
+> **Note (2026-07-07):** Task 4 (Retrieval) is superseded by the LQR overlay when
+> `LQR_ENABLED=true`. See `docs/superpowers/plans/2026-07-07-rag-lqr-overlay.md`.
+> The flat retrieval remains as fallback until the rollout flips the default.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the current vector-first classifier shortcut with the strict `Modern_RAG_Architecture_Blueprint.md` runtime pipeline.

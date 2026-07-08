@@ -28,6 +28,15 @@ pub async fn execute_plan(
         .find(|query| query.id == plan.query_id)
         .with_context(|| format!("query {} not found in catalog", plan.query_id))?;
     let sql = read_approved_sql(catalog, query.sql_file.as_str())?;
+    tracing::info!(
+        query_id = %plan.query_id,
+        capability = %plan.capability,
+        sql_file = %query.sql_file,
+        params = %plan.params,
+        office_ids = ?policy.office_ids,
+        sql = %sql,
+        "executing approved SQL",
+    );
     let mut sql_query = sqlx::query(AssertSqlSafe(sql).into_sql_str());
 
     for parameter in &query.parameters {

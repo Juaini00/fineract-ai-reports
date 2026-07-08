@@ -215,6 +215,7 @@ pub async fn spawn_app() -> TestApp {
             validate_on_startup: true,
             sync_on_startup: false,
         },
+        chat_features: app_core::config::ChatFeatureConfig { lqr_enabled: false },
     };
     let pools = DatabasePools::connect(&config)
         .await

@@ -74,6 +74,8 @@ pub struct ClassificationResult {
     pub source: Option<String>,
     #[serde(default)]
     pub candidates: Vec<ClassificationCandidate>,
+    #[serde(default)]
+    pub layers: Vec<crate::chat::pipeline::lqr::LayerTrace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -117,6 +119,7 @@ pub fn classify_clarification_response(
                 options: Vec::new(),
                 source: Some("clarification_other_selected".to_string()),
                 candidates: original.candidates.clone(),
+                layers: original.layers.clone(),
             };
         }
 
@@ -137,6 +140,7 @@ pub fn classify_clarification_response(
             options: Vec::new(),
             source: Some("clarification_option".to_string()),
             candidates: original.candidates.clone(),
+            layers: original.layers.clone(),
         };
     }
 
@@ -170,6 +174,7 @@ pub fn classify_retrieved_capability(
                 options: Vec::new(),
                 source: Some("vector".to_string()),
                 candidates,
+                layers: Vec::new(),
             };
         };
         params["from_date"] = json!(from_date.to_string());
@@ -202,6 +207,7 @@ pub fn classify_retrieved_capability(
         options: Vec::new(),
         source: Some("vector".to_string()),
         candidates,
+        layers: Vec::new(),
     }
 }
 
@@ -233,6 +239,7 @@ pub fn clarify_retrieved_capabilities(
         options,
         source: Some("vector".to_string()),
         candidates,
+        layers: Vec::new(),
     }
 }
 

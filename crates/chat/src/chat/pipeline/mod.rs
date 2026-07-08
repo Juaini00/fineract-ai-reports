@@ -1,5 +1,6 @@
 pub mod answer;
 pub mod evidence;
+pub mod lqr;
 pub mod model;
 pub mod parser;
 pub mod resolver;

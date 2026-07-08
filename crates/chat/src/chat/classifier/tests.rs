@@ -5,6 +5,25 @@ fn today() -> NaiveDate {
 }
 
 #[test]
+fn classification_result_defaults_missing_layers() {
+    let json = serde_json::json!({
+        "outcome": "unsupported",
+        "domain": null,
+        "capability": null,
+        "confidence": 0.0,
+        "params": {},
+        "clarification": null,
+        "options": [],
+        "source": "legacy",
+        "candidates": []
+    });
+
+    let result: ClassificationResult = serde_json::from_value(json).expect("legacy result");
+
+    assert!(result.layers.is_empty());
+}
+
+#[test]
 fn parses_yesterday() {
     let range = date_range("total deposit yesterday", today()).unwrap();
     assert_eq!(
