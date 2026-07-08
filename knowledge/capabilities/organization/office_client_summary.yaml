@@ -1,0 +1,45 @@
+id: organization_office_client_summary
+status: approved_mvp
+domain: organization
+display_name: Office Client Summary
+description: Return client lifecycle counts (active, pending, closed, total) per office within the caller's authorized scope.
+data_areas:
+  - organization_foundation
+  - client_foundation
+required_api_capability: organization_office_client_summary
+query_id: organization.office_client_summary
+metrics:
+  - client.lifecycle_count
+output_mode: top_n
+examples:
+  - Show client counts per office.
+  - Which offices have the most active clients?
+  - Office client summary top 20.
+supported_intents:
+  - client lifecycle counts grouped by office
+unsupported_intents:
+  - client identity lookup by name
+required_parameters:
+  - limit
+optional_parameters:
+  - office_ids
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  max_limit: 200
+pii:
+  returns_pii: false
+cost_class: low
+clarification:
+  missing_parameters:
+    - limit
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: required_parameters_match_query
+    rule: required_parameters must be declared as required query parameters.
+  - id: no_pii_output
+    rule: query output fields must not expose client identity.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
