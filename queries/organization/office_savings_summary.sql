@@ -6,7 +6,8 @@ SELECT
     COUNT(sa.id)::bigint AS total_account_count,
     COALESCE(SUM(sa.account_balance_derived) FILTER (WHERE sa.status_enum = 300), 0)::numeric AS total_balance
 FROM m_office o
-LEFT JOIN m_savings_account sa ON sa.office_id = o.id
+LEFT JOIN m_client c ON c.office_id = o.id
+LEFT JOIN m_savings_account sa ON sa.client_id = c.id
 WHERE o.id = ANY($1::bigint[])
   AND ($2::text IS NULL OR sa.currency_code = $2::text)
 GROUP BY o.id, o.name, sa.currency_code
