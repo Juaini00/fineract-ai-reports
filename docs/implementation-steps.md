@@ -1238,6 +1238,52 @@ Each new capability requires:
 5. Test cases.
 6. Permission scope definition.
 
+## Phase 21: Client and Organization Full Support
+
+Goal: bring client and organization domains to feature parity with savings so operational reporting is not limited to the savings domain.
+
+Current status:
+
+```text
+DONE (branch feat/client-organization-full-support, 2026-07-09)
+
+Client domain (4 new approved_mvp capabilities):
+  * client_top_n_by_savings_balance      (PII-gated, top-N by current balance)
+  * client_top_n_by_savings_account_count(PII-gated, top-N by number of active accounts)
+  * client_top_n_by_deposit_volume       (PII-gated, top-N by deposit total in date range)
+  * client_summary_by_office             (lifecycle breakdown per office, top-N)
+
+Organization domain (5 new approved_mvp capabilities):
+  * organization_office_client_summary   (per-office client lifecycle counts)
+  * organization_office_savings_summary  (per-office savings totals ranked by balance)
+  * organization_office_activity_ranking (top offices by transaction volume in date range)
+  * organization_office_hierarchy_tree   (walkable tree with parent_id and depth)
+  * organization_office_dormant          (offices with zero savings activity in date range)
+
+Catalog metrics after this phase:
+  * capabilities: 16 -> 25
+  * queries:      16 -> 25
+  * retrieval documents: 83 -> 101
+
+PII treatment:
+  * client_id and client_display_name output fields carry sensitivity=pii.
+  * Formatter masks these fields when policy.can_view_pii is false.
+  * All organization capabilities are PII-free (aggregates only).
+
+Office scope:
+  * Every SQL file constrains rows to authorized office_ids via the array_bigint
+    parameter sourced from authorized_scope. No post-fetch Rust filtering.
+
+Follow-ups deferred from this phase:
+  * POST /vector-index/rebuild must run before end-to-end chat tests can retrieve
+    the new capabilities.
+  * Long-form docs (capability-coverage-matrix.md, knowledge-catalog.md,
+    reporting-capabilities.md, scenarios/03-catalog-validate.md) still reference
+    the 16/16 catalog snapshot and must be resynced.
+  * Bespoke narrative renderers per new capability are optional; generic
+    render::rows / render::summary already serve them via the LLM answer path.
+```
+
 ## Recommended Implementation Order
 
 ```text
@@ -1262,4 +1308,5 @@ Phase 17 -> LLM Provider Integration
 Phase 18 -> Vector Indexing
 Phase 19 -> Reporting Expansion
 Phase 20 -> LQR Retrieval Overlay
+Phase 21 -> Client And Organization Full Support
 ```
