@@ -1,0 +1,56 @@
+id: client.summary_by_office
+database: fineract
+sql_file: queries/client/summary_by_office.sql
+data_areas:
+  - client_foundation
+  - organization_foundation
+tables:
+  - m_client
+  - m_office
+metrics:
+  - client.lifecycle_count
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: limit
+    type: integer
+    required: true
+output_fields:
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: active_count
+    type: bigint
+    sensitivity: public_business
+  - name: pending_count
+    type: bigint
+    sensitivity: public_business
+  - name: closed_count
+    type: bigint
+    sensitivity: public_business
+  - name: total_count
+    type: bigint
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  parameterized_only: true
+timeout_ms: 3000
+cost_class: low
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: office_filter_is_bound
+    rule: SQL must constrain c.office_id with ANY($1::bigint[]).
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: no_identity_fields
+    rule: Query must not output client names, account numbers, emails, mobile numbers, or external ids.

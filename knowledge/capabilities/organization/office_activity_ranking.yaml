@@ -1,0 +1,49 @@
+id: organization_office_activity_ranking
+status: approved_mvp
+domain: organization
+display_name: Office Activity Ranking
+description: Rank offices by savings transaction volume in a date range within the caller's authorized scope.
+data_areas:
+  - organization_foundation
+  - client_foundation
+required_api_capability: organization_office_activity_ranking
+query_id: organization.office_activity_ranking
+metrics:
+  - savings.transaction_count
+output_mode: top_n
+examples:
+  - Which offices had the most transactions this month?
+  - Top 10 busiest offices by transaction count in Q2.
+supported_intents:
+  - office ranking by transaction volume in a date range
+unsupported_intents:
+  - individual account or client identity
+required_parameters:
+  - from_date
+  - to_date
+  - limit
+optional_parameters:
+  - office_ids
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  max_date_range_days: 366
+  max_limit: 100
+pii:
+  returns_pii: false
+cost_class: medium
+clarification:
+  missing_parameters:
+    - from_date
+    - to_date
+    - limit
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: required_parameters_match_query
+    rule: required_parameters must be declared as required query parameters.
+  - id: no_pii_output
+    rule: query output fields must not expose client identity.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
