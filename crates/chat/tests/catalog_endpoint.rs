@@ -46,8 +46,8 @@ async fn validate_returns_catalog_counts_for_real_knowledge() {
     assert_eq!(body["data"]["valid"], true);
     assert_eq!(body["data"]["data_areas"], 13);
     assert_eq!(body["data"]["domains"], 7);
-    assert_eq!(body["data"]["capabilities"], 18);
-    assert_eq!(body["data"]["queries"], 18);
+    assert_eq!(body["data"]["capabilities"], 20);
+    assert_eq!(body["data"]["queries"], 20);
 }
 
 #[tokio::test(flavor = "multi_thread")]
