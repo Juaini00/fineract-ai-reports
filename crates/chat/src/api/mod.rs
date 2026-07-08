@@ -78,6 +78,8 @@ impl ChatAppState {
                 catalog.clone(),
                 runtime_embedding_client,
                 llm_planner,
+                core.config.chat_features.clone(),
+                core.config.redis.url.clone(),
                 core.pools.redis.clone(),
             ),
         };

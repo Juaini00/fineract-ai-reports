@@ -1,7 +1,7 @@
 use anyhow::Result;
 use pgvector::Vector;
 use serde_json::Value;
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{AssertSqlSafe, FromRow, PgPool, Postgres, SqlSafeStr, Transaction};
 use uuid::Uuid;
 
 use crate::knowledge::index::sync::{document_content_hash, retrieval_source_type_name};
@@ -201,6 +201,145 @@ impl KnowledgeRepository {
 
         Ok(rows)
     }
+
+    pub async fn search_hybrid_by_source_type(
+        &self,
+        source_type: &str,
+        embedding: Vec<f32>,
+        keyword_terms: &[String],
+        allowed_source_ids: Option<&[String]>,
+        metadata_filter: &std::collections::BTreeMap<String, String>,
+        limit: i64,
+    ) -> Result<Vec<RetrievedKnowledgeCandidate>> {
+        let metadata_keys: Vec<String> = metadata_filter.keys().cloned().collect();
+        let keyword_terms = keyword_terms
+            .iter()
+            .map(|term| term.trim().to_lowercase())
+            .filter(|term| term.len() >= 2)
+            .collect::<Vec<_>>();
+        let has_keyword_terms = !keyword_terms.is_empty();
+        let sql = build_hybrid_sql(
+            allowed_source_ids.is_some(),
+            &metadata_keys,
+            has_keyword_terms,
+        );
+        let mut query =
+            sqlx::query_as::<_, RetrievedKnowledgeCandidate>(AssertSqlSafe(sql).into_sql_str())
+                .bind(Vector::from(embedding))
+                .bind(source_type);
+
+        if let Some(ids) = allowed_source_ids {
+            query = query.bind(ids.to_vec());
+        }
+        for key in &metadata_keys {
+            query = query.bind(metadata_filter.get(key).cloned().unwrap_or_default());
+        }
+        if has_keyword_terms {
+            query = query.bind(keyword_terms);
+        }
+
+        let rows = query.bind(limit).fetch_all(&self.pool).await?;
+        Ok(rows)
+    }
+}
+
+pub(crate) fn build_hybrid_sql(
+    has_allowed_ids: bool,
+    metadata_keys: &[String],
+    has_keyword_terms: bool,
+) -> String {
+    let mut param_idx = 3;
+    let allowed_param = if has_allowed_ids {
+        let value = Some(param_idx);
+        param_idx += 1;
+        value
+    } else {
+        None
+    };
+    let metadata_params = metadata_keys
+        .iter()
+        .map(|key| {
+            let current = param_idx;
+            param_idx += 1;
+            (key, current)
+        })
+        .collect::<Vec<_>>();
+    let keyword_param = if has_keyword_terms {
+        let value = Some(param_idx);
+        param_idx += 1;
+        value
+    } else {
+        None
+    };
+    let keyword_hits = keyword_param.map_or_else(
+        || "0".to_string(),
+        |idx| {
+            format!(
+                "(SELECT count(*)::float8 FROM unnest(${idx}::text[]) AS term WHERE lower(retrieval_text) LIKE '%' || term || '%')"
+            )
+        },
+    );
+    // Blueprint Step 7 weighted rerank:
+    //   final = 0.45*semantic + 0.35*keyword + 0.15*metadata + 0.05*freshness
+    // metadata_score = 1.0 (rows already pass metadata WHERE filters).
+    // freshness_score decays over 90 days from embedded_at.
+    // Sort key is (1 - final), so ORDER BY ASC still surfaces best matches first.
+    let semantic_score = "GREATEST(1.0 - ((embedding <=> $1) / 2.0), 0.0)";
+    let keyword_score = format!("LEAST({keyword_hits}, 3.0) / 3.0");
+    let freshness_score = "GREATEST(1.0 - LEAST(EXTRACT(EPOCH FROM (now() - COALESCE(embedded_at, now()))) / 7776000.0, 1.0), 0.0)";
+    let hybrid_distance = format!(
+        "1.0 - (0.45 * {semantic_score} + 0.35 * ({keyword_score}) + 0.15 * 1.0 + 0.05 * {freshness_score})"
+    );
+    let mut sql = String::from(
+        format!(
+            r#"
+        WITH latest_catalog AS (
+            SELECT id
+            FROM knowledge_catalog_versions
+            WHERE status = 'embedded'
+            ORDER BY synced_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        ), ranked AS (
+            SELECT
+                source_type,
+                source_id,
+                title,
+                retrieval_text,
+                metadata_json,
+                (embedding <=> $1) AS vector_distance,
+                {keyword_hits} AS keyword_hits,
+                {hybrid_distance} AS hybrid_distance,
+                row_number() OVER (PARTITION BY source_type, source_id ORDER BY {hybrid_distance}) AS row_number
+            FROM knowledge_index
+            WHERE catalog_version_id = (SELECT id FROM latest_catalog)
+              AND embedding IS NOT NULL
+              AND source_type = $2
+        "#
+        )
+        .as_str(),
+    );
+
+    if let Some(param) = allowed_param {
+        sql.push_str(&format!(
+            "\n              AND source_id = ANY(${param}::text[])"
+        ));
+    }
+    for (key, param) in metadata_params {
+        sql.push_str(&format!(
+            "\n              AND metadata_json->>'{key}' = ${param}"
+        ));
+    }
+    sql.push_str(&format!(
+        r#"
+        )
+        SELECT source_type, source_id, title, retrieval_text, metadata_json, hybrid_distance AS distance
+        FROM ranked
+        WHERE row_number = 1
+        ORDER BY hybrid_distance
+        LIMIT ${param_idx}
+        "#
+    ));
+    sql
 }
 
 async fn upsert_catalog_version(
@@ -308,4 +447,50 @@ async fn insert_knowledge_index_document(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hybrid_sql_includes_source_type_and_allowed_source_id_filter() {
+        let sql = super::build_hybrid_sql(true, &["domain".into(), "office_scope".into()], false);
+
+        assert!(sql.contains("source_type = $2"));
+        assert!(sql.contains("source_id = ANY($3::text[])"));
+        assert!(sql.contains("metadata_json->>'domain' = $"));
+        assert!(sql.contains("metadata_json->>'office_scope' = $"));
+        assert!(sql.contains("ORDER BY hybrid_distance"));
+    }
+
+    #[test]
+    fn hybrid_sql_without_allowed_ids_skips_source_id_filter() {
+        let sql = super::build_hybrid_sql(false, &[], false);
+
+        assert!(!sql.contains("source_id = ANY"));
+        assert!(sql.contains("source_type = $2"));
+    }
+
+    #[test]
+    fn hybrid_sql_with_keywords_boosts_keyword_matches() {
+        let sql = super::build_hybrid_sql(true, &[], true);
+
+        assert!(sql.contains("$4::text[]"));
+        assert!(sql.contains("keyword_hits"));
+        assert!(sql.contains("hybrid_distance"));
+        assert!(sql.contains("ORDER BY hybrid_distance"));
+    }
+
+    #[test]
+    fn hybrid_sql_uses_blueprint_weighted_rerank() {
+        let sql = super::build_hybrid_sql(false, &[], true);
+
+        assert!(sql.contains("0.45"), "semantic weight missing");
+        assert!(sql.contains("0.35"), "keyword weight missing");
+        assert!(sql.contains("0.15"), "metadata weight missing");
+        assert!(sql.contains("0.05"), "freshness weight missing");
+        assert!(
+            sql.contains("embedded_at"),
+            "freshness term must use embedded_at"
+        );
+    }
 }

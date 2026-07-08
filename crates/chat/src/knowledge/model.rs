@@ -23,6 +23,8 @@ pub struct ClassificationPolicy {
     pub min_floor: f32,
     pub others_key: String,
     pub others_label: String,
+    #[serde(default)]
+    pub lqr: LqrPolicy,
 }
 
 impl Default for ClassificationPolicy {
@@ -32,8 +34,67 @@ impl Default for ClassificationPolicy {
             min_floor: 0.40,
             others_key: "other_activity".to_string(),
             others_label: "Others — let me describe it in my own words".to_string(),
+            lqr: LqrPolicy::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LqrPolicy {
+    #[serde(default = "default_domain_floor")]
+    pub domain_min_floor: f32,
+    #[serde(default = "default_domain_gap")]
+    pub domain_min_gap: f32,
+    #[serde(default = "default_cap_floor")]
+    pub capability_min_floor: f32,
+    #[serde(default = "default_cap_gap")]
+    pub capability_min_gap: f32,
+    #[serde(default = "default_retry_budget")]
+    pub retry_budget: u8,
+    #[serde(default)]
+    pub score_aggregation: ScoreAggregation,
+}
+
+impl Default for LqrPolicy {
+    fn default() -> Self {
+        Self {
+            domain_min_floor: default_domain_floor(),
+            domain_min_gap: default_domain_gap(),
+            capability_min_floor: default_cap_floor(),
+            capability_min_gap: default_cap_gap(),
+            retry_budget: default_retry_budget(),
+            score_aggregation: ScoreAggregation::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoreAggregation {
+    #[default]
+    Min,
+    Mean,
+    Product,
+}
+
+fn default_domain_floor() -> f32 {
+    0.55
+}
+
+fn default_domain_gap() -> f32 {
+    0.10
+}
+
+fn default_cap_floor() -> f32 {
+    0.40
+}
+
+fn default_cap_gap() -> f32 {
+    0.05
+}
+
+fn default_retry_budget() -> u8 {
+    2
 }
 
 #[derive(Debug, Clone, Deserialize)]

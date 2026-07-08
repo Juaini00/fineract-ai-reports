@@ -120,3 +120,47 @@ fn catalog_hash_changes_when_retrieval_text_changes() {
 
     assert_ne!(before, catalog_content_hash(&documents));
 }
+
+#[test]
+fn classification_policy_reads_lqr_block_with_defaults() {
+    let yaml = r#"
+min_gap: 0.05
+min_floor: 0.40
+others_key: other_activity
+others_label: "Others"
+lqr:
+  domain_min_floor: 0.55
+  domain_min_gap: 0.10
+  retry_budget: 2
+  score_aggregation: min
+"#;
+
+    let policy: crate::knowledge::model::ClassificationPolicy =
+        serde_yaml::from_str(yaml).expect("parse policy");
+
+    assert_eq!(policy.lqr.domain_min_floor, 0.55);
+    assert_eq!(policy.lqr.domain_min_gap, 0.10);
+    assert_eq!(policy.lqr.capability_min_floor, 0.40);
+    assert_eq!(policy.lqr.capability_min_gap, 0.05);
+    assert_eq!(policy.lqr.retry_budget, 2);
+    assert!(matches!(
+        policy.lqr.score_aggregation,
+        crate::knowledge::model::ScoreAggregation::Min
+    ));
+}
+
+#[test]
+fn classification_policy_defaults_lqr_when_missing() {
+    let yaml = r#"
+min_gap: 0.05
+min_floor: 0.40
+others_key: other_activity
+others_label: "Others"
+"#;
+
+    let policy: crate::knowledge::model::ClassificationPolicy =
+        serde_yaml::from_str(yaml).expect("parse policy");
+
+    assert_eq!(policy.lqr.domain_min_floor, 0.55);
+    assert_eq!(policy.lqr.retry_budget, 2);
+}

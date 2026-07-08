@@ -55,6 +55,7 @@ fn skips_plan_when_clarification_required() {
         options: Vec::new(),
         source: Some("test".to_string()),
         candidates: Vec::new(),
+        layers: Vec::new(),
     };
 
     let catalog = catalog();
@@ -116,6 +117,7 @@ fn matched_total_deposit() -> ClassificationResult {
         options: Vec::new(),
         source: Some("test".to_string()),
         candidates: Vec::new(),
+        layers: Vec::new(),
     }
 }
 

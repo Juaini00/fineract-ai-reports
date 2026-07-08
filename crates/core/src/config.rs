@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub llm: LlmConfig,
     pub voyage_ai: VoyageAiConfig,
     pub catalog: CatalogConfig,
+    pub chat_features: ChatFeatureConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +68,11 @@ pub struct CatalogConfig {
     pub sync_on_startup: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ChatFeatureConfig {
+    pub lqr_enabled: bool,
+}
+
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
@@ -119,7 +125,7 @@ impl AppConfig {
                 .context("LLM_TIMEOUT_MS must be an integer")?,
                 max_output_tokens: get_env_or(
                     "LLM_MAX_OUTPUT_TOKENS",
-                    &get_env_or("DEEPSEEK_MAX_OUTPUT_TOKENS", "2000"),
+                    &get_env_or("DEEPSEEK_MAX_OUTPUT_TOKENS", "4000"),
                 )
                 .parse()
                 .context("LLM_MAX_OUTPUT_TOKENS must be an integer")?,
@@ -150,6 +156,9 @@ impl AppConfig {
                 sync_on_startup: get_env_or("CATALOG_SYNC_ON_STARTUP", "false")
                     .parse()
                     .context("CATALOG_SYNC_ON_STARTUP must be true or false")?,
+            },
+            chat_features: ChatFeatureConfig {
+                lqr_enabled: get_env_or("LQR_ENABLED", "true").eq_ignore_ascii_case("true"),
             },
         })
     }

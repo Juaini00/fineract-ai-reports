@@ -9,6 +9,14 @@ use crate::chat::classifier::ClarificationOption;
 use crate::chat::pipeline::answer::{GeneratedAnswer, parse_generated_answer};
 use crate::chat::pipeline::model::ParsedIntent;
 use crate::chat::pipeline::parser::parse_semantic_response;
+use crate::chat::pipeline::retrieval::{LayeredRetrievalPlan, parse_layered_retrieval_response};
+
+const LAYERED_RETRIEVAL_SYSTEM: &str = r#"You are a retrieval planner for a chat-driven banking reporting system.
+Given a user report request and conversation context, produce JSON that splits the request into four short retrieval fragments matching the catalog's layered structure: domain, capability, query, keyword. Each fragment must be under 12 words. Never include dates, limits, or currency codes; those are resolved separately.
+
+Return JSON only:
+{"layers":{"domain":string,"capability":string,"query":string,"keyword":string,"graph_hint":string?},"confidence":number}
+"#;
 
 #[derive(Clone)]
 pub struct LlmPlannerClient {
@@ -151,18 +159,50 @@ impl LlmPlannerClient {
         if !self.is_enabled() {
             bail!("LLM_API_KEY is required for answer generation");
         }
-        let system = "You generate grounded reporting prose. Return only JSON with message and citations. Do not add facts not present in structured input.";
+        let system = "You generate a SHORT grounded reporting summary from an aggregated evidence packet. \
+The evidence never includes raw rows — reason from the pre-computed aggregates \
+(structured.by_currency, structured.weekly_aggregation, structured.row_count, answer_plan.coverage). \
+STRICT length limits: `message` MUST be under 600 characters total, one paragraph, no lists, no per-row detail. \
+The deterministic formatter already renders the full table — your job is a 2–4 sentence overview only. \
+Return ONLY JSON: {\"message\": string, \"citations\": [string]}. \
+Citations must reference paths that appear in evidence \
+(e.g. `answer_plan.coverage`, `structured.by_currency`, `structured.weekly_aggregation`, `structured.row_count`). \
+Do not add facts not present in evidence. Do not restate individual rows.";
         let user = json!({
             "user_message": user_message,
-            "structured_response": structured,
+            "evidence": structured,
             "response_schema": {
                 "message": "markdown string",
-                "citations": ["answer_plan.coverage", "structured.rows[0]"]
+                "citations": [
+                    "answer_plan.coverage",
+                    "structured.by_currency",
+                    "structured.weekly_aggregation",
+                    "structured.row_count"
+                ]
             }
         })
         .to_string();
         let content = self.chat_json(system, user, "answer generation").await?;
         parse_generated_answer(&content)
+    }
+
+    pub async fn plan_layered_retrieval(
+        &self,
+        message: &str,
+        conversation_context: &Value,
+    ) -> Result<LayeredRetrievalPlan> {
+        if !self.is_enabled() {
+            bail!("LLM_API_KEY is required for layered retrieval planner");
+        }
+        let user = json!({
+            "conversation_context": conversation_context,
+            "user_message": message,
+        })
+        .to_string();
+        let content = self
+            .chat_json(LAYERED_RETRIEVAL_SYSTEM, user, "layered retrieval planner")
+            .await?;
+        parse_layered_retrieval_response(&content)
     }
 
     async fn chat_json(&self, system: &str, user: String, operation: &str) -> Result<String> {

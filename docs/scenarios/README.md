@@ -32,6 +32,7 @@ JOB_ID=<set after 05-chat-session-and-job>
 | `13-custom-bucket-breakdown.md` | TODO: `bucket=N_days` with `bucket_days` parameter validation | 🆕 TODO |
 | `14-composite-multi-metric.md` | TODO: one turn, multiple metrics via `ExecutionPlanBatch` and composite output_mode. See §18.2 | 🆕 TODO |
 | `15-charge-outstanding-and-hold-balance.md` | TODO: `savings_charge_outstanding_summary` (v0.2 candidate) and `savings_hold_balance_summary` (v0.3) once activation criteria in `docs/reporting-data-scope.md` §0 are met | 🆕 TODO |
+| `16-lqr-layered-retrieval.md` | LQR overlay: domain short-circuit, domain-scoped capability retrieval, per-layer audit trace | 🆕 Added; not yet rerun |
 
 ## Latest run
 

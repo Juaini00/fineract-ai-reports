@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::api::ChatAppState;
 use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
 use crate::chat::model::{CreateChatJobInput, RespondToChatJobInput};
+use crate::chat::service::job::redis_url_log_value;
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
 pub async fn create(
@@ -102,20 +103,22 @@ pub async fn stream(
     // ponytail: polling; upgrade to PubSub if per-job event latency hurts UX.
     let event_key = format!("chat_job:{job_id}:latest_event");
     let state_key = format!("chat_job:{job_id}:live_state");
+    let redis_url = redis_url_log_value(&state.core.config.redis.url);
     let stream = stream::unfold(
         (
             redis_client,
             event_key,
             state_key,
+            redis_url,
             Some(snapshot),
             0u32,
             true,
         ),
-        |(client, event_key, state_key, snapshot, ticks, mut first)| async move {
+        |(client, event_key, state_key, redis_url, snapshot, ticks, mut first)| async move {
             if let Some(initial) = snapshot {
                 return Some((
                     Ok::<_, Infallible>(Event::default().event("status").data(initial)),
-                    (client, event_key, state_key, None, ticks, false),
+                    (client, event_key, state_key, redis_url, None, ticks, false),
                 ));
             }
             if !first {
@@ -128,7 +131,7 @@ pub async fn stream(
             let mut conn = match client.get_multiplexed_async_connection().await {
                 Ok(conn) => conn,
                 Err(error) => {
-                    warn!(error = %error, "redis connect failed during SSE");
+                    warn!(redis_url = %redis_url, error = %error, "redis connect failed during SSE");
                     return None;
                 }
             };
@@ -146,7 +149,7 @@ pub async fn stream(
             let next_ticks = if terminal { 121 } else { ticks + 1 };
             Some((
                 Ok(sse),
-                (client, event_key, state_key, None, next_ticks, first),
+                (client, event_key, state_key, redis_url, None, next_ticks, first),
             ))
         },
     )

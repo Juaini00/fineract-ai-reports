@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,7 +10,15 @@ pub struct GeneratedAnswer {
 }
 
 pub fn parse_generated_answer(content: &str) -> Result<GeneratedAnswer> {
-    serde_json::from_str(content).map_err(anyhow::Error::from)
+    serde_json::from_str(content).with_context(|| {
+        let tail_start = content.len().saturating_sub(120);
+        format!(
+            "invalid generated answer JSON from LLM (content_len={}) head={:?} tail={:?}",
+            content.len(),
+            content.chars().take(120).collect::<String>(),
+            &content[tail_start..],
+        )
+    })
 }
 
 pub fn validate_grounded_answer(structured: &Value, answer: &GeneratedAnswer) -> Result<()> {
@@ -26,9 +34,6 @@ pub fn validate_grounded_answer(structured: &Value, answer: &GeneratedAnswer) ->
 }
 
 fn citation_exists(structured: &Value, citation: &str) -> bool {
-    if citation == "answer_plan.coverage" {
-        return structured.pointer("/answer_plan/coverage").is_some();
-    }
     if let Some(index) = citation
         .strip_prefix("structured.rows[")
         .and_then(|rest| rest.strip_suffix(']'))
@@ -39,7 +44,11 @@ fn citation_exists(structured: &Value, citation: &str) -> bool {
             .and_then(Value::as_array)
             .is_some_and(|rows| index < rows.len());
     }
-    false
+    let pointer: String = citation
+        .split('.')
+        .map(|segment| format!("/{segment}"))
+        .collect();
+    structured.pointer(&pointer).is_some()
 }
 
 #[cfg(test)]
@@ -70,5 +79,13 @@ mod tests {
             citations: vec!["structured.rows[0]".to_string()],
         };
         assert!(validate_grounded_answer(&structured, &answer).is_err());
+    }
+
+    #[test]
+    fn parse_error_includes_content_length_hint() {
+        let error = parse_generated_answer("{\"message\":\"unfinished").unwrap_err();
+
+        assert!(error.to_string().contains("invalid generated answer JSON"));
+        assert!(error.to_string().contains("content_len=22"));
     }
 }
