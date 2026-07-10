@@ -19,6 +19,12 @@ pub(crate) struct CreateApiKeyRequest {
     pub(crate) allowed_capabilities: Vec<String>,
 
     #[serde(default)]
+    pub(crate) allow_all_offices: bool,
+
+    #[serde(default)]
+    pub(crate) allow_all_capabilities: bool,
+
+    #[serde(default)]
     pub(crate) can_view_pii: bool,
 }
 

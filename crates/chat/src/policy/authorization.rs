@@ -1,7 +1,42 @@
 use std::{collections::HashSet, fmt};
 
+use anyhow::Result;
 use app_core::api::error::ApiError;
 use app_core::auth::model::ClientContext;
+use sqlx::PgPool;
+
+use crate::knowledge::model::KnowledgeCatalog;
+
+/// Expand `allow_all_*` wildcard grants into concrete lists.
+///
+/// Called once at each request/job entry point (auth boundary). After this
+/// runs, `client.allowed_capabilities` and `client.allowed_office_ids` hold
+/// the actual grant snapshot for this request — downstream code never sees
+/// the wildcard flags. Newly-approved capabilities and newly-created offices
+/// are picked up automatically on the next request.
+pub async fn resolve_wildcard_grants(
+    client: &mut ClientContext,
+    catalog: &KnowledgeCatalog,
+    fineract_pool: &PgPool,
+) -> Result<()> {
+    if client.allow_all_capabilities {
+        client.allowed_capabilities = catalog
+            .capabilities
+            .iter()
+            .filter(|capability| capability.status == "approved_mvp")
+            .map(|capability| capability.id.clone())
+            .collect();
+    }
+
+    if client.allow_all_offices {
+        let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM m_office ORDER BY id")
+            .fetch_all(fineract_pool)
+            .await?;
+        client.allowed_office_ids = rows.into_iter().map(|(id,)| id).collect();
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AuthorizationError {
@@ -119,6 +154,8 @@ mod tests {
             key_prefix: "air_test".to_string(),
             allowed_office_ids: vec![1, 2],
             allowed_capabilities: vec!["savings_deposit_total".to_string()],
+            allow_all_offices: false,
+            allow_all_capabilities: false,
             can_view_pii: false,
             expires_at: None,
         }

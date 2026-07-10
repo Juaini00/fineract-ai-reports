@@ -30,6 +30,8 @@ pub(crate) async fn create_api_key(
             expires_at: request.expires_at,
             allowed_office_ids: request.allowed_office_ids,
             allowed_capabilities: request.allowed_capabilities,
+            allow_all_offices: request.allow_all_offices,
+            allow_all_capabilities: request.allow_all_capabilities,
             can_view_pii: request.can_view_pii,
         })
         .await
@@ -59,7 +61,7 @@ pub(crate) async fn get_me(
     .into_response())
 }
 
-fn authorize_bootstrap_admin(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+pub fn authorize_bootstrap_admin(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     let token = extract_bearer_token(headers)
         .ok_or_else(|| ApiError::unauthorized("missing Authorization: Bearer <bootstrap_token>"))?;
 

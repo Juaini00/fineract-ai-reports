@@ -619,6 +619,7 @@ Current status:
 
 ```text
 DONE: migration 20260617130000_create_chat_tables.sql creates chat sessions, messages, jobs, checkpoints, events, and indexes.
+DONE: migration 20260709030000_add_chat_job_state_revision.sql adds chat_jobs.state_revision for optimistic locking of per-job memory.
 ```
 
 ## Phase 9: Chat Job API Foundation
@@ -968,30 +969,63 @@ max row enforcement beyond SQL LIMIT metadata
 background worker instead of synchronous create-job execution
 ```
 
-## Phase 15: Audit Logging
+## Phase 15: Event-Driven Audit Trail
 
-Goal: make every request traceable.
+Goal: make every chat job traceable without putting audit DB writes in the critical path. See `docs/audit-trail-design.md`.
 
-Audit fields:
+Current status:
 
 ```text
-request_id
+DESIGNED (2026-07-09)
+```
+
+Audit storage:
+
+```text
+chat_job_audit_events
+```
+
+Core fields:
+
+```text
+job_id
+session_id
 api_key_id
-message
-decision
-domain
-capability
-query_id
-params
+event_type
+stage
+layer
+blueprint_step
 status
-error_code
 latency_ms
+input_summary_json
+output_summary_json
+decision_json
+flags_json
+error_json
 created_at
 ```
 
 Do not log raw API keys.
 
-Avoid logging sensitive result data unless explicitly needed.
+Avoid logging sensitive result data unless explicitly needed and policy-approved.
+
+Write path:
+
+```text
+main job pipeline -> non-blocking AuditHandle::record -> bounded tokio mpsc queue -> background batch writer -> PostgreSQL
+```
+
+Important rule:
+
+```text
+audit persistence failure must not fail or delay the main chat job
+```
+
+First implementation scope:
+
+```text
+chat job pipeline only; do not audit health/readiness/simple status endpoints yet
+```
 
 ## Phase 16: Response Formatting
 
@@ -1247,13 +1281,19 @@ Current status:
 ```text
 DONE (branch feat/client-organization-full-support, 2026-07-09)
 
-Client domain (4 new approved_mvp capabilities):
+Client domain (7 approved_mvp capabilities total):
+  * client_lifecycle_summary              (aggregate lifecycle summary)
+  * client_activation_monthly_breakdown   (monthly activation counts)
+  * client_activation_top_n_offices       (top offices by activation count)
   * client_top_n_by_savings_balance      (PII-gated, top-N by current balance)
   * client_top_n_by_savings_account_count(PII-gated, top-N by number of active accounts)
   * client_top_n_by_deposit_volume       (PII-gated, top-N by deposit total in date range)
   * client_summary_by_office             (lifecycle breakdown per office, top-N)
 
-Organization domain (5 new approved_mvp capabilities):
+Organization domain (8 approved_mvp capabilities total):
+  * organization_office_summary           (aggregate office/staff summary)
+  * organization_hierarchy_summary        (aggregate hierarchy depth summary)
+  * organization_office_opening_monthly_breakdown (monthly office opening counts)
   * organization_office_client_summary   (per-office client lifecycle counts)
   * organization_office_savings_summary  (per-office savings totals ranked by balance)
   * organization_office_activity_ranking (top offices by transaction volume in date range)
@@ -1267,7 +1307,9 @@ Catalog metrics after this phase:
 
 PII treatment:
   * client_id and client_display_name output fields carry sensitivity=pii.
-  * Formatter masks these fields when policy.can_view_pii is false.
+  * Planner blocks PII-output capabilities when the API key has can_view_pii=false,
+    because GET /chat/jobs/{job_id} returns raw result_json.
+  * Formatter omits PII fields when policy.can_view_pii=false as defense-in-depth.
   * All organization capabilities are PII-free (aggregates only).
 
 Office scope:
@@ -1277,6 +1319,14 @@ Office scope:
 Follow-ups deferred from this phase:
   * POST /vector-index/rebuild must run before end-to-end chat tests can retrieve
     the new capabilities.
+  * Per-job clarification memory must use `chat_jobs.state_json` plus
+    `chat_jobs.state_revision`; see docs/job-memory.md. Implemented typed
+    `PendingIntent` in crates/chat/src/chat/pending_intent.rs and wired
+    clarification responses to resolve active pending intent before fallback
+    reclassification. Candidate capabilities are filtered against prompt shape,
+    irrelevant clarification responses keep the pending intent active instead
+    of executing, and resolved/null pending intents are ignored by runtime
+    readers.
   * Long-form docs (capability-coverage-matrix.md, knowledge-catalog.md,
     reporting-capabilities.md, scenarios/03-catalog-validate.md) still reference
     the 16/16 catalog snapshot and must be resynced.
@@ -1302,7 +1352,7 @@ Phase 11 -> Query Validation
 Phase 12 -> Local Classifier MVP
 Phase 13 -> Execution Plan And Policy Guard
 Phase 14 -> Query Executor MVP
-Phase 15 -> Audit Logging
+Phase 15 -> Event-Driven Audit Trail
 Phase 16 -> Response Formatting
 Phase 17 -> LLM Provider Integration
 Phase 18 -> Vector Indexing

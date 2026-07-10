@@ -3,13 +3,15 @@ use app_core::api::{
 };
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde_json::json;
 
 use crate::api::ChatAppState;
-use crate::api::dto::catalog::ValidateCatalogResponse;
+use crate::api::dto::catalog::{
+    CatalogCapabilitiesResponse, CatalogCapabilityItem, ValidateCatalogResponse,
+};
 use crate::knowledge::catalog::loader::KnowledgeLoader;
 use crate::knowledge::catalog::validator::validate_runtime;
 use crate::knowledge::embedding::VoyageEmbeddingClient;
@@ -32,6 +34,44 @@ pub async fn validate(
     };
 
     Ok(response::success(StatusCode::OK, data).into_response())
+}
+
+pub async fn capabilities(
+    State(state): State<ChatAppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    app_core::api::handlers::auth::authorize_bootstrap_admin(&state.core, &headers)?;
+
+    let approved: Vec<_> = state
+        .catalog
+        .capabilities
+        .iter()
+        .filter(|capability| capability.status == "approved_mvp")
+        .collect();
+
+    let allowed_capabilities = approved.iter().map(|c| c.id.clone()).collect();
+    let capabilities = approved
+        .iter()
+        .map(|c| CatalogCapabilityItem {
+            id: c.id.clone(),
+            status: c.status.clone(),
+            domain: c.domain.clone(),
+            display_name: c.display_name.clone(),
+            description: c.description.clone(),
+            data_areas: c.data_areas.clone(),
+            required_parameters: c.required_parameters.clone(),
+            optional_parameters: c.optional_parameters.clone(),
+        })
+        .collect();
+
+    Ok(response::success(
+        StatusCode::OK,
+        CatalogCapabilitiesResponse {
+            allowed_capabilities,
+            capabilities,
+        },
+    )
+    .into_response())
 }
 
 pub async fn vector_index_rebuild(

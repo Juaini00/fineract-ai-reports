@@ -9,6 +9,8 @@ This index turns the project documentation into a Karpathy-pattern wiki for the 
 - [[ai-reporting-design]]
 - [[rag-architecture]]
 - [[chat-data-model]]
+- [[job-memory]]
+- [[audit-trail-design]]
 
 ## Reporting Policy
 

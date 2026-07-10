@@ -70,6 +70,25 @@ pub async fn get(
 }
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+pub async fn audit(
+    AuthenticatedClient(client): AuthenticatedClient,
+    State(state): State<ChatAppState>,
+    Path(job_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let Some(audit) = state
+        .chat
+        .jobs
+        .audit(client, job_id)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found("chat job not found"));
+    };
+
+    Ok(response::success(StatusCode::OK, audit).into_response())
+}
+
+#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
 pub async fn stream(
     AuthenticatedClient(client): AuthenticatedClient,
     State(state): State<ChatAppState>,

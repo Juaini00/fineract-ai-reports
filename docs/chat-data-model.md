@@ -1,6 +1,6 @@
 # Chat Data Model
 
-This document defines the data model for chat sessions, chat messages, chat jobs, checkpoints, and live progress state.
+This document defines the data model for chat sessions, chat messages, chat jobs, checkpoints, audit events, and live progress state. Per-job clarification memory is defined in `docs/job-memory.md`. The detailed audit design is defined in `docs/audit-trail-design.md`.
 
 The system must support long-running report generation, clarification flows, SSE progress updates, and resumable jobs without relying on in-memory state as the source of truth.
 
@@ -33,6 +33,7 @@ chat_messages
 chat_jobs
 chat_job_checkpoints
 chat_job_events
+chat_job_audit_events
 ```
 
 Existing auth table:
@@ -174,6 +175,7 @@ CREATE TABLE chat_jobs (
     resume_from_step TEXT NULL,
     message TEXT NOT NULL,
     state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    state_revision BIGINT NOT NULL DEFAULT 0,
     result_json JSONB NULL,
     error_json JSONB NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -184,6 +186,8 @@ CREATE TABLE chat_jobs (
     cancelled_at TIMESTAMPTZ NULL
 );
 ```
+
+`state_json` stores the durable working state for the job. `state_revision` is an optimistic-lock version used when updating that state across clarification turns. See `docs/job-memory.md` for the required per-job memory contract.
 
 Statuses:
 
@@ -265,11 +269,11 @@ Do not checkpoint every heartbeat or minor progress update.
 
 ## 7. chat_job_events
 
-Stores important stream/audit events.
+Stores important stream/live-progress events.
 
 Purpose:
 
-1. Keep durable event history for important events.
+1. Keep durable event history for important user-facing events.
 2. Allow replay of final/clarification/error events.
 3. Support debugging.
 
@@ -307,6 +311,19 @@ major status changes
 ```
 
 Heartbeat and frequent live progress events can stay in Redis only.
+
+## 7.1. chat_job_audit_events
+
+Stores durable management/audit events for pipeline analysis and blueprint compliance. This table is append-only and separate from `chat_job_events` so live progress does not mix with audit evidence.
+
+Detailed schema and write-path rules are in `docs/audit-trail-design.md`.
+
+Purpose:
+
+1. Track which layer handled a job stage.
+2. Persist non-standard paths such as fallback, skipped blueprint steps, policy blocks, or hardcode risks.
+3. Enable management queries by job, API key, capability, stage, and blueprint step.
+4. Keep audit writes out of the main request path through a bounded background queue.
 
 ## 8. Redis Live State
 
@@ -423,6 +440,7 @@ GET  /chat/sessions/{session_id}/messages
 
 POST /chat/jobs
 GET  /chat/jobs/{job_id}
+GET  /chat/jobs/{job_id}/audit
 GET  /chat/jobs/{job_id}/stream
 POST /chat/jobs/{job_id}/responses
 ```
@@ -472,6 +490,10 @@ CREATE INDEX idx_chat_job_checkpoints_job_step ON chat_job_checkpoints(job_id, s
 
 CREATE INDEX idx_chat_job_events_job_id ON chat_job_events(job_id);
 CREATE INDEX idx_chat_job_events_job_type ON chat_job_events(job_id, event_type);
+
+CREATE INDEX idx_chat_job_audit_events_job_id ON chat_job_audit_events(job_id, created_at);
+CREATE INDEX idx_chat_job_audit_events_stage ON chat_job_audit_events(stage, created_at);
+CREATE INDEX idx_chat_job_audit_events_blueprint_step ON chat_job_audit_events(blueprint_step, created_at);
 ```
 
 ## 12. Retention Policy
@@ -485,6 +507,7 @@ completed jobs: 7-30 days
 failed jobs: 7-30 days
 checkpoints: same as job retention
 events: same as job retention
+audit events: same as job retention initially; management retention can be longer later
 redis live state: 15-60 minutes
 ```
 
@@ -502,3 +525,4 @@ Retention should be configurable later.
 8. Do not create a new job when answering clarification.
 9. Do not hold DB connections during SSE idle time.
 10. Do not store raw API keys, raw SQL, or internal prompts in chat-visible payloads.
+11. Audit events must be persisted through a non-blocking background writer, not inline with the main job pipeline.

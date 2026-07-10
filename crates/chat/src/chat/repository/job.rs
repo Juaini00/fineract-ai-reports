@@ -4,7 +4,7 @@ use serde_json::json;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::chat::model::{ChatJob, ChatMessage, CreatedChatJob};
+use crate::chat::model::{ChatJob, ChatJobAuditEvent, ChatMessage, CreatedChatJob};
 use crate::chat::repository::message::ChatMessageRow;
 use crate::chat::repository::session::SessionRepository;
 
@@ -30,6 +30,7 @@ impl JobRepository {
         classification_json: serde_json::Value,
         execution_plan_json: serde_json::Value,
         policy_decision_json: serde_json::Value,
+        pending_intent_json: Option<serde_json::Value>,
     ) -> Result<CreatedChatJob> {
         let session_id = match session_id {
             Some(session_id) => {
@@ -56,6 +57,10 @@ impl JobRepository {
             "execution_plan": execution_plan_json,
             "policy_decision": policy_decision_json,
         });
+        let mut state_json = state_json;
+        if let Some(pending_intent) = pending_intent_json {
+            state_json["pending_intent"] = pending_intent;
+        }
 
         let mut tx = self.pool.begin().await?;
 
@@ -139,6 +144,7 @@ impl JobRepository {
                 resume_from_step,
                 message,
                 state_json,
+                state_revision,
                 result_json,
                 error_json,
                 created_at,
@@ -158,6 +164,46 @@ impl JobRepository {
         .await?;
 
         Ok(row.map(Into::into))
+    }
+
+    pub async fn list_audit_events_for_client(
+        &self,
+        job_id: Uuid,
+        api_key_id: Uuid,
+    ) -> Result<Option<Vec<ChatJobAuditEvent>>> {
+        if self.get_for_client(job_id, api_key_id).await?.is_none() {
+            return Ok(None);
+        }
+
+        let rows = sqlx::query_as::<_, ChatJobAuditEventRow>(
+            r#"
+            SELECT
+                id,
+                job_id,
+                session_id,
+                api_key_id,
+                event_type,
+                stage,
+                layer,
+                blueprint_step,
+                status,
+                duration_ms,
+                input_summary_json,
+                output_summary_json,
+                decision_json,
+                flags_json,
+                error_json,
+                created_at
+            FROM chat_job_audit_events
+            WHERE job_id = $1
+            ORDER BY created_at, id
+            "#,
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(Some(rows.into_iter().map(Into::into).collect()))
     }
 
     pub async fn wait_for_user_input(&self, job_id: Uuid) -> Result<()> {
@@ -181,33 +227,41 @@ impl JobRepository {
     pub async fn update_plan_state(
         &self,
         job_id: Uuid,
+        api_key_id: Uuid,
+        expected_revision: i64,
         classification_json: serde_json::Value,
         execution_plan_json: serde_json::Value,
         policy_decision_json: serde_json::Value,
+        pending_intent_json: Option<serde_json::Value>,
     ) -> Result<()> {
-        sqlx::query(
+        let mut state = json!({
+            "classification": classification_json,
+            "execution_plan": execution_plan_json,
+            "policy_decision": policy_decision_json,
+        });
+        state["pending_intent"] = pending_intent_json.unwrap_or(serde_json::Value::Null);
+
+        let result = sqlx::query(
             r#"
             UPDATE chat_jobs
             SET
-                state_json = jsonb_set(
-                    jsonb_set(
-                        jsonb_set(state_json, '{classification}', $1::jsonb),
-                        '{execution_plan}',
-                        $2::jsonb
-                    ),
-                    '{policy_decision}',
-                    $3::jsonb
-                ),
+                state_json = state_json || $1::jsonb,
+                state_revision = state_revision + 1,
                 updated_at = now()
-            WHERE id = $4
+            WHERE id = $2
+              AND api_key_id = $3
+              AND state_revision = $4
             "#,
         )
-        .bind(classification_json)
-        .bind(execution_plan_json)
-        .bind(policy_decision_json)
+        .bind(state)
         .bind(job_id)
+        .bind(api_key_id)
+        .bind(expected_revision)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            bail!("chat job state was updated by another request");
+        }
 
         Ok(())
     }
@@ -229,6 +283,7 @@ impl JobRepository {
             WHERE id = $1
               AND api_key_id = $2
               AND status = 'waiting_for_user_input'
+            FOR UPDATE
             "#,
         )
         .bind(job_id)
@@ -455,6 +510,7 @@ struct ChatJobRow {
     resume_from_step: Option<String>,
     message: String,
     state_json: serde_json::Value,
+    state_revision: i64,
     result_json: Option<serde_json::Value>,
     error_json: Option<serde_json::Value>,
     created_at: DateTime<Utc>,
@@ -463,6 +519,49 @@ struct ChatJobRow {
     completed_at: Option<DateTime<Utc>>,
     failed_at: Option<DateTime<Utc>>,
     cancelled_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, FromRow)]
+struct ChatJobAuditEventRow {
+    id: Uuid,
+    job_id: Uuid,
+    session_id: Option<Uuid>,
+    api_key_id: Option<Uuid>,
+    event_type: String,
+    stage: String,
+    layer: String,
+    blueprint_step: Option<String>,
+    status: String,
+    duration_ms: Option<i64>,
+    input_summary_json: serde_json::Value,
+    output_summary_json: serde_json::Value,
+    decision_json: serde_json::Value,
+    flags_json: serde_json::Value,
+    error_json: Option<serde_json::Value>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<ChatJobAuditEventRow> for ChatJobAuditEvent {
+    fn from(row: ChatJobAuditEventRow) -> Self {
+        Self {
+            id: row.id,
+            job_id: row.job_id,
+            session_id: row.session_id,
+            api_key_id: row.api_key_id,
+            event_type: row.event_type,
+            stage: row.stage,
+            layer: row.layer,
+            blueprint_step: row.blueprint_step,
+            status: row.status,
+            duration_ms: row.duration_ms,
+            input_summary_json: row.input_summary_json,
+            output_summary_json: row.output_summary_json,
+            decision_json: row.decision_json,
+            flags_json: row.flags_json,
+            error_json: row.error_json,
+            created_at: row.created_at,
+        }
+    }
 }
 
 impl From<ChatJobRow> for ChatJob {
@@ -477,6 +576,7 @@ impl From<ChatJobRow> for ChatJob {
             resume_from_step: row.resume_from_step,
             message: row.message,
             state_json: row.state_json,
+            state_revision: row.state_revision,
             result_json: row.result_json,
             error_json: row.error_json,
             created_at: row.created_at,

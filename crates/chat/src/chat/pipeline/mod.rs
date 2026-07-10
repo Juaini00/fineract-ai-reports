@@ -76,6 +76,8 @@ mod tests {
             key_prefix: "air_test_x".to_string(),
             allowed_office_ids: vec![1, 2],
             allowed_capabilities: vec!["savings_activity_list".to_string()],
+            allow_all_offices: false,
+            allow_all_capabilities: false,
             can_view_pii: true,
             expires_at: None,
         };

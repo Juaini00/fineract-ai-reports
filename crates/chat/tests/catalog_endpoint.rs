@@ -5,7 +5,8 @@
 
 mod common;
 
-use common::spawn_app;
+use common::{ADMIN_TOKEN, spawn_app};
+use reqwest::header;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -70,4 +71,28 @@ async fn vector_index_status_returns_empty_before_rebuild() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["success"], true);
     assert_eq!(body["data"]["status"], "empty");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capabilities_returns_approved_ids_for_bootstrap_admin() {
+    let app = spawn_app().await;
+
+    let resp = app
+        .http
+        .get(format!("{}/catalog/capabilities", app.base_url))
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert!(
+        body["data"]["allowed_capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == "savings_deposit_total")
+    );
 }

@@ -220,6 +220,7 @@ fn parses_indonesian_month_range() {
         "savings",
         "savings_deposit_total",
         "total",
+        true,
         0.7,
         Vec::new(),
     );
@@ -237,6 +238,7 @@ fn classifies_retrieved_top_n_capability_with_params() {
         "savings",
         "savings_deposit_top_n",
         "top_n",
+        true,
         0.72,
         Vec::new(),
     );
@@ -248,6 +250,47 @@ fn classifies_retrieved_top_n_capability_with_params() {
 }
 
 #[test]
+fn clarification_candidates_keep_requested_limit() {
+    let result = clarify_retrieved_capabilities(
+        "show 10 clients with the most savings accounts",
+        today(),
+        Some("client".to_string()),
+        vec![ClarificationOption {
+            label: "Top Clients by Number of Savings Accounts".to_string(),
+            capability: "client_top_n_by_savings_account_count".to_string(),
+            output_mode: Some("top_n".to_string()),
+        }],
+        0.72,
+        Vec::new(),
+    );
+
+    assert_eq!(result.params["limit"], 10);
+}
+
+#[test]
+fn classifies_snapshot_top_n_without_date_range() {
+    let result = classify_retrieved_capability(
+        "Show top clients by current savings balance",
+        today(),
+        "client",
+        "client_top_n_by_savings_balance",
+        "top_n",
+        false,
+        0.72,
+        Vec::new(),
+    );
+
+    assert_eq!(result.outcome, ClassificationOutcome::Matched);
+    assert_eq!(
+        result.capability.as_deref(),
+        Some("client_top_n_by_savings_balance")
+    );
+    assert_eq!(result.params["limit"], 10);
+    assert!(result.params.get("from_date").is_none());
+    assert!(result.params.get("to_date").is_none());
+}
+
+#[test]
 fn list_limit_ignores_relative_date_number() {
     let result = classify_retrieved_capability(
         "show me list of saving activity for 3 months ago from now",
@@ -255,6 +298,7 @@ fn list_limit_ignores_relative_date_number() {
         "savings",
         "savings_activity_list",
         "list",
+        true,
         0.72,
         Vec::new(),
     );
@@ -273,6 +317,7 @@ fn all_activity_list_has_no_default_limit() {
         "savings",
         "savings_activity_list",
         "list",
+        true,
         0.72,
         Vec::new(),
     );
