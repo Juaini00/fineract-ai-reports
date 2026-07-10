@@ -38,6 +38,8 @@ impl AuthService {
             key_hash: api_key::hash_api_key(&raw_key),
             allowed_office_ids: input.allowed_office_ids,
             allowed_capabilities: input.allowed_capabilities,
+            allow_all_offices: input.allow_all_offices,
+            allow_all_capabilities: input.allow_all_capabilities,
             can_view_pii: input.can_view_pii,
             expires_at: input.expires_at.or_else(|| self.default_expiration()),
         };

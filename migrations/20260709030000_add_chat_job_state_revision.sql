@@ -1,0 +1,2 @@
+ALTER TABLE chat_jobs
+ADD COLUMN state_revision BIGINT NOT NULL DEFAULT 0;

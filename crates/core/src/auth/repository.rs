@@ -13,6 +13,8 @@ struct ApiKeyRow {
     key_prefix: String,
     allowed_office_ids: Json<Vec<i64>>,
     allowed_capabilities: Json<Vec<String>>,
+    allow_all_offices: bool,
+    allow_all_capabilities: bool,
     can_view_pii: bool,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -38,10 +40,12 @@ impl ApiKeyRepository {
                 key_hash,
                 allowed_office_ids,
                 allowed_capabilities,
+                allow_all_offices,
+                allow_all_capabilities,
                 can_view_pii,
                 expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(record.id)
@@ -51,6 +55,8 @@ impl ApiKeyRepository {
         .bind(record.key_hash)
         .bind(Json(json!(record.allowed_office_ids)))
         .bind(Json(json!(record.allowed_capabilities)))
+        .bind(record.allow_all_offices)
+        .bind(record.allow_all_capabilities)
         .bind(record.can_view_pii)
         .bind(record.expires_at)
         .execute(&self.pool)
@@ -69,6 +75,8 @@ impl ApiKeyRepository {
                 key_prefix,
                 allowed_office_ids,
                 allowed_capabilities,
+                allow_all_offices,
+                allow_all_capabilities,
                 can_view_pii,
                 expires_at
             FROM api_keys
@@ -109,6 +117,8 @@ impl From<ApiKeyRow> for ActiveApiKeyRecord {
             key_prefix: row.key_prefix,
             allowed_office_ids: row.allowed_office_ids.0,
             allowed_capabilities: row.allowed_capabilities.0,
+            allow_all_offices: row.allow_all_offices,
+            allow_all_capabilities: row.allow_all_capabilities,
             can_view_pii: row.can_view_pii,
             expires_at: row.expires_at,
         }

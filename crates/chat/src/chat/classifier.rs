@@ -155,14 +155,14 @@ pub fn classify_retrieved_capability(
     domain: &str,
     capability: &str,
     output_mode: &str,
+    requires_date_range: bool,
     confidence: f32,
     candidates: Vec<ClassificationCandidate>,
 ) -> ClassificationResult {
     let normalized = message.to_lowercase();
     let mut params = json!({ "office_scope": "authorized_scope" });
 
-    // Snapshot output_modes have no time dimension — skip date_range entirely.
-    if output_mode != "summary" {
+    if requires_date_range {
         let Some((from_date, to_date)) = date_range(&normalized, today) else {
             return ClassificationResult {
                 outcome: ClassificationOutcome::ClarificationRequired,
@@ -220,7 +220,7 @@ pub fn clarify_retrieved_capabilities(
     candidates: Vec<ClassificationCandidate>,
 ) -> ClassificationResult {
     let normalized = message.to_lowercase();
-    let params = date_range(&normalized, today)
+    let mut params = date_range(&normalized, today)
         .map(|(from_date, to_date)| {
             json!({
                 "from_date": from_date.to_string(),
@@ -228,6 +228,9 @@ pub fn clarify_retrieved_capabilities(
             })
         })
         .unwrap_or_else(|| json!({}));
+    if let Some(limit) = limit_from_message(&normalized) {
+        params["limit"] = json!(limit);
+    }
 
     ClassificationResult {
         outcome: ClassificationOutcome::ClarificationRequired,
@@ -384,7 +387,7 @@ fn requests_all_rows(message: &str) -> bool {
         .any(|token| matches!(token, "all" | "semua"))
 }
 
-fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+pub(crate) fn date_range(message: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
     // Lowercase once so sub-helpers can match `January` / `Januari` /
     // `JANUARY` consistently. Production callers already lowercase, but unit
     // tests and any direct call get the same treatment here.
@@ -615,16 +618,38 @@ fn end_of_month(year: i32, month: u32) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(next_year, next_month, 1).map(|date| date - chrono::Duration::days(1))
 }
 
-fn limit_from_message(message: &str) -> Option<u32> {
+pub(crate) fn limit_from_message(message: &str) -> Option<u32> {
     let tokens = message
         .split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
 
-    tokens.windows(2).find_map(|pair| match pair {
-        ["top" | "limit" | "first", value] => value.parse::<u32>().ok(),
-        _ => None,
-    })
+    tokens
+        .windows(2)
+        .find_map(|pair| match pair {
+            ["top" | "limit" | "first", value] => parse_limit(value),
+            _ => None,
+        })
+        .or_else(|| {
+            tokens.iter().enumerate().find_map(|(index, token)| {
+                let next = tokens.get(index + 1).copied().unwrap_or("");
+                (!is_date_unit(next)).then(|| parse_limit(token)).flatten()
+            })
+        })
+}
+
+fn parse_limit(token: &str) -> Option<u32> {
+    token
+        .parse::<u32>()
+        .ok()
+        .filter(|limit| (1..=100).contains(limit))
+}
+
+fn is_date_unit(token: &str) -> bool {
+    matches!(
+        token,
+        "day" | "days" | "hari" | "week" | "weeks" | "minggu" | "month" | "months" | "bulan"
+    )
 }
 
 #[cfg(test)]

@@ -53,7 +53,20 @@ const ALL_CAPS: &[&str] = &[
     "savings_withdrawal_monthly_breakdown",
     "savings_withdrawal_monthly_top_n",
     "client_lifecycle_summary",
+    "client_top_n_by_savings_balance",
+    "client_top_n_by_savings_account_count",
+    "client_top_n_by_deposit_volume",
+    "client_summary_by_office",
+    "client_activation_monthly_breakdown",
+    "client_activation_top_n_offices",
     "organization_office_summary",
+    "organization_hierarchy_summary",
+    "organization_office_client_summary",
+    "organization_office_savings_summary",
+    "organization_office_activity_ranking",
+    "organization_office_hierarchy_tree",
+    "organization_office_dormant",
+    "organization_office_opening_monthly_breakdown",
 ];
 
 #[tokio::test(flavor = "multi_thread")]
@@ -280,6 +293,61 @@ async fn journey_6_dynamic_options_and_free_form_others() {
         assert!(
             !is_loop,
             "Loop detected after free-form Others reply. Full job: {after_turn3}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires local app DB, Fineract DB, and indexed catalog embeddings"]
+async fn journey_7_client_and_organization_prompt_matrix_routes_correctly() {
+    let app = spawn_app().await;
+    let key = provision(&app).await;
+
+    for (prompt, expected_capability) in [
+        (
+            "Show 10 clients with the most savings accounts",
+            "client_top_n_by_savings_account_count",
+        ),
+        (
+            "Show 10 clients with the largest savings balance",
+            "client_top_n_by_savings_balance",
+        ),
+        (
+            "Show clients with the highest deposit volume this month",
+            "client_top_n_by_deposit_volume",
+        ),
+        ("Show list of offices", "organization_office_hierarchy_tree"),
+        (
+            "Show top 10 offices by transaction count this month",
+            "organization_office_activity_ranking",
+        ),
+        (
+            "Which offices have the most active clients",
+            "organization_office_client_summary",
+        ),
+        (
+            "Rank offices by savings balance",
+            "organization_office_savings_summary",
+        ),
+        (
+            "List dormant offices this quarter",
+            "organization_office_dormant",
+        ),
+    ] {
+        let job = run_prompt_to_completion(&app, &key, prompt, Some(expected_capability))
+            .await
+            .unwrap_or_else(|| panic!("{prompt} did not produce a job"));
+        assert_eq!(
+            job["state_json"]["classification"]["capability"].as_str(),
+            Some(expected_capability),
+            "prompt `{prompt}` routed incorrectly: {job}"
+        );
+        assert!(
+            matches!(
+                job["status"].as_str().unwrap_or(""),
+                "completed" | "failed_execution"
+            ),
+            "prompt `{prompt}` did not reach execution: {job}"
         );
     }
 }

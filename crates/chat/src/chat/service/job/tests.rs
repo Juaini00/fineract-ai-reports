@@ -46,6 +46,159 @@ fn lqr_runs_only_when_enabled_and_llm_configured() {
 }
 
 #[test]
+fn client_list_prompt_does_not_match_summary_capability() {
+    assert!(!capability_matches_prompt_shape(
+        "show me 10 of client list data",
+        &capability("client_lifecycle_summary", "client", "summary")
+    ));
+}
+
+#[test]
+fn client_prompt_shapes_match_expected_capabilities() {
+    let lifecycle = capability("client_lifecycle_summary", "client", "summary");
+    let balance = capability("client_top_n_by_savings_balance", "client", "top_n");
+    let accounts = capability("client_top_n_by_savings_account_count", "client", "top_n");
+    let deposit_volume = capability("client_top_n_by_deposit_volume", "client", "top_n");
+
+    assert!(capability_matches_prompt_shape(
+        "show client lifecycle summary",
+        &lifecycle
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "show client lifecycle summary",
+        &balance
+    ));
+    // "most savings accounts" is intentionally ambiguous (count vs balance vs
+    // deposit volume) — all three top_n candidates must survive the shape
+    // filter so clarification can offer real choices.
+    assert!(capability_matches_prompt_shape(
+        "show 10 clients with the most savings accounts",
+        &accounts
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show 10 clients with the most savings accounts",
+        &balance
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show 10 clients with the most savings accounts",
+        &deposit_volume
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show 10 clients with the largest savings balance",
+        &balance
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "show 10 clients with the largest savings balance",
+        &accounts
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show clients with the highest deposit volume this month",
+        &deposit_volume
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "show clients with the highest deposit volume this month",
+        &balance
+    ));
+}
+
+#[test]
+fn organization_prompt_shapes_match_expected_capabilities() {
+    let office_summary = capability("organization_office_summary", "organization", "summary");
+    let hierarchy_summary = capability("organization_hierarchy_summary", "organization", "summary");
+    let office_tree = capability(
+        "organization_office_hierarchy_tree",
+        "organization",
+        "top_n",
+    );
+    let office_activity = capability(
+        "organization_office_activity_ranking",
+        "organization",
+        "top_n",
+    );
+    let office_clients = capability(
+        "organization_office_client_summary",
+        "organization",
+        "top_n",
+    );
+    let office_savings = capability(
+        "organization_office_savings_summary",
+        "organization",
+        "top_n",
+    );
+    let dormant = capability("organization_office_dormant", "organization", "top_n");
+
+    assert!(capability_matches_prompt_shape(
+        "show organization office summary",
+        &office_summary
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show office hierarchy summary",
+        &hierarchy_summary
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "show office hierarchy summary",
+        &office_tree
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show list of offices",
+        &office_tree
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "show list of offices",
+        &office_summary
+    ));
+    assert!(capability_matches_prompt_shape(
+        "show top 10 offices by transaction count this month",
+        &office_activity
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "show top 10 offices by transaction count this month",
+        &office_clients
+    ));
+    assert!(capability_matches_prompt_shape(
+        "which offices have the most active clients",
+        &office_clients
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "which offices have the most active clients",
+        &office_activity
+    ));
+    assert!(capability_matches_prompt_shape(
+        "rank offices by savings balance",
+        &office_savings
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "rank offices by savings balance",
+        &office_activity
+    ));
+    assert!(capability_matches_prompt_shape(
+        "list dormant offices this quarter",
+        &dormant
+    ));
+    assert!(!capability_matches_prompt_shape(
+        "list dormant offices this quarter",
+        &office_tree
+    ));
+}
+
+fn capability(id: &str, domain: &str, output_mode: &str) -> CapabilityKnowledge {
+    CapabilityKnowledge {
+        id: id.to_string(),
+        status: "approved_mvp".to_string(),
+        domain: domain.to_string(),
+        query_id: id.replace('_', "."),
+        output_mode: output_mode.to_string(),
+        display_name: None,
+        description: None,
+        data_areas: Vec::new(),
+        metrics: Vec::new(),
+        examples: Vec::new(),
+        required_parameters: Vec::new(),
+        optional_parameters: Vec::new(),
+    }
+}
+
+#[test]
 fn generated_answer_replaces_only_payload_message_when_citations_are_valid() {
     let payload = serde_json::json!({
         "answer_plan": { "coverage": { "returned_rows": 1 } },

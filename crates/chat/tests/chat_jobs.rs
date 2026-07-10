@@ -76,6 +76,42 @@ async fn deferred_domain_request_ends_without_leaking_internals() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn job_audit_endpoint_returns_pipeline_timeline() {
+    let app = spawn_app().await;
+    let key = app
+        .provision_api_key(&["savings_deposit_total"], vec![1, 2], false)
+        .await;
+
+    let job = create_job(&app, &key.raw, "How much loan did we disburse last month?").await;
+    let job_id = job["job_id"].as_str().unwrap();
+    let _ = wait_for_terminal(&app, &key.raw, &job).await;
+
+    let audit = wait_for_audit_events(&app, &key.raw, job_id).await;
+    assert_eq!(audit["job_id"], job_id);
+    let events = audit["events"].as_array().expect("audit events array");
+    assert!(
+        events
+            .iter()
+            .any(|event| event["stage"] == "request_received"),
+        "audit missing request_received: {audit}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["stage"] == "classification_completed"),
+        "audit missing classification_completed: {audit}"
+    );
+    assert!(
+        events.iter().all(|event| event.get("job_id").is_some()
+            && event.get("layer").is_some()
+            && event.get("blueprint_step").is_some()
+            && event.get("status").is_some()
+            && event.get("created_at").is_some()),
+        "audit events should include full timeline fields: {audit}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn missing_date_range_triggers_clarification_and_continues_same_job() {
     let app = spawn_app().await;
     let key = app
@@ -203,6 +239,28 @@ async fn wait_for_terminal(app: &TestApp, api_key: &str, initial: &Value) -> Val
         }
         if Instant::now() >= deadline {
             panic!("job did not reach terminal state within {POLL_TIMEOUT:?}: {body}");
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_audit_events(app: &TestApp, api_key: &str, job_id: &str) -> Value {
+    let deadline = Instant::now() + POLL_TIMEOUT;
+    loop {
+        let resp = app
+            .get(&format!("/chat/jobs/{job_id}/audit"), Some(api_key))
+            .await;
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        let audit = body["data"].clone();
+        if audit["events"]
+            .as_array()
+            .is_some_and(|events| !events.is_empty())
+        {
+            return audit;
+        }
+        if Instant::now() >= deadline {
+            panic!("audit events did not appear within {POLL_TIMEOUT:?}: {body}");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }

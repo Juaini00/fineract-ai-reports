@@ -82,6 +82,102 @@ fn approved_catalog_includes_foundation_capabilities() {
 }
 
 #[test]
+fn approved_catalog_includes_all_client_and_organization_capabilities() {
+    let catalog = load_catalog();
+
+    for (capability_id, query_id, output_mode) in [
+        (
+            "client_lifecycle_summary",
+            "client.lifecycle_summary",
+            "summary",
+        ),
+        (
+            "client_top_n_by_savings_balance",
+            "client.top_n_by_savings_balance",
+            "top_n",
+        ),
+        (
+            "client_top_n_by_savings_account_count",
+            "client.top_n_by_savings_account_count",
+            "top_n",
+        ),
+        (
+            "client_top_n_by_deposit_volume",
+            "client.top_n_by_deposit_volume",
+            "top_n",
+        ),
+        (
+            "client_summary_by_office",
+            "client.summary_by_office",
+            "top_n",
+        ),
+        (
+            "client_activation_monthly_breakdown",
+            "client.activation_monthly_breakdown",
+            "monthly_breakdown",
+        ),
+        (
+            "client_activation_top_n_offices",
+            "client.activation_top_n_offices",
+            "top_n",
+        ),
+        (
+            "organization_office_summary",
+            "organization.office_summary",
+            "summary",
+        ),
+        (
+            "organization_hierarchy_summary",
+            "organization.hierarchy_summary",
+            "summary",
+        ),
+        (
+            "organization_office_client_summary",
+            "organization.office_client_summary",
+            "top_n",
+        ),
+        (
+            "organization_office_savings_summary",
+            "organization.office_savings_summary",
+            "top_n",
+        ),
+        (
+            "organization_office_activity_ranking",
+            "organization.office_activity_ranking",
+            "top_n",
+        ),
+        (
+            "organization_office_hierarchy_tree",
+            "organization.office_hierarchy_tree",
+            "top_n",
+        ),
+        (
+            "organization_office_dormant",
+            "organization.office_dormant",
+            "top_n",
+        ),
+        (
+            "organization_office_opening_monthly_breakdown",
+            "organization.office_opening_monthly_breakdown",
+            "monthly_breakdown",
+        ),
+    ] {
+        let capability = catalog
+            .capabilities
+            .iter()
+            .find(|item| item.id == capability_id)
+            .unwrap_or_else(|| panic!("missing capability {capability_id}"));
+        assert_eq!(capability.status, "approved_mvp", "{capability_id}");
+        assert_eq!(capability.query_id, query_id, "{capability_id}");
+        assert_eq!(capability.output_mode, output_mode, "{capability_id}");
+        assert!(
+            catalog.queries.iter().any(|query| query.id == query_id),
+            "missing query {query_id}"
+        );
+    }
+}
+
+#[test]
 fn every_approved_capability_maps_to_an_approved_query() {
     let workspace_root = workspace_root();
     let catalog = KnowledgeLoader::new(
@@ -175,6 +271,8 @@ fn client(can_view_pii: bool) -> ClientContext {
         key_prefix: "air_test".into(),
         allowed_office_ids: vec![1, 2, 3],
         allowed_capabilities: vec!["savings_deposit_top_n".into()],
+        allow_all_offices: false,
+        allow_all_capabilities: false,
         can_view_pii,
         expires_at: None,
     }

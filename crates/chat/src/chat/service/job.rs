@@ -10,6 +10,7 @@ use sqlx::PgPool;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::audit::{AuditEvent, AuditHandle};
 use crate::chat::classifier::{
     ClarificationOption, ClassificationCandidate, ClassificationOutcome, ClassificationResult,
     OTHER_ACTIVITY_CAPABILITY, clarify_retrieved_capabilities, classify_clarification_response,
@@ -19,8 +20,10 @@ use crate::chat::executor::execute_plan;
 use crate::chat::formatter::format_report_response;
 use crate::chat::llm::{LlmPlannerClient, LlmPlannerDecision};
 use crate::chat::model::{
-    ChatJob, ChatMessage, CreateChatJobInput, CreatedChatJob, RespondToChatJobInput,
+    ChatJob, ChatJobAuditTimeline, ChatMessage, CreateChatJobInput, CreatedChatJob,
+    RespondToChatJobInput,
 };
+use crate::chat::pending_intent::{PendingIntent, PendingIntentResolution, resolve_pending_intent};
 use crate::chat::pipeline::answer::{GeneratedAnswer, validate_grounded_answer};
 use crate::chat::pipeline::lqr::{LqrInputs, LqrOutcome, run_layered_retrieval};
 use crate::chat::planner::{build_execution_plan, evaluate_policy};
@@ -41,6 +44,7 @@ pub struct JobService {
     chat_features: ChatFeatureConfig,
     redis_url: String,
     redis: Option<redis::Client>,
+    audit: AuditHandle,
 }
 
 impl JobService {
@@ -55,6 +59,7 @@ impl JobService {
         chat_features: ChatFeatureConfig,
         redis_url: String,
         redis: Option<redis::Client>,
+        audit: AuditHandle,
     ) -> Self {
         Self {
             jobs,
@@ -67,7 +72,55 @@ impl JobService {
             chat_features,
             redis_url,
             redis,
+            audit,
         }
+    }
+
+    fn audit_event(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        stage: &str,
+        layer: &str,
+        blueprint_step: Option<&str>,
+        status: &str,
+    ) -> AuditEvent {
+        let mut event = AuditEvent::new(job_id, stage, layer, status);
+        event.session_id = Some(session_id);
+        event.blueprint_step = blueprint_step.map(str::to_string);
+        event
+    }
+
+    fn record_clarification_decision(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        reply: &str,
+        original: &ClassificationResult,
+        resolved: &ClassificationResult,
+    ) {
+        let mut event = self.audit_event(
+            session_id,
+            job_id,
+            "clarification_decision",
+            "intent_routing",
+            Some("ambiguity_resolution"),
+            match resolved.outcome {
+                ClassificationOutcome::Matched => "matched",
+                ClassificationOutcome::ClarificationRequired => "refined",
+                ClassificationOutcome::Unsupported => "abandoned",
+            },
+        );
+        event.input_summary_json = json!({
+            "reply": reply,
+            "candidates": original.options.clone(),
+        });
+        event.decision_json = json!({
+            "outcome": event.status.clone(),
+            "capability": resolved.capability.clone(),
+            "source": resolved.source.clone(),
+        });
+        self.audit.record(event);
     }
 
     /// Emit a chat-job event: durable PG insert + best-effort Redis publish
@@ -124,11 +177,18 @@ impl JobService {
     }
 
     #[tracing::instrument(skip(self, input), fields(api_key_id = %input.client.api_key_id))]
-    pub async fn create(&self, input: CreateChatJobInput) -> Result<CreatedChatJob> {
+    pub async fn create(&self, mut input: CreateChatJobInput) -> Result<CreatedChatJob> {
         let message = input.message.trim().to_string();
         if message.is_empty() {
             bail!("message is required");
         }
+
+        crate::policy::authorization::resolve_wildcard_grants(
+            &mut input.client,
+            &self.catalog,
+            &self.fineract_pool,
+        )
+        .await?;
 
         let client_context_json = json!({
             "api_key_id": input.client.api_key_id,
@@ -136,15 +196,24 @@ impl JobService {
             "key_prefix": input.client.key_prefix,
             "allowed_office_ids": input.client.allowed_office_ids,
             "allowed_capabilities": input.client.allowed_capabilities,
+            "allow_all_offices": input.client.allow_all_offices,
+            "allow_all_capabilities": input.client.allow_all_capabilities,
             "can_view_pii": input.client.can_view_pii,
         });
         let classification = self.classify_with_retrieval(&message, &input.client).await;
+        let classification = self.filter_classification_for_prompt(&message, classification);
         let execution_plan = build_execution_plan(&classification, &self.catalog);
         let policy_decision =
             evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
+        let pending_intent =
+            PendingIntent::from_classification(&message, &classification, &self.catalog);
         let classification_json = serde_json::to_value(&classification)?;
         let execution_plan_json = serde_json::to_value(&execution_plan)?;
         let policy_decision_json = serde_json::to_value(&policy_decision)?;
+        let pending_intent_json = pending_intent
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()?;
 
         let worker_message = message.clone();
         let job = self
@@ -157,6 +226,7 @@ impl JobService {
                 classification_json,
                 execution_plan_json,
                 policy_decision_json,
+                pending_intent_json,
             )
             .await?;
 
@@ -172,6 +242,25 @@ impl JobService {
                 }),
             )
             .await?;
+
+        let mut audit = self.audit_event(
+            job.session_id,
+            job.job_id,
+            "request_received",
+            "api",
+            Some("conversation_context"),
+            "completed",
+        );
+        audit.api_key_id = Some(input.client.api_key_id);
+        audit.input_summary_json = json!({
+            "message_len": worker_message.len(),
+            "has_session_id": input.session_id.is_some(),
+        });
+        audit.output_summary_json = json!({
+            "current_step": job.current_step,
+            "status": job.status,
+        });
+        self.audit.record(audit);
 
         self.emit_event(
             job.job_id,
@@ -190,6 +279,24 @@ impl JobService {
         let plan_for_worker = execution_plan.clone();
         let policy_for_worker = policy_decision.clone();
         let classification_for_worker = classification.clone();
+
+        let mut skipped = self.audit_event(
+            job.session_id,
+            job.job_id,
+            "semantic_parser",
+            "pipeline",
+            Some("semantic_parser"),
+            "skipped",
+        );
+        skipped.api_key_id = Some(input.client.api_key_id);
+        skipped.decision_json = json!({
+            "reason": "strict_pipeline_not_used_in_production"
+        });
+        skipped.flags_json = json!({
+            "blueprint_deviation": true
+        });
+        self.audit.record(skipped);
+
         tokio::spawn(async move {
             if let Err(error) = worker
                 .run_pipeline(
@@ -218,16 +325,112 @@ impl JobService {
         execution_plan: Option<crate::chat::planner::ExecutionPlan>,
         policy_decision: crate::chat::planner::PolicyDecision,
     ) -> Result<()> {
+        let mut audit = self.audit_event(
+            session_id,
+            job_id,
+            "classification_completed",
+            "classification",
+            Some("intent_router"),
+            "completed",
+        );
+        audit.output_summary_json = json!({
+            "outcome": classification.outcome,
+            "domain": classification.domain,
+            "capability": classification.capability,
+            "confidence": classification.confidence,
+            "source": classification.source,
+            "candidate_count": classification.candidates.len(),
+            "layer_count": classification.layers.len(),
+        });
+        audit.flags_json = json!({
+            "used_lqr": classification.source.as_deref() == Some("lqr"),
+            "used_llm": classification.source.as_deref() == Some("llm_planner")
+        });
+        self.audit.record(audit);
+
         if classification.outcome == ClassificationOutcome::ClarificationRequired {
+            let mut audit = self.audit_event(
+                session_id,
+                job_id,
+                "clarification_required",
+                "classification",
+                Some("ambiguity_detector"),
+                "completed",
+            );
+            audit.output_summary_json = json!({
+                "option_count": classification.options.len(),
+                "has_question": classification.clarification.is_some(),
+            });
+            self.audit.record(audit);
+
             self.write_clarification(session_id, job_id, &classification)
                 .await?;
             return Ok(());
         }
 
         if let Some(plan) = execution_plan.as_ref() {
+            let mut plan_audit = self.audit_event(
+                session_id,
+                job_id,
+                "execution_plan_built",
+                "planner",
+                Some("answer_planner"),
+                "completed",
+            );
+            plan_audit.output_summary_json = json!({
+                "domain": plan.domain,
+                "capability": plan.capability,
+                "query_id": plan.query_id,
+                "output_mode": plan.output_mode,
+                "evidence_enough": plan.evidence_evaluation.enough,
+            });
+            self.audit.record(plan_audit);
+
+            let policy_allowed = matches!(
+                &policy_decision.status,
+                crate::chat::planner::PolicyDecisionStatus::Allowed
+            );
+            let mut policy_audit = self.audit_event(
+                session_id,
+                job_id,
+                "policy_evaluated",
+                "policy",
+                Some("evidence_evaluator"),
+                if policy_allowed {
+                    "completed"
+                } else {
+                    "blocked"
+                },
+            );
+            policy_audit.decision_json = json!({
+                "status": policy_decision.status,
+                "reason": policy_decision.reason,
+                "office_count": policy_decision.office_ids.len(),
+                "can_view_pii": policy_decision.can_view_pii,
+            });
+            policy_audit.flags_json = json!({
+                "policy_blocked": !policy_allowed,
+                "authorized_scope_only": true,
+                "pii_output_allowed": policy_decision.can_view_pii,
+            });
+            self.audit.record(policy_audit);
+
             self.execute_and_finish(session_id, job_id, &user_message, plan, &policy_decision)
                 .await?;
         } else if classification.outcome == ClassificationOutcome::Unsupported {
+            let mut audit = self.audit_event(
+                session_id,
+                job_id,
+                "job_failed",
+                "pipeline",
+                Some("grounded_response"),
+                "failed",
+            );
+            audit.error_json = Some(json!({
+                "code": "unsupported_request"
+            }));
+            self.audit.record(audit);
+
             self.fail_unsupported(job_id).await?;
         }
 
@@ -367,12 +570,19 @@ impl JobService {
                 let Some(capability) = self.catalog_capability(&capability_id) else {
                     return unsupported_result("catalog_missing_capability", Vec::new());
                 };
+                if !capability_matches_prompt_shape(message, capability) {
+                    let mut classification = unsupported_result("output_mode_mismatch", Vec::new());
+                    classification.layers = layers;
+                    classification.source = Some("lqr".to_string());
+                    return classification;
+                }
                 let mut classification = classify_retrieved_capability(
                     message,
                     today,
                     &capability.domain,
                     &capability.id,
                     &capability.output_mode,
+                    capability_requires_date_range(capability),
                     confidence,
                     Vec::new(),
                 );
@@ -436,6 +646,7 @@ impl JobService {
             &capability.domain,
             &capability.id,
             &capability.output_mode,
+            capability_requires_date_range(capability),
             0.95,
             vec![ClassificationCandidate {
                 capability: capability.id.clone(),
@@ -473,6 +684,7 @@ impl JobService {
                     &capability.domain,
                     &capability.id,
                     &capability.output_mode,
+                    capability_requires_date_range(capability),
                     0.74,
                     result.candidates.clone(),
                 );
@@ -610,6 +822,9 @@ impl JobService {
             DecideOutcome::Unsupported => None,
             DecideOutcome::Match { capability } => {
                 let capability = self.catalog_capability(&capability)?;
+                if !capability_matches_prompt_shape(message, capability) {
+                    return None;
+                }
                 let confidence = sorted_scores.first().copied().unwrap_or(0.0);
                 Some(classify_retrieved_capability(
                     message,
@@ -617,6 +832,7 @@ impl JobService {
                     &capability.domain,
                     &capability.id,
                     &capability.output_mode,
+                    capability_requires_date_range(capability),
                     confidence,
                     classification_candidates,
                 ))
@@ -703,17 +919,63 @@ impl JobService {
         options
     }
 
+    fn filter_classification_for_prompt(
+        &self,
+        message: &str,
+        mut classification: ClassificationResult,
+    ) -> ClassificationResult {
+        let had_options = !classification.options.is_empty();
+        classification.options.retain(|option| {
+            option.capability == OTHER_ACTIVITY_CAPABILITY
+                || self
+                    .catalog_capability(&option.capability)
+                    .is_some_and(|capability| capability_matches_prompt_shape(message, capability))
+        });
+        classification.candidates.retain(|candidate| {
+            self.catalog_capability(&candidate.capability)
+                .is_some_and(|capability| capability_matches_prompt_shape(message, capability))
+        });
+        if had_options && classification.options.is_empty() {
+            return unsupported_result("output_mode_mismatch", Vec::new());
+        }
+        classification
+    }
+
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
     pub async fn get(&self, client: ClientContext, job_id: Uuid) -> Result<Option<ChatJob>> {
         self.jobs.get_for_client(job_id, client.api_key_id).await
     }
 
+    #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+    pub async fn audit(
+        &self,
+        client: ClientContext,
+        job_id: Uuid,
+    ) -> Result<Option<ChatJobAuditTimeline>> {
+        let Some(events) = self
+            .jobs
+            .list_audit_events_for_client(job_id, client.api_key_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(ChatJobAuditTimeline { job_id, events }))
+    }
+
     #[tracing::instrument(skip(self, input), fields(api_key_id = %input.client.api_key_id, job_id = %input.job_id))]
-    pub async fn respond(&self, input: RespondToChatJobInput) -> Result<Option<ChatMessage>> {
+    pub async fn respond(&self, mut input: RespondToChatJobInput) -> Result<Option<ChatMessage>> {
         let message = input.message.trim().to_string();
         if message.is_empty() {
             bail!("message is required");
         }
+
+        crate::policy::authorization::resolve_wildcard_grants(
+            &mut input.client,
+            &self.catalog,
+            &self.fineract_pool,
+        )
+        .await?;
 
         let Some(job) = self
             .jobs
@@ -736,13 +998,42 @@ impl JobService {
             .get("classification")
             .and_then(|value| serde_json::from_value::<ClassificationResult>(value.clone()).ok())
         {
-            let mut classification = self
-                .classify_savings_activity_list(
-                    &response.content,
-                    Utc::now().date_naive(),
-                    &input.client,
-                )
-                .unwrap_or_else(|| classify_clarification_response(&original, &response.content));
+            let active_pending = job
+                .state_json
+                .get("pending_intent")
+                .and_then(|value| serde_json::from_value::<PendingIntent>(value.clone()).ok())
+                .filter(PendingIntent::is_active);
+            let mut pending_intent = None;
+            let mut classification = match resolve_pending_intent(
+                active_pending,
+                &response.content,
+                Utc::now().date_naive(),
+                &self.catalog,
+            ) {
+                PendingIntentResolution::Matched(resolved, pending) => {
+                    pending_intent = Some(pending);
+                    resolved
+                }
+                PendingIntentResolution::StillWaiting(waiting, pending) => {
+                    pending_intent = Some(pending);
+                    waiting
+                }
+                PendingIntentResolution::StartNewRequest => {
+                    let classification = self
+                        .classify_with_retrieval(&response.content, &input.client)
+                        .await;
+                    self.filter_classification_for_prompt(&response.content, classification)
+                }
+                PendingIntentResolution::NoPending => self
+                    .classify_savings_activity_list(
+                        &response.content,
+                        Utc::now().date_naive(),
+                        &input.client,
+                    )
+                    .unwrap_or_else(|| {
+                        classify_clarification_response(&original, &response.content)
+                    }),
+            };
 
             // Semantic principle: the user's reply is a natural-language
             // statement of intent, not an ID lookup. If they didn't pick a
@@ -767,21 +1058,46 @@ impl JobService {
             //         `classify_clarification_response` falls back to the
             //         previous state and carries the same source forward.
             let after_others_free_form = previous_source == "clarification_other_selected";
-            if (is_clarification && !picked_a_listed_option) || after_others_free_form {
+            if pending_intent.is_none()
+                && ((is_clarification && !picked_a_listed_option) || after_others_free_form)
+            {
                 classification = self
                     .classify_with_retrieval(&response.content, &input.client)
                     .await;
+                classification =
+                    self.filter_classification_for_prompt(&response.content, classification);
             }
+            self.record_clarification_decision(
+                job.session_id,
+                input.job_id,
+                &response.content,
+                &original,
+                &classification,
+            );
             let execution_plan = build_execution_plan(&classification, &self.catalog);
             let policy_decision =
                 evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
+            if pending_intent.is_none() {
+                pending_intent = PendingIntent::from_classification(
+                    &response.content,
+                    &classification,
+                    &self.catalog,
+                );
+            }
+            let pending_intent_json = pending_intent
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?;
 
             self.jobs
                 .update_plan_state(
                     input.job_id,
+                    input.client.api_key_id,
+                    job.state_revision,
                     serde_json::to_value(&classification)?,
                     serde_json::to_value(&execution_plan)?,
                     serde_json::to_value(&policy_decision)?,
+                    pending_intent_json,
                 )
                 .await?;
 
@@ -892,6 +1208,21 @@ impl JobService {
         policy_decision: &crate::chat::planner::PolicyDecision,
     ) -> Result<()> {
         let started_at = Instant::now();
+        let mut selected = self.audit_event(
+            session_id,
+            job_id,
+            "sql_selected",
+            "executor",
+            Some("hybrid_retrieval"),
+            "completed",
+        );
+        selected.output_summary_json = json!({
+            "query_id": plan.query_id,
+            "capability": plan.capability,
+            "office_count": policy_decision.office_ids.len(),
+        });
+        self.audit.record(selected);
+
         match execute_plan(&self.fineract_pool, &self.catalog, plan, policy_decision).await {
             Ok(mut result) => {
                 let latency_ms = started_at.elapsed().as_millis() as u64;
@@ -900,6 +1231,21 @@ impl JobService {
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
 
+                let mut executed = self.audit_event(
+                    session_id,
+                    job_id,
+                    "sql_executed",
+                    "executor",
+                    Some("hybrid_retrieval"),
+                    "completed",
+                );
+                executed.duration_ms = Some(latency_ms as i64);
+                executed.output_summary_json = json!({
+                    "query_id": plan.query_id,
+                    "row_count": row_count,
+                });
+                self.audit.record(executed);
+
                 if let Some(result) = result.as_object_mut() {
                     result.insert("latency_ms".to_string(), json!(latency_ms));
                 }
@@ -907,12 +1253,43 @@ impl JobService {
                 if let Some(content) =
                     format_report_response(&self.catalog, plan, policy_decision, &result)
                 {
-                    let content = self.apply_llm_answer(user_message, content).await;
+                    let mut formatted = self.audit_event(
+                        session_id,
+                        job_id,
+                        "response_formatted",
+                        "formatter",
+                        Some("grounded_response"),
+                        "completed",
+                    );
+                    formatted.output_summary_json = json!({
+                        "content_len": content.len(),
+                        "query_id": plan.query_id,
+                    });
+                    self.audit.record(formatted);
+
+                    let content = self
+                        .apply_llm_answer(session_id, job_id, user_message, content)
+                        .await;
                     self.messages
                         .insert_assistant_response(session_id, job_id, content)
                         .await?;
                 }
                 self.jobs.complete(job_id, result).await?;
+                let mut completed = self.audit_event(
+                    session_id,
+                    job_id,
+                    "job_completed",
+                    "pipeline",
+                    Some("grounded_response"),
+                    "completed",
+                );
+                completed.duration_ms = Some(latency_ms as i64);
+                completed.output_summary_json = json!({
+                    "row_count": row_count,
+                    "status": "completed",
+                });
+                self.audit.record(completed);
+
                 self.jobs
                     .insert_checkpoint(
                         job_id,
@@ -939,6 +1316,21 @@ impl JobService {
             Err(error) => {
                 let latency_ms = started_at.elapsed().as_millis() as u64;
                 warn!(job_id = %job_id, error = %error, "chat job execution failed");
+
+                let mut failed = self.audit_event(
+                    session_id,
+                    job_id,
+                    "job_failed",
+                    "executor",
+                    Some("grounded_response"),
+                    "failed",
+                );
+                failed.duration_ms = Some(latency_ms as i64);
+                failed.error_json = Some(json!({
+                    "code": "execution_failed",
+                    "message": "Report execution failed."
+                }));
+                self.audit.record(failed);
 
                 self.jobs
                     .fail(
@@ -978,22 +1370,97 @@ impl JobService {
         Ok(())
     }
 
-    async fn apply_llm_answer(&self, user_message: &str, content: String) -> String {
+    async fn apply_llm_answer(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        user_message: &str,
+        content: String,
+    ) -> String {
         if !self.llm_planner.is_enabled() {
+            let mut audit = self.audit_event(
+                session_id,
+                job_id,
+                "llm_answer_generation_completed",
+                "llm",
+                Some("answer_generator"),
+                "skipped",
+            );
+            audit.decision_json = json!({
+                "reason": "llm_disabled"
+            });
+            self.audit.record(audit);
             return content;
         }
         let Ok(payload) = serde_json::from_str::<Value>(&content) else {
+            let mut audit = self.audit_event(
+                session_id,
+                job_id,
+                "llm_answer_generation_completed",
+                "llm",
+                Some("answer_generator"),
+                "skipped",
+            );
+            audit.decision_json = json!({
+                "reason": "formatter_output_not_structured_json"
+            });
+            self.audit.record(audit);
             return content;
         };
         let evidence = build_llm_evidence(&payload);
+        let started_at = Instant::now();
+        let mut started = self.audit_event(
+            session_id,
+            job_id,
+            "llm_answer_generation_started",
+            "llm",
+            Some("answer_generator"),
+            "started",
+        );
+        started.input_summary_json = json!({
+            "content_len": content.len(),
+        });
+        self.audit.record(started);
+
         match self
             .llm_planner
             .generate_answer(user_message, &evidence)
             .await
         {
-            Ok(answer) => apply_generated_answer(content.clone(), &answer).unwrap_or(content),
+            Ok(answer) => {
+                let applied = apply_generated_answer(content.clone(), &answer);
+                let mut audit = self.audit_event(
+                    session_id,
+                    job_id,
+                    "llm_answer_generation_completed",
+                    "llm",
+                    Some("answer_generator"),
+                    "completed",
+                );
+                audit.duration_ms = Some(started_at.elapsed().as_millis() as i64);
+                audit.output_summary_json = json!({
+                    "citation_count": answer.citations.len(),
+                    "applied": applied.is_some(),
+                });
+                self.audit.record(audit);
+                applied.unwrap_or(content)
+            }
             Err(error) => {
                 warn!(error = %error, "LLM answer generation failed; using deterministic response");
+                let mut audit = self.audit_event(
+                    session_id,
+                    job_id,
+                    "llm_answer_generation_completed",
+                    "llm",
+                    Some("answer_generator"),
+                    "failed",
+                );
+                audit.duration_ms = Some(started_at.elapsed().as_millis() as i64);
+                audit.error_json = Some(json!({
+                    "code": "llm_answer_generation_failed",
+                    "message": "LLM answer generation failed; deterministic response used."
+                }));
+                self.audit.record(audit);
                 content
             }
         }
@@ -1117,6 +1584,96 @@ fn capability_option(capability: &CapabilityKnowledge, message: &str) -> Clarifi
         capability: capability.id.clone(),
         output_mode: Some(capability.output_mode.clone()),
     }
+}
+
+fn capability_requires_date_range(capability: &CapabilityKnowledge) -> bool {
+    capability
+        .required_parameters
+        .iter()
+        .any(|parameter| matches!(parameter.as_str(), "from_date" | "to_date"))
+}
+
+fn capability_matches_prompt_shape(message: &str, capability: &CapabilityKnowledge) -> bool {
+    let message = message.to_lowercase();
+    let asks_for_ranked_or_list = contains_any_local(
+        &message,
+        &[
+            "list",
+            "lists",
+            "records",
+            "top",
+            "largest",
+            "biggest",
+            "highest",
+            "most",
+            "daftar",
+            "terbanyak",
+            "terbesar",
+            "paling banyak",
+        ],
+    );
+    if capability.output_mode == "summary" && asks_for_ranked_or_list {
+        return false;
+    }
+    if capability.output_mode != "summary"
+        && !asks_for_ranked_or_list
+        && contains_any_local(&message, &["summary", "ringkasan"])
+    {
+        return false;
+    }
+    if !capability_matches_domain_terms(&message, &capability.id) {
+        return false;
+    }
+
+    true
+}
+
+fn capability_matches_domain_terms(message: &str, capability_id: &str) -> bool {
+    if contains_any_local(message, &["dormant", "no activity", "zero activity"]) {
+        return capability_id == "organization_office_dormant";
+    }
+    if contains_any_local(message, &["transaction", "transactions"])
+        && contains_any_local(message, &["office", "offices"])
+    {
+        return capability_id == "organization_office_activity_ranking";
+    }
+    if contains_any_local(message, &["active client", "active clients"])
+        && contains_any_local(message, &["office", "offices"])
+    {
+        return capability_id == "organization_office_client_summary";
+    }
+    if contains_any_local(message, &["savings account", "saving account"])
+        && contains_any_local(message, &["client", "clients"])
+    {
+        return matches!(
+            capability_id,
+            "client_top_n_by_savings_account_count"
+                | "client_top_n_by_savings_balance"
+                | "client_top_n_by_deposit_volume"
+        );
+    }
+    if contains_any_local(message, &["deposit", "deposits", "depositor", "setoran"])
+        && contains_any_local(message, &["client", "clients"])
+    {
+        return capability_id == "client_top_n_by_deposit_volume";
+    }
+    if contains_any_local(message, &["balance", "saldo", "tabungan"])
+        && contains_any_local(message, &["client", "clients"])
+    {
+        return capability_id == "client_top_n_by_savings_balance";
+    }
+    if contains_any_local(message, &["balance", "saldo", "savings", "tabungan"])
+        && contains_any_local(message, &["office", "offices"])
+    {
+        return capability_id == "organization_office_savings_summary";
+    }
+    if contains_any_local(message, &["list", "lists", "daftar"])
+        && contains_any_local(message, &["office", "offices"])
+    {
+        return capability_id == "organization_office_hierarchy_tree";
+    }
+
+    true
 }
 
 fn other_activity_option(_message: &str) -> ClarificationOption {

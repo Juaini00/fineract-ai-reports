@@ -37,6 +37,7 @@ pub struct ChatJob {
     pub resume_from_step: Option<String>,
     pub message: String,
     pub state_json: serde_json::Value,
+    pub state_revision: i64,
     pub result_json: Option<serde_json::Value>,
     pub error_json: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
@@ -45,4 +46,30 @@ pub struct ChatJob {
     pub completed_at: Option<DateTime<Utc>>,
     pub failed_at: Option<DateTime<Utc>>,
     pub cancelled_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatJobAuditTimeline {
+    pub job_id: Uuid,
+    pub events: Vec<ChatJobAuditEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatJobAuditEvent {
+    pub id: Uuid,
+    pub job_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub api_key_id: Option<Uuid>,
+    pub event_type: String,
+    pub stage: String,
+    pub layer: String,
+    pub blueprint_step: Option<String>,
+    pub status: String,
+    pub duration_ms: Option<i64>,
+    pub input_summary_json: serde_json::Value,
+    pub output_summary_json: serde_json::Value,
+    pub decision_json: serde_json::Value,
+    pub flags_json: serde_json::Value,
+    pub error_json: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
 }

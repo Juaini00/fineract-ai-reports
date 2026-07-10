@@ -372,6 +372,11 @@ Return
     statuses, group statuses, or any other value whose canonical list
     is maintained inside Fineract. Fineract can add or rename any of
     these tomorrow — our code must survive that without a redeploy.
+7.  **Every production request must be auditable.** The backend records
+    durable, structured audit events for the stages it executes and for
+    blueprint stages it intentionally skips. Audit writes must be
+    event-driven and non-blocking. The detailed design is in
+    `docs/audit-trail-design.md`.
 
 ------------------------------------------------------------------------
 

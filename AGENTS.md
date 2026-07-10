@@ -12,6 +12,32 @@
 - Reporting remains part of the chat-driven flow for now; do not create `crates/reporting` yet.
 - Keep the existing boundaries: route -> service -> repository -> database. Do not put `sqlx` calls directly in route handlers or services.
 
+## Multi-Agent Workflow
+
+Primary session = orchestrator. Delegate to protect the main context window, not as procedure. Default: do it yourself.
+
+### When to delegate
+
+- Task touches > 3 files or > 1 module → delegate the implementation.
+- Investigation that requires reading many files → delegate to an explorer.
+- Single file, < 50 lines, path is clear → do it inline, no agent.
+
+### Two roles only
+
+- **Brainstorm / Plan (strong model)** — primary session. Understand the problem, map the files that will change, write a short plan.
+- **Executor (cheap model, e.g. haiku)** — mechanical implementation against the plan. Does not make architectural decisions.
+
+Review, test, and debug are not mandatory steps. Call them on demand: build fails → debugger; sensitive change (auth, SQL, migrations) → reviewer. Do not run them as a fixed pipeline.
+
+## Development Principles
+
+- Keep changes minimal.
+- Respect existing architecture.
+- Preserve project conventions.
+- Never expand scope unnecessarily.
+- Validate changes before reporting completion.
+- Report assumptions whenever uncertainty exists.
+
 ## Ponytail Mode
 
 - Use Ponytail by default: prefer the smallest correct change that moves the roadmap forward.
@@ -30,6 +56,13 @@
 - Run migrations manually: `sqlx migrate run --database-url "postgres://root:password@127.0.0.1:5432/ai_reports"`
 - Start Redis: `docker compose up -d redis`
 - Check Redis: `docker compose exec -T redis redis-cli ping`
+
+## File Editing
+
+- Do not use Python/Node/shell scripts to edit files unless editing many files, doing a mechanical transformation, or native edit/`ctx_edit` failed.
+- For normal file edits, use native Edit/StrReplace first, then lean-ctx `ctx_edit`.
+- Use shell for runtime commands only (`cargo test`, `cargo check`, `cargo fmt`, Docker, migrations), not for file rewrites.
+- Never use `python3 - <<'PY'`, `node -e`, `perl -pi`, or shell heredocs for file edits when Edit/StrReplace or `ctx_edit` can do the change.
 
 ## Postman MCP Workflow
 

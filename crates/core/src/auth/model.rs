@@ -9,6 +9,8 @@ pub struct CreateApiKeyInput {
     pub expires_at: Option<DateTime<Utc>>,
     pub allowed_office_ids: Vec<i64>,
     pub allowed_capabilities: Vec<String>,
+    pub allow_all_offices: bool,
+    pub allow_all_capabilities: bool,
     pub can_view_pii: bool,
 }
 
@@ -21,6 +23,8 @@ pub struct NewApiKeyRecord {
     pub key_hash: String,
     pub allowed_office_ids: Vec<i64>,
     pub allowed_capabilities: Vec<String>,
+    pub allow_all_offices: bool,
+    pub allow_all_capabilities: bool,
     pub can_view_pii: bool,
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -39,6 +43,8 @@ pub struct ActiveApiKeyRecord {
     pub key_prefix: String,
     pub allowed_office_ids: Vec<i64>,
     pub allowed_capabilities: Vec<String>,
+    pub allow_all_offices: bool,
+    pub allow_all_capabilities: bool,
     pub can_view_pii: bool,
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -51,6 +57,8 @@ pub struct ClientContext {
     pub key_prefix: String,
     pub allowed_office_ids: Vec<i64>,
     pub allowed_capabilities: Vec<String>,
+    pub allow_all_offices: bool,
+    pub allow_all_capabilities: bool,
     pub can_view_pii: bool,
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -64,6 +72,8 @@ impl From<ActiveApiKeyRecord> for ClientContext {
             key_prefix: record.key_prefix,
             allowed_office_ids: record.allowed_office_ids,
             allowed_capabilities: record.allowed_capabilities,
+            allow_all_offices: record.allow_all_offices,
+            allow_all_capabilities: record.allow_all_capabilities,
             can_view_pii: record.can_view_pii,
             expires_at: record.expires_at,
         }

@@ -129,6 +129,8 @@ fn client() -> ClientContext {
         key_prefix: "air_test".to_string(),
         allowed_office_ids: vec![1, 2],
         allowed_capabilities: vec!["savings_deposit_total".to_string()],
+        allow_all_offices: false,
+        allow_all_capabilities: false,
         can_view_pii: false,
         expires_at: None,
     }

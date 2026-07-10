@@ -3,6 +3,7 @@ pub mod executor;
 pub mod formatter;
 pub mod llm;
 pub mod model;
+pub mod pending_intent;
 pub mod pipeline;
 pub mod planner;
 pub mod repository;
