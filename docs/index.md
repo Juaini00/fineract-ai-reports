@@ -1,47 +1,35 @@
-# AI Reporting Knowledge Index
+# AI Report Documentation
 
-This index turns the project documentation into a Karpathy-pattern wiki for the understand-anything knowledge graph.
+This is the primary documentation entrypoint for humans and agents.
 
-## Project Overview
+## Start here
 
-- [[project-setup]]
-- [[implementation-steps]]
-- [[ai-reporting-design]]
-- [[rag-architecture]]
-- [[chat-data-model]]
-- [[job-memory]]
-- [[audit-trail-design]]
+1. [Current status](./current/status.md) — what is implemented, partial, and pending now.
+2. [Active context](./current/active-context.md) — rules and context to keep in mind before editing.
+3. [Next work](./current/next-work.md) — recommended next development items.
+4. [Architecture overview](./architecture/overview.md) — system boundaries and request flow.
+5. [Roadmap](./roadmap/implementation-roadmap.md) — phase map and migrated phase details.
+6. [Issues](./issues/README.md) — active/resolved documentation and product issues.
+7. [Spec/plan workflow](./superpowers/README.md) — how new implementation work is designed and planned.
 
-## Reporting Policy
+## Source-of-truth map
 
-- [[reporting-data-scope]]
-- [[reporting-capabilities]]
-- [[reporting-pii-policy]]
-- [[knowledge-catalog]]
+| Concern | Source of truth |
+| --- | --- |
+| Current development state | `docs/current/status.md` |
+| Immediate agent context | `docs/current/active-context.md` |
+| Next implementation work | `docs/current/next-work.md` |
+| Stable architecture | `docs/architecture/` |
+| Product/reporting rules | `docs/product/` |
+| Runtime behavior | `docs/runtime/` |
+| Knowledge-system explanation | `docs/knowledge/` |
+| API reference | `docs/api/` |
+| Manual verification flows | `docs/scenarios/` |
+| Active issues | `docs/issues/active/` |
+| Design specs and implementation plans | `docs/superpowers/` |
+| Machine-readable runtime catalog | `knowledge/**/*.yaml` and `queries/**/*.sql` |
+| Human-readable OKF concept graph | `doc-knowledge/` |
 
-## Reporting Data
+## Reading rule
 
-- [[reporting-data/client-foundation]]
-- [[reporting-data/organization-foundation]]
-- [[reporting-data/group-center-foundation]]
-- [[reporting-data/savings-core]]
-- [[reporting-data/savings-transactions]]
-- [[reporting-data/savings-charges-fees]]
-- [[reporting-data/loans]]
-- [[reporting-data/accounting-gl]]
-- [[reporting-data/audit-users-operations]]
-- [[reporting-data/custom-datatables]]
-- [[reporting-data/tax]]
-
-## API Scenarios
-
-- [[scenarios/README]]
-- [[scenarios/00-setup]]
-- [[scenarios/01-health-ready]]
-- [[scenarios/02-auth-api-keys]]
-- [[scenarios/03-catalog-validate]]
-- [[scenarios/04-vector-index]]
-- [[scenarios/05-chat-session-and-job]]
-- [[scenarios/06-chat-clarification-and-unsupported]]
-- [[scenarios/07-authorization-scope]]
-- [[scenarios/08-knowledge-breadth-and-multilingual]]
+Do not start by reading every file. Read `current/*` first, then follow the link for the area you are changing.

@@ -43,7 +43,7 @@ All fields classified `public_business` — no PII.
 # Guards
 
 - `select_only`, `single_statement`, `snapshot_only`
-- `require_office_filter=true` — office scope enforced inside the SQL via bound `office_ids`, not Rust post-filtering (per [reporting-pii-policy](../../docs/reporting-pii-policy.md) and repo invariant)
+- `require_office_filter=true` — office scope enforced inside the SQL via bound `office_ids`, not Rust post-filtering (per [reporting-pii-policy](../../docs/product/pii-policy/index.md) and repo invariant)
 - `timeout_ms: 5000`, `cost_class: medium`
 
 # Example Prompts
@@ -56,5 +56,5 @@ All fields classified `public_business` — no PII.
 
 # Related
 
-- Policy: [reporting-pii-policy](../../docs/reporting-pii-policy.md), [reporting-data-scope](../../docs/reporting-data-scope.md)
+- Policy: [reporting-pii-policy](../../docs/product/pii-policy/index.md), [reporting-data-scope](../../docs/product/reporting-data-scope/index.md)
 - Data areas: [savings-core](../../docs/reporting-data/savings-core.md), [client-foundation](../../docs/reporting-data/client-foundation.md), [organization-foundation](../../docs/reporting-data/organization-foundation.md)

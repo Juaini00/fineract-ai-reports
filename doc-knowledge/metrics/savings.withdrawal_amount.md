@@ -14,4 +14,4 @@ tags: [metric, savings]
 - **Sensitivity:** `public_business`
 
 Grouping compatible with `currency_code`, `office_id`, `product_id`.
-Enforce office scope on the source table's `office_id` (see [office_scope](../policies/office_scope.md)).
+Enforce office scope on the source table's `office_id` (see [office_scope](../policies/office-scope.md)).
