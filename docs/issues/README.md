@@ -1,13 +1,32 @@
 # Issues
 
-Living log of open design/implementation issues in the chat + reporting pipeline. One file per issue, kebab-case, prefixed with a numeric id so ordering is stable. Close by moving to `docs/issues/closed/` (create when needed) with a short resolution note appended.
+Issues capture active or resolved problems that should not be buried inside roadmap or architecture docs.
 
-Format each issue file with:
+## Folders
 
-- **Summary** — one sentence.
-- **Symptom** — reproducible evidence (job id, request, actual vs expected).
-- **Root cause** — mechanism, not the symptom.
-- **Blueprint alignment** — which section of `Modern_RAG_Architecture_Blueprint.md` this touches.
-- **Options considered** — with trade-offs, one paragraph each.
-- **Chosen approach** — the plan, if decided; otherwise leave open with a decision owner.
-- **Interim workaround** — if any, and its ceiling.
+- [`active/`](./active/) — unresolved or deferred problems.
+- [`resolved/`](./resolved/) — closed problems with resolution notes.
+
+## Issue template
+
+```text
+# NNN-title
+
+Status: active | resolved | deferred
+Severity: blocker | high | medium | low
+Area: chat | catalog | docs | api | auth | runtime
+Created: YYYY-MM-DD
+Resolved: YYYY-MM-DD or blank
+
+## Problem
+## Impact
+## Current behavior
+## Expected behavior
+## Proposed fix
+## Links
+```
+
+## Active issues
+
+- [Clarification response matching must be semantic](./active/001-clarification-response-matching-must-be-semantic.md)
+- [Hardcode cleanup issues](./active/hardcode-cleanup-issues.md)

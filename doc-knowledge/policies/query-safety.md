@@ -16,4 +16,4 @@ Unsafe tokens rejected: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `DROP`, `ALTER
 
 Static validation runs during `POST /catalog/validate` and at startup via `KnowledgeSyncService`. Runtime `validate_runtime` also prepares the SQL and checks the output-column contract against `output_fields`.
 
-See [docs/knowledge-catalog](../../docs/knowledge-catalog.md#56-step-6-validate-sql-safety).
+See [docs/knowledge-catalog](../../docs/knowledge/catalog/07-7-validation-rules.md).

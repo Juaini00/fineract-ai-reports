@@ -19,4 +19,4 @@ tags: [policy, security, multi-tenant]
 - Query metadata declares `parameters[office_ids].source: authorized_scope`.
 - SQL binds `ANY($n::bigint[])` — never string interpolation, never Rust post-filter.
 
-See [docs/reporting-capabilities](../../docs/reporting-capabilities.md#4-common-mvp-savings-joins).
+See [docs/reporting-capabilities](../../docs/product/reporting-capabilities/04-4-common-savings-joins.md).

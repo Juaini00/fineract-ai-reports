@@ -16,4 +16,4 @@ Prefer aggregate reporting. Do not select fields you will then omit.
 
 # Enforcement
 
-Wired into `chat::policy::authorization::evaluate_policy`, called before `chat::chat::executor::execute_plan`. Full spec: [docs/reporting-pii-policy](../../docs/reporting-pii-policy.md).
+Wired into `chat::policy::authorization::evaluate_policy`, called before `chat::chat::executor::execute_plan`. Full spec: [docs/reporting-pii-policy](../../docs/product/pii-policy/index.md).

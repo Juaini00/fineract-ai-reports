@@ -20,7 +20,7 @@ Required: `from_date`, `to_date`, `limit`. Optional: `office_ids` (bound from au
 
 # Guards
 
-`require_office_scope=true`, `max_date_range_days=366` (except summary), reversed transactions excluded by default. See [office_scope](../policies/office_scope.md) and [pii](../policies/pii.md).
+`require_office_scope=true`, `max_date_range_days=366` (except summary), reversed transactions excluded by default. See [office_scope](../policies/office-scope.md) and [pii](../policies/pii.md).
 
 # Related
 
