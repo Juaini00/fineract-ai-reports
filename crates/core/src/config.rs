@@ -31,6 +31,18 @@ pub struct RedisConfig {
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
     pub bootstrap_admin_token: String,
+    pub bootstrap_admin_enabled: bool,
+    pub bootstrap_admin_username: String,
+    pub bootstrap_admin_password: String,
+    pub bootstrap_admin_email: String,
+    pub jwt_access_secret: String,
+    pub jwt_refresh_secret: String,
+    pub jwt_access_token_expiry_seconds: i64,
+    pub jwt_refresh_token_expiry_seconds: i64,
+    pub refresh_cookie_name: String,
+    pub refresh_cookie_secure: bool,
+    pub refresh_cookie_same_site: String,
+    pub refresh_cookie_path: String,
     pub api_key_prefix: String,
     pub api_key_default_expiration_days: u32,
 }
@@ -96,6 +108,38 @@ impl AppConfig {
             },
             auth: AuthConfig {
                 bootstrap_admin_token: get_required_env("AUTH_BOOTSTRAP_ADMIN_TOKEN")?,
+                bootstrap_admin_enabled: get_env_or("AUTH_BOOTSTRAP_ADMIN_ENABLED", "false")
+                    .parse()
+                    .context("AUTH_BOOTSTRAP_ADMIN_ENABLED must be true or false")?,
+                bootstrap_admin_username: get_env_or("AUTH_BOOTSTRAP_ADMIN_USERNAME", "admin"),
+                bootstrap_admin_password: get_env_or(
+                    "AUTH_BOOTSTRAP_ADMIN_PASSWORD",
+                    "password123",
+                ),
+                bootstrap_admin_email: get_env_or(
+                    "AUTH_BOOTSTRAP_ADMIN_EMAIL",
+                    "admin@example.com",
+                ),
+                jwt_access_secret: get_required_env("JWT_ACCESS_SECRET")?,
+                jwt_refresh_secret: get_required_env("JWT_REFRESH_SECRET")?,
+                jwt_access_token_expiry_seconds: get_env_or(
+                    "JWT_ACCESS_TOKEN_EXPIRY_SECONDS",
+                    "900",
+                )
+                .parse()
+                .context("JWT_ACCESS_TOKEN_EXPIRY_SECONDS must be an integer")?,
+                jwt_refresh_token_expiry_seconds: get_env_or(
+                    "JWT_REFRESH_TOKEN_EXPIRY_SECONDS",
+                    "604800",
+                )
+                .parse()
+                .context("JWT_REFRESH_TOKEN_EXPIRY_SECONDS must be an integer")?,
+                refresh_cookie_name: get_env_or("AUTH_REFRESH_COOKIE_NAME", "refresh_token"),
+                refresh_cookie_secure: get_env_or("AUTH_REFRESH_COOKIE_SECURE", "true")
+                    .parse()
+                    .context("AUTH_REFRESH_COOKIE_SECURE must be true or false")?,
+                refresh_cookie_same_site: get_env_or("AUTH_REFRESH_COOKIE_SAME_SITE", "strict"),
+                refresh_cookie_path: get_env_or("AUTH_REFRESH_COOKIE_PATH", "/"),
                 api_key_prefix: get_env_or("API_KEY_PREFIX", "air_test"),
                 api_key_default_expiration_days: get_env_or("API_KEY_DEFAULT_EXPIRATION_DAYS", "0")
                     .parse()

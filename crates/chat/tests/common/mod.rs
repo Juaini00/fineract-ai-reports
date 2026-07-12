@@ -15,6 +15,7 @@
 use std::net::SocketAddr;
 
 use app_core::api::AppState;
+use app_core::auth::api_key;
 use app_core::config::{
     AppConfig, AuthConfig, CatalogConfig, LlmConfig, QueryConfig, RedisConfig, ServerConfig,
     VoyageAiConfig,
@@ -54,6 +55,16 @@ impl TestApp {
         req.send().await.expect("http get")
     }
 
+    /// GET `path` with a user bearer token.
+    pub async fn get_bearer(&self, path: &str, token: &str) -> reqwest::Response {
+        self.http
+            .get(format!("{}{path}", self.base_url))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("http get bearer")
+    }
+
     /// POST JSON with an optional `X-API-Key`.
     pub async fn post_json(
         &self,
@@ -82,21 +93,44 @@ impl TestApp {
             .expect("http post admin")
     }
 
-    /// Create an API key via the bootstrap admin flow.
+    pub async fn login_admin(&self) -> String {
+        let resp = self
+            .http
+            .post(format!("{}/auth/login", self.base_url))
+            .json(&json!({ "username": "admin", "password": "password123" }))
+            .send()
+            .await
+            .expect("login admin");
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        let payload: Value = resp.json().await.expect("login json");
+        payload["data"]["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Create an API key via logged-in dashboard user auth.
     pub async fn provision_api_key(
         &self,
         allowed_capabilities: &[&str],
         allowed_office_ids: Vec<i64>,
         can_view_pii: bool,
     ) -> ApiKey {
+        let access_token = self.login_admin().await;
         let body = json!({
             "name": format!("harness-{}", &Uuid::new_v4().to_string()[..8]),
-            "owner": "integration-tests",
             "allowed_capabilities": allowed_capabilities,
             "allowed_office_ids": allowed_office_ids,
             "can_view_pii": can_view_pii,
         });
-        let resp = self.post_json_admin("/auth/api-keys", &body).await;
+        let resp = self
+            .http
+            .post(format!("{}/auth/api-keys", self.base_url))
+            .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+            .json(&body)
+            .send()
+            .await
+            .expect("post api key");
         assert_eq!(
             resp.status(),
             reqwest::StatusCode::CREATED,
@@ -108,6 +142,35 @@ impl TestApp {
             raw: payload["data"]["api_key"].as_str().unwrap().to_string(),
             id: Uuid::parse_str(payload["data"]["id"].as_str().unwrap()).unwrap(),
         }
+    }
+
+    pub async fn insert_legacy_api_key_without_user(&self) -> String {
+        let raw = api_key::generate_api_key("air_test");
+        sqlx::query(
+            r#"
+            INSERT INTO api_keys (
+                id,
+                user_id,
+                name,
+                owner,
+                key_prefix,
+                key_hash,
+                allowed_office_ids,
+                allowed_capabilities,
+                allow_all_offices,
+                allow_all_capabilities,
+                can_view_pii
+            )
+            VALUES ($1, NULL, 'legacy', 'legacy', $2, $3, '[]'::jsonb, '[]'::jsonb, true, true, false)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(api_key::key_display_prefix(&raw))
+        .bind(api_key::hash_api_key(&raw))
+        .execute(&self.app_pool)
+        .await
+        .expect("insert legacy api key");
+        raw
     }
 }
 
@@ -187,6 +250,18 @@ pub async fn spawn_app() -> TestApp {
         },
         auth: AuthConfig {
             bootstrap_admin_token: ADMIN_TOKEN.into(),
+            bootstrap_admin_enabled: true,
+            bootstrap_admin_username: "admin".into(),
+            bootstrap_admin_password: "password123".into(),
+            bootstrap_admin_email: "admin@example.com".into(),
+            jwt_access_secret: "test-access-secret-change-me".into(),
+            jwt_refresh_secret: "test-refresh-secret-change-me".into(),
+            jwt_access_token_expiry_seconds: 900,
+            jwt_refresh_token_expiry_seconds: 604800,
+            refresh_cookie_name: "refresh_token".into(),
+            refresh_cookie_secure: false,
+            refresh_cookie_same_site: "strict".into(),
+            refresh_cookie_path: "/".into(),
             api_key_prefix: "air_test".into(),
             api_key_default_expiration_days: 0,
         },
@@ -228,6 +303,11 @@ pub async fn spawn_app() -> TestApp {
 
     // Compose router the same way main.rs does
     let core_state = AppState::new(config.clone(), pools);
+    core_state
+        .auth_service
+        .bootstrap_admin()
+        .await
+        .expect("bootstrap admin");
     let chat_state = chat::api::ChatAppState::new(core_state.clone())
         .await
         .expect("build ChatAppState");

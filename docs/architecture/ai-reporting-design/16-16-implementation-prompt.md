@@ -20,8 +20,8 @@ Important constraints:
 - Rust is responsible for validation, planning, policy enforcement, execution, audit logging, and result shaping.
 - The LLM provider is used only for AI planning fallback and response formatting. DeepSeek is the current/default provider; other OpenAI-compatible providers can be configured with `LLM_*` environment variables.
 - pgvector is used for semantic knowledge retrieval, not for transactional numeric data.
-- Authentication uses application-managed API keys.
-- Every protected request must include Authorization: Bearer <api_key> or X-API-Key.
+- Dashboard authentication uses user access tokens in `Authorization: Bearer <access_token>`.
+- Chat/reporting authentication uses application-managed API keys in `X-API-Key` only.
 - Raw API keys must be shown only once and never stored.
 - Store only hashed API keys plus metadata/scopes.
 - API keys must support revocation, expiration, capability scopes, office scopes, and PII visibility.
@@ -39,7 +39,7 @@ Currently enabled runtime slice:
 - SQL files under queries/.
 - App database: PostgreSQL database ai_reports with pgvector enabled.
 - Fineract database: PostgreSQL read-only connection from environment variable FINERACT_DATABASE_URL.
-- Auth bootstrap: API key creation is initially protected by AUTH_BOOTSTRAP_ADMIN_TOKEN.
+- Auth bootstrap: the first admin user is created from environment configuration; API keys are created by authenticated admin users.
 
 Implement in this order:
 1. Workspace/module structure.

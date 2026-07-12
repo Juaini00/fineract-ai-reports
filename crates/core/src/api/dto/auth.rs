@@ -6,9 +6,6 @@ pub(crate) struct CreateApiKeyRequest {
     #[validate(length(min = 1, message = "name is required"))]
     pub(crate) name: String,
 
-    #[validate(length(min = 1, message = "owner is required"))]
-    pub(crate) owner: String,
-
     #[serde(default)]
     pub(crate) expires_at: Option<chrono::DateTime<chrono::Utc>>,
 
@@ -28,6 +25,15 @@ pub(crate) struct CreateApiKeyRequest {
     pub(crate) can_view_pii: bool,
 }
 
+#[derive(Debug, Deserialize, Validate)]
+pub(crate) struct LoginRequest {
+    #[validate(length(min = 1, message = "username is required"))]
+    pub(crate) username: String,
+
+    #[validate(length(min = 1, message = "password is required"))]
+    pub(crate) password: String,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateApiKeyResponse {
     pub(crate) id: uuid::Uuid,
@@ -36,7 +42,21 @@ pub(crate) struct CreateApiKeyResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct AuthMeResponse {
-    pub(crate) auth_type: &'static str,
-    pub(crate) client: crate::auth::model::ClientContext,
+pub(crate) struct LoginResponse {
+    pub(crate) access_token: String,
+    pub(crate) token_type: &'static str,
+    pub(crate) expires_in: i64,
+    pub(crate) user: crate::auth::model::UserProfile,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RefreshResponse {
+    pub(crate) access_token: String,
+    pub(crate) token_type: &'static str,
+    pub(crate) expires_in: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LogoutResponse {
+    pub(crate) message: &'static str,
 }

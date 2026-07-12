@@ -49,6 +49,33 @@ impl SessionRepository {
         Ok(row.into())
     }
 
+    pub async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ChatSession>> {
+        let rows = sqlx::query_as::<_, ChatSessionRow>(
+            r#"
+            SELECT
+                cs.id,
+                cs.api_key_id,
+                cs.title,
+                cs.status,
+                cs.context_json,
+                cs.created_at,
+                cs.updated_at,
+                cs.expires_at,
+                cs.archived_at
+            FROM chat_sessions cs
+            JOIN api_keys ak ON ak.id = cs.api_key_id
+            WHERE ak.user_id = $1
+              AND cs.archived_at IS NULL
+            ORDER BY cs.updated_at DESC, cs.created_at DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     pub async fn get_for_client(
         &self,
         session_id: Uuid,

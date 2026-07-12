@@ -69,3 +69,57 @@ async fn create_session_without_api_key_is_unauthorized() {
 
     assert_eq!(resp.status(), 401);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn list_sessions_returns_sessions_owned_by_authenticated_user() {
+    let app = spawn_app().await;
+    let first_key = app.provision_api_key(&[], vec![1], false).await;
+    let second_key = app.provision_api_key(&[], vec![1], false).await;
+
+    let first = app
+        .post_json(
+            "/chat/sessions",
+            Some(&first_key.raw),
+            &json!({ "title": "first session" }),
+        )
+        .await;
+    assert_eq!(first.status(), 201);
+    let second = app
+        .post_json(
+            "/chat/sessions",
+            Some(&second_key.raw),
+            &json!({ "title": "second session" }),
+        )
+        .await;
+    assert_eq!(second.status(), 201);
+
+    let resp = app.get("/chat/sessions", Some(&first_key.raw)).await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    let titles: Vec<_> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["title"].as_str().unwrap())
+        .collect();
+    assert!(titles.contains(&"first session"));
+    assert!(titles.contains(&"second session"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_rejects_api_key_without_user_owner() {
+    let app = spawn_app().await;
+    let raw_key = app.insert_legacy_api_key_without_user().await;
+
+    let resp = app
+        .post_json(
+            "/chat/sessions",
+            Some(&raw_key),
+            &json!({ "title": "orphan" }),
+        )
+        .await;
+
+    assert_eq!(resp.status(), 401);
+}

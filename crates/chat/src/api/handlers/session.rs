@@ -15,6 +15,26 @@ use crate::api::ChatAppState;
 use crate::api::dto::session::CreateChatSessionRequest;
 use crate::chat::model::CreateChatSessionInput;
 
+#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id))]
+pub async fn list(
+    AuthenticatedClient(client): AuthenticatedClient,
+    State(state): State<ChatAppState>,
+) -> Result<Response, ApiError> {
+    let user_id = client
+        .user_id
+        .ok_or_else(|| ApiError::unauthorized("API key is not assigned to a user"))?;
+    let sessions = state
+        .chat
+        .sessions
+        .list_for_user(user_id)
+        .await
+        .map_err(ApiError::internal)?;
+
+    info!(session_count = sessions.len(), "chat sessions listed");
+
+    Ok(response::success(StatusCode::OK, sessions).into_response())
+}
+
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
 pub async fn create(
     AuthenticatedClient(client): AuthenticatedClient,

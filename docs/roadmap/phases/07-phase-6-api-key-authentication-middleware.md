@@ -9,9 +9,10 @@ Goal: protect all reporting and admin endpoints except health/readiness and key 
 Supported headers:
 
 ```text
-Authorization: Bearer <api_key>
 X-API-Key: <api_key>
 ```
+
+`Authorization: Bearer <access_token>` is reserved for dashboard user auth and is not accepted as an API key.
 
 Runtime flow:
 
@@ -41,7 +42,7 @@ Client context:
 Validation endpoint for middleware:
 
 ```text
-GET /auth/me
+POST /chat/sessions
 ```
 
 Expected response:
@@ -57,8 +58,8 @@ Expected response:
 Validation:
 
 ```bash
-curl http://127.0.0.1:3007/auth/me \
-  -H "Authorization: Bearer <generated_api_key>"
+curl -X POST http://127.0.0.1:3007/chat/sessions \
+  -H "X-API-Key: <generated_api_key>"
 ```
 
 Current status:

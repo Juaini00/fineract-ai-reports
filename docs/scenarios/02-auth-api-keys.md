@@ -1,24 +1,23 @@
 # 02 — Auth + API Keys
 
 **Phase covered:** Phase 5–6.
-**Precondition:** `LOCAL_ADMIN_TOKEN` from `00-setup.md`.
+**Precondition:** logged-in admin user access token from `POST /auth/login`.
 
 ## Test status
 
 ✅ Passed on 2026-06-28 via Postman MCP runner.
 
-- API key creation returned HTTP 201 and a one-time raw `data.api_key`.
-- `GET /auth/me` returned HTTP 200 with the authenticated client under `data.client`.
+- API key creation returns HTTP 201 and a one-time raw `data.api_key`.
+- Chat/reporting endpoints authenticate API keys only through `X-API-Key`.
 
-## Create API key (bootstrap-gated)
+## Create API key (dashboard user-gated)
 
 ```bash
 curl -X POST {{BASE_URL}}/auth/api-keys \
-  -H "Authorization: Bearer {{LOCAL_ADMIN_TOKEN}}" \
+  -H "Authorization: Bearer {{ACCESS_TOKEN}}" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "local-dev-client",
-    "owner": "Antun",
     "allowed_office_ids": [1, 2, 3],
     "allowed_capabilities": [
       "savings_deposit_total",
@@ -54,30 +53,22 @@ curl -X POST {{BASE_URL}}/auth/api-keys \
 Copy `data.api_key` into `{{API_KEY}}`. **This is the only time the raw key is visible.**
 
 ## Side effects
-- DB `api_keys`: row with `key_hash`, `key_prefix`, scopes, `revoked_at=null`. Raw key never stored.
+- DB `api_keys`: row with `user_id`, `owner` derived from the authenticated user, `key_hash`, `key_prefix`, scopes, `revoked_at=null`. Raw key never stored.
 
-## Verify identity
+## Use API key for chat/reporting
 
 ```bash
-curl {{BASE_URL}}/auth/me -H "Authorization: Bearer {{API_KEY}}"
-# or:
-curl {{BASE_URL}}/auth/me -H "X-API-Key: {{API_KEY}}"
+curl -X POST {{BASE_URL}}/chat/sessions \
+  -H "X-API-Key: {{API_KEY}}" \
+  -H "Content-Type: application/json" \
+  -d '{ "title": "Savings report" }'
 ```
 
 ### Expected (HTTP 200)
 ```json
 {
   "success": true,
-  "data": {
-    "auth_type": "api_key",
-    "client": {
-      "api_key_id": "key_...",
-      "owner": "Antun",
-      "allowed_office_ids": [1, 2, 3],
-      "allowed_capabilities": ["savings_deposit_total", "savings_deposit_top_n", "savings_withdrawal_total", "savings_withdrawal_top_n", "savings_deposit_monthly_breakdown", "savings_deposit_monthly_top_n", "savings_withdrawal_monthly_breakdown", "savings_withdrawal_monthly_top_n", "savings_balance_summary", "organization_office_summary", "client_lifecycle_summary"],
-      "can_view_pii": true
-    }
-  },
+  "data": { "id": "session_...", "title": "Savings report" },
   "error": null
 }
 ```
@@ -86,7 +77,8 @@ curl {{BASE_URL}}/auth/me -H "X-API-Key: {{API_KEY}}"
 
 | Trigger | Expected response |
 | --- | --- |
-| Wrong / missing `LOCAL_ADMIN_TOKEN` on create | HTTP 401 `error.code=unauthorized` |
-| Wrong API key on `/auth/me` | HTTP 401 `error.code=unauthorized` |
-| Revoked key (`POST /auth/api-keys/{id}/revoke`) | HTTP 401 on next `/auth/me` |
+| Wrong / missing `ACCESS_TOKEN` on create | HTTP 401 `error.code=unauthorized` |
+| API key sent through `Authorization` instead of `X-API-Key` on chat routes | HTTP 401 `error.code=unauthorized` |
+| Wrong API key on chat routes | HTTP 401 `error.code=unauthorized` |
+| Revoked key (`POST /auth/api-keys/{id}/revoke`) | HTTP 401 on next chat request |
 | Expired key | HTTP 401 |

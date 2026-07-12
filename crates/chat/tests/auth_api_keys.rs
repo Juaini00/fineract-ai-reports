@@ -21,7 +21,7 @@ const SCENARIO_CAPABILITIES: &[&str] = &[
 ];
 
 #[tokio::test(flavor = "multi_thread")]
-async fn admin_can_create_api_key_and_client_can_call_me() {
+async fn admin_can_create_api_key_and_client_can_create_chat_session() {
     // Arrange
     let app = spawn_app().await;
 
@@ -30,18 +30,16 @@ async fn admin_can_create_api_key_and_client_can_call_me() {
         .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
         .await;
 
-    let me = app.get("/auth/me", Some(&created.raw)).await;
+    let session = app
+        .post_json(
+            "/chat/sessions",
+            Some(&created.raw),
+            &json!({ "title": "API key session" }),
+        )
+        .await;
 
     // Assert
-    assert_eq!(me.status(), 200);
-    let body: serde_json::Value = me.json().await.unwrap();
-    assert_eq!(body["data"]["auth_type"], "api_key");
-    assert_eq!(body["data"]["client"]["allowed_office_ids"], json!([1, 2]));
-    assert_eq!(
-        body["data"]["client"]["allowed_capabilities"],
-        json!(SCENARIO_CAPABILITIES)
-    );
-    assert_eq!(body["data"]["client"]["can_view_pii"], true);
+    assert_eq!(session.status(), 201);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -61,7 +59,7 @@ async fn create_api_key_without_admin_token_is_forbidden() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_api_key_with_wrong_admin_token_is_forbidden() {
+async fn create_api_key_with_invalid_access_token_is_unauthorized() {
     let app = spawn_app().await;
 
     let resp = app
@@ -73,14 +71,14 @@ async fn create_api_key_with_wrong_admin_token_is_forbidden() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn me_without_api_key_is_unauthorized() {
     let app = spawn_app().await;
 
-    let resp = app.get("/auth/me", None).await;
+    let resp = app.get("/chat/sessions", None).await;
 
     assert_eq!(resp.status(), 401);
 }
@@ -89,7 +87,7 @@ async fn me_without_api_key_is_unauthorized() {
 async fn me_with_invalid_api_key_is_unauthorized() {
     let app = spawn_app().await;
 
-    let resp = app.get("/auth/me", Some("air_test_bogus")).await;
+    let resp = app.get("/chat/sessions", Some("air_test_bogus")).await;
 
     assert_eq!(resp.status(), 401);
 }
