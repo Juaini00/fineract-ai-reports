@@ -266,6 +266,7 @@ fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
 fn client(can_view_pii: bool) -> ClientContext {
     ClientContext {
         api_key_id: Uuid::new_v4(),
+        user_id: None,
         name: "scenario-test".into(),
         owner: "integration-tests".into(),
         key_prefix: "air_test".into(),

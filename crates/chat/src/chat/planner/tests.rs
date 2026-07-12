@@ -124,6 +124,7 @@ fn matched_total_deposit() -> ClassificationResult {
 fn client() -> ClientContext {
     ClientContext {
         api_key_id: Uuid::nil(),
+        user_id: None,
         name: "test".to_string(),
         owner: "test".to_string(),
         key_prefix: "air_test".to_string(),

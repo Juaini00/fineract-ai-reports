@@ -71,6 +71,7 @@ mod tests {
     fn conversation_context_excludes_secrets_and_includes_scope() {
         let client = ClientContext {
             api_key_id: Uuid::nil(),
+            user_id: None,
             name: "local".to_string(),
             owner: "owner".to_string(),
             key_prefix: "air_test_x".to_string(),

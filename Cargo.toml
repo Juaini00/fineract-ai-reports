@@ -19,13 +19,16 @@ type_complexity = "allow"
 
 [workspace.dependencies]
 anyhow = "1.0.102"
+argon2 = "0.5.3"
 async-trait = "0.1.89"
 axum = "0.8.9"
 chrono = { version = "0.4.45", features = ["serde"] }
 config = "0.15.23"
+cookie = "0.18.1"
 dotenvy = "0.15.7"
 futures = "0.3.32"
 hex = "0.4.3"
+jsonwebtoken = "9.3.1"
 pgvector = { version = "0.4.2", features = ["sqlx"] }
 redis = { version = "1.2.3", features = ["tokio-comp"] }
 rand = "0.8.6"
@@ -37,8 +40,9 @@ serde_yaml = "0.9.34"
 sha2 = "0.10.9"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "chrono", "uuid", "rust_decimal"] }
 thiserror = "2.0.18"
+time = "0.3.44"
 tokio = { version = "1.52.3", features = ["full"] }
-tower-http = { version = "0.6.11", features = ["trace", "tracing"] }
+tower-http = { version = "0.6.11", features = ["trace", "tracing", "cors"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.23.3", features = ["serde", "v4"] }

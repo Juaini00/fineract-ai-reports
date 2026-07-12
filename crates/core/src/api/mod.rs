@@ -8,7 +8,10 @@ pub mod routes;
 use axum::{Router, extract::FromRef};
 
 use crate::{
-    auth::{repository::ApiKeyRepository, service::AuthService},
+    auth::{
+        repository::{ApiKeyRepository, SessionRepository, UserRepository},
+        service::AuthService,
+    },
     config::AppConfig,
     db::DatabasePools,
 };
@@ -23,7 +26,15 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: AppConfig, pools: DatabasePools) -> Self {
         let api_key_repository = ApiKeyRepository::new(pools.app.clone());
-        let auth_service = AuthService::new(config.auth.clone(), api_key_repository);
+        let user_repository = UserRepository::new(pools.app.clone());
+        let session_repository = SessionRepository::new(pools.app.clone());
+        let auth_service = AuthService::new(
+            config.auth.clone(),
+            api_key_repository,
+            user_repository,
+            session_repository,
+            pools.redis.clone(),
+        );
 
         Self {
             config,

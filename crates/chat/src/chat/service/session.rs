@@ -25,6 +25,11 @@ impl SessionService {
         self.sessions.create(input.client.api_key_id, title).await
     }
 
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    pub async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ChatSession>> {
+        self.sessions.list_for_user(user_id).await
+    }
+
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
     pub async fn get(
         &self,

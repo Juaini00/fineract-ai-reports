@@ -149,6 +149,7 @@ mod tests {
     fn client() -> ClientContext {
         ClientContext {
             api_key_id: Uuid::nil(),
+            user_id: None,
             name: "test-client".to_string(),
             owner: "test-owner".to_string(),
             key_prefix: "air_test".to_string(),

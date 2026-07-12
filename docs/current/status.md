@@ -17,7 +17,7 @@ This file is the short source of truth for the current development state. Detail
 - App and Fineract database pools.
 - `/health` and `/ready`.
 - App database migrations.
-- API key generation, hashing, bootstrap admin token, API key auth extractor, `GET /auth/me`.
+- User login, access-token `GET /auth/me`, refresh-token cookie flow, API key generation/hashing, and `X-API-Key` chat authentication.
 - Chat session/job durable tables and state revision.
 - Chat job endpoints, clarification response endpoint, background worker, Redis-backed SSE fallback behavior.
 - Authorization helpers for capability, office scope, and PII.

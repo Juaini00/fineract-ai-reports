@@ -6,17 +6,13 @@ Source: `docs-old/ai-reporting-design.md`
 
 The first authentication mechanism will use application-managed API keys.
 
-Protected requests must include an API key:
-
-```http
-Authorization: Bearer <api_key>
-```
-
-or:
+Chat/reporting requests must include an API key:
 
 ```http
 X-API-Key: <api_key>
 ```
+
+`Authorization: Bearer <access_token>` is reserved for dashboard user authentication and API-key management. It is not accepted as an API key for AI assistant/chat routes.
 
 The API key identifies the caller and determines which data and capabilities the caller can access.
 
@@ -47,7 +43,6 @@ Example request:
 ```json
 {
   "name": "local-dev-client",
-  "owner": "Antun",
   "expires_at": null,
   "allowed_office_ids": [1, 2, 3],
   "allowed_capabilities": [
@@ -76,7 +71,7 @@ Example response:
 
 ```text
 Incoming request
-  -> extract API key from Authorization or X-API-Key
+  -> extract API key from X-API-Key
   -> hash presented key
   -> find active key by hash
   -> check revoked_at is null
@@ -136,13 +131,11 @@ DELETE /auth/api-keys/{id}
 POST   /auth/api-keys/{id}/revoke
 ```
 
-API key creation is protected by a bootstrap admin token from environment variables:
+API key creation is protected by an authenticated admin user access token:
 
-```env
-AUTH_BOOTSTRAP_ADMIN_TOKEN=local-admin-token
+```http
+Authorization: Bearer <access_token>
 ```
-
-Later, this can be replaced by a real admin login or external identity provider.
 
 ### 4.6 API Key Storage
 
