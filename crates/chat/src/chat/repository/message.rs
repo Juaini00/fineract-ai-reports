@@ -47,6 +47,30 @@ impl MessageRepository {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    pub async fn list_recent_for_session(
+        &self,
+        session_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ChatMessage>> {
+        let rows = sqlx::query_as::<_, ChatMessageRow>(
+            r#"
+            SELECT id, session_id, job_id, role, content, metadata_json, created_at
+            FROM chat_messages
+            WHERE session_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(session_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut messages: Vec<_> = rows.into_iter().map(Into::into).collect();
+        messages.reverse();
+        Ok(messages)
+    }
+
     pub async fn insert_assistant_response(
         &self,
         session_id: Uuid,

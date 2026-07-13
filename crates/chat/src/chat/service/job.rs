@@ -1,50 +1,50 @@
 use std::sync::Arc;
-use std::time::Instant;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use app_core::auth::model::ClientContext;
-use app_core::config::ChatFeatureConfig;
+use app_core::config::{ChatFeatureConfig, EmbeddingConfig, LlmConfig};
 use chrono::Utc;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::audit::{AuditEvent, AuditHandle};
-use crate::chat::classifier::{
-    ClarificationOption, ClassificationCandidate, ClassificationOutcome, ClassificationResult,
-    OTHER_ACTIVITY_CAPABILITY, clarify_retrieved_capabilities, classify_clarification_response,
-    classify_retrieved_capability,
+use crate::assistant::{
+    AssistantGraphRuntime, ContextBuilder, ContextWindowPolicy, JobMemoryRepository,
+    LlmTraceRepository, MarkdownRenderer, ResponseRenderer, SemanticRouter,
+    SessionMemoryRepository,
+    llm::{
+        SharedLlmClient,
+        rig_client::RigLlmClient,
+        traced_client::{LlmTraceContext, TracedLlmClient},
+    },
 };
-use crate::chat::executor::execute_plan;
-use crate::chat::formatter::format_report_response;
-use crate::chat::llm::{LlmPlannerClient, LlmPlannerDecision};
+use crate::audit::AuditHandle;
+use crate::chat::llm::LlmPlannerClient;
 use crate::chat::model::{
     ChatJob, ChatJobAuditTimeline, ChatMessage, CreateChatJobInput, CreatedChatJob,
     RespondToChatJobInput,
 };
-use crate::chat::pending_intent::{PendingIntent, PendingIntentResolution, resolve_pending_intent};
-use crate::chat::pipeline::answer::{GeneratedAnswer, validate_grounded_answer};
-use crate::chat::pipeline::lqr::{LqrInputs, LqrOutcome, run_layered_retrieval};
-use crate::chat::planner::{build_execution_plan, evaluate_policy};
 use crate::chat::repository::{JobRepository, MessageRepository};
 use crate::knowledge::embedding::VoyageEmbeddingClient;
-use crate::knowledge::index::repository::{KnowledgeRepository, RetrievedKnowledgeCandidate};
-use crate::knowledge::model::{CapabilityKnowledge, KnowledgeCatalog};
+use crate::knowledge::index::repository::KnowledgeRepository;
+use crate::knowledge::model::KnowledgeCatalog;
+use crate::policy::authorization::resolve_wildcard_grants;
 
 #[derive(Clone)]
 pub struct JobService {
     jobs: JobRepository,
     messages: MessageRepository,
+    job_memory: JobMemoryRepository,
+    session_memory: SessionMemoryRepository,
+    context_builder: ContextBuilder,
+    knowledge: KnowledgeRepository,
     fineract_pool: PgPool,
     catalog: Arc<KnowledgeCatalog>,
-    knowledge: KnowledgeRepository,
-    embedding_client: VoyageEmbeddingClient,
-    llm_planner: LlmPlannerClient,
-    chat_features: ChatFeatureConfig,
+    llm: Option<SharedLlmClient>,
+    llm_traces: LlmTraceRepository,
     redis_url: String,
     redis: Option<redis::Client>,
-    audit: AuditHandle,
 }
 
 impl JobService {
@@ -54,73 +54,48 @@ impl JobService {
         app_pool: PgPool,
         fineract_pool: PgPool,
         catalog: Arc<KnowledgeCatalog>,
-        embedding_client: VoyageEmbeddingClient,
-        llm_planner: LlmPlannerClient,
+        _embedding_client: VoyageEmbeddingClient,
+        _llm_planner: LlmPlannerClient,
+        llm_config: LlmConfig,
+        embedding_config: EmbeddingConfig,
         chat_features: ChatFeatureConfig,
         redis_url: String,
         redis: Option<redis::Client>,
-        audit: AuditHandle,
+        _audit: AuditHandle,
     ) -> Self {
+        let llm = if llm_config.api_key.trim().is_empty() {
+            None
+        } else {
+            RigLlmClient::new(&llm_config, Some(&embedding_config))
+                .map(|client| Some(Arc::new(client) as SharedLlmClient))
+                .unwrap_or_else(|error| {
+                    warn!(%error, "semantic router LLM disabled");
+                    None
+                })
+        };
         Self {
             jobs,
-            messages,
+            messages: messages.clone(),
+            job_memory: JobMemoryRepository::new(app_pool.clone()),
+            session_memory: SessionMemoryRepository::new(app_pool.clone()),
+            context_builder: ContextBuilder::new(
+                messages.clone(),
+                SessionMemoryRepository::new(app_pool.clone()),
+                ContextWindowPolicy::new(
+                    chat_features.context_soft_token_limit,
+                    chat_features.context_hard_token_limit,
+                    chat_features.context_max_recent_messages,
+                    chat_features.context_max_relevant_jobs,
+                ),
+            ),
+            knowledge: KnowledgeRepository::new(app_pool.clone()),
             fineract_pool,
             catalog,
-            knowledge: KnowledgeRepository::new(app_pool),
-            embedding_client,
-            llm_planner,
-            chat_features,
+            llm,
+            llm_traces: LlmTraceRepository::new(app_pool),
             redis_url,
             redis,
-            audit,
         }
-    }
-
-    fn audit_event(
-        &self,
-        session_id: Uuid,
-        job_id: Uuid,
-        stage: &str,
-        layer: &str,
-        blueprint_step: Option<&str>,
-        status: &str,
-    ) -> AuditEvent {
-        let mut event = AuditEvent::new(job_id, stage, layer, status);
-        event.session_id = Some(session_id);
-        event.blueprint_step = blueprint_step.map(str::to_string);
-        event
-    }
-
-    fn record_clarification_decision(
-        &self,
-        session_id: Uuid,
-        job_id: Uuid,
-        reply: &str,
-        original: &ClassificationResult,
-        resolved: &ClassificationResult,
-    ) {
-        let mut event = self.audit_event(
-            session_id,
-            job_id,
-            "clarification_decision",
-            "intent_routing",
-            Some("ambiguity_resolution"),
-            match resolved.outcome {
-                ClassificationOutcome::Matched => "matched",
-                ClassificationOutcome::ClarificationRequired => "refined",
-                ClassificationOutcome::Unsupported => "abandoned",
-            },
-        );
-        event.input_summary_json = json!({
-            "reply": reply,
-            "candidates": original.options.clone(),
-        });
-        event.decision_json = json!({
-            "outcome": event.status.clone(),
-            "capability": resolved.capability.clone(),
-            "source": resolved.source.clone(),
-        });
-        self.audit.record(event);
     }
 
     /// Emit a chat-job event: durable PG insert + best-effort Redis publish
@@ -177,768 +152,30 @@ impl JobService {
     }
 
     #[tracing::instrument(skip(self, input), fields(api_key_id = %input.client.api_key_id))]
-    pub async fn create(&self, mut input: CreateChatJobInput) -> Result<CreatedChatJob> {
-        let message = input.message.trim().to_string();
-        if message.is_empty() {
-            bail!("message is required");
-        }
+    pub async fn create(&self, input: CreateChatJobInput) -> Result<CreatedChatJob> {
+        let mut client = input.client;
+        resolve_wildcard_grants(&mut client, &self.catalog, &self.fineract_pool).await?;
 
-        crate::policy::authorization::resolve_wildcard_grants(
-            &mut input.client,
-            &self.catalog,
-            &self.fineract_pool,
-        )
-        .await?;
-
-        let client_context_json = json!({
-            "api_key_id": input.client.api_key_id,
-            "owner": input.client.owner,
-            "key_prefix": input.client.key_prefix,
-            "allowed_office_ids": input.client.allowed_office_ids,
-            "allowed_capabilities": input.client.allowed_capabilities,
-            "allow_all_offices": input.client.allow_all_offices,
-            "allow_all_capabilities": input.client.allow_all_capabilities,
-            "can_view_pii": input.client.can_view_pii,
-        });
-        let classification = self.classify_with_retrieval(&message, &input.client).await;
-        let classification = self.filter_classification_for_prompt(&message, classification);
-        let execution_plan = build_execution_plan(&classification, &self.catalog);
-        let policy_decision =
-            evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
-        let pending_intent =
-            PendingIntent::from_classification(&message, &classification, &self.catalog);
-        let classification_json = serde_json::to_value(&classification)?;
-        let execution_plan_json = serde_json::to_value(&execution_plan)?;
-        let policy_decision_json = serde_json::to_value(&policy_decision)?;
-        let pending_intent_json = pending_intent
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()?;
-
-        let worker_message = message.clone();
-        let job = self
+        let mut created = self
             .jobs
             .create(
-                input.client.api_key_id,
+                client.api_key_id,
                 input.session_id,
-                message,
-                client_context_json,
-                classification_json,
-                execution_plan_json,
-                policy_decision_json,
-                pending_intent_json,
+                input.message.clone(),
+                serde_json::to_value(&client)?,
+                json!({ "runtime": "semantic_assistant_graph" }),
+                json!({}),
+                json!({}),
             )
             .await?;
-
-        self.jobs
-            .insert_checkpoint(
-                job.job_id,
-                "queued",
-                "job_created",
-                json!({
-                    "session_id": job.session_id,
-                    "user_message_id": job.user_message_id,
-                    "status": job.status,
-                }),
-            )
+        self.session_memory
+            .get_or_create(created.session_id)
             .await?;
-
-        let mut audit = self.audit_event(
-            job.session_id,
-            job.job_id,
-            "request_received",
-            "api",
-            Some("conversation_context"),
-            "completed",
-        );
-        audit.api_key_id = Some(input.client.api_key_id);
-        audit.input_summary_json = json!({
-            "message_len": worker_message.len(),
-            "has_session_id": input.session_id.is_some(),
-        });
-        audit.output_summary_json = json!({
-            "current_step": job.current_step,
-            "status": job.status,
-        });
-        self.audit.record(audit);
-
-        self.emit_event(
-            job.job_id,
-            "status",
-            Some("queued"),
-            json!({
-                "status": job.status,
-                "current_step": job.current_step,
-            }),
-        )
-        .await?;
-
-        let worker = self.clone();
-        let session_id = job.session_id;
-        let job_id = job.job_id;
-        let plan_for_worker = execution_plan.clone();
-        let policy_for_worker = policy_decision.clone();
-        let classification_for_worker = classification.clone();
-
-        let mut skipped = self.audit_event(
-            job.session_id,
-            job.job_id,
-            "semantic_parser",
-            "pipeline",
-            Some("semantic_parser"),
-            "skipped",
-        );
-        skipped.api_key_id = Some(input.client.api_key_id);
-        skipped.decision_json = json!({
-            "reason": "strict_pipeline_not_used_in_production"
-        });
-        skipped.flags_json = json!({
-            "blueprint_deviation": true
-        });
-        self.audit.record(skipped);
-
-        tokio::spawn(async move {
-            if let Err(error) = worker
-                .run_pipeline(
-                    session_id,
-                    job_id,
-                    worker_message,
-                    classification_for_worker,
-                    plan_for_worker,
-                    policy_for_worker,
-                )
-                .await
-            {
-                warn!(job_id = %job_id, error = %error, "chat job background pipeline failed");
-            }
-        });
-
-        Ok(job)
-    }
-
-    async fn run_pipeline(
-        &self,
-        session_id: Uuid,
-        job_id: Uuid,
-        user_message: String,
-        classification: ClassificationResult,
-        execution_plan: Option<crate::chat::planner::ExecutionPlan>,
-        policy_decision: crate::chat::planner::PolicyDecision,
-    ) -> Result<()> {
-        let mut audit = self.audit_event(
-            session_id,
-            job_id,
-            "classification_completed",
-            "classification",
-            Some("intent_router"),
-            "completed",
-        );
-        audit.output_summary_json = json!({
-            "outcome": classification.outcome,
-            "domain": classification.domain,
-            "capability": classification.capability,
-            "confidence": classification.confidence,
-            "source": classification.source,
-            "candidate_count": classification.candidates.len(),
-            "layer_count": classification.layers.len(),
-        });
-        audit.flags_json = json!({
-            "used_lqr": classification.source.as_deref() == Some("lqr"),
-            "used_llm": classification.source.as_deref() == Some("llm_planner")
-        });
-        self.audit.record(audit);
-
-        if classification.outcome == ClassificationOutcome::ClarificationRequired {
-            let mut audit = self.audit_event(
-                session_id,
-                job_id,
-                "clarification_required",
-                "classification",
-                Some("ambiguity_detector"),
-                "completed",
-            );
-            audit.output_summary_json = json!({
-                "option_count": classification.options.len(),
-                "has_question": classification.clarification.is_some(),
-            });
-            self.audit.record(audit);
-
-            self.write_clarification(session_id, job_id, &classification)
-                .await?;
-            return Ok(());
-        }
-
-        if let Some(plan) = execution_plan.as_ref() {
-            let mut plan_audit = self.audit_event(
-                session_id,
-                job_id,
-                "execution_plan_built",
-                "planner",
-                Some("answer_planner"),
-                "completed",
-            );
-            plan_audit.output_summary_json = json!({
-                "domain": plan.domain,
-                "capability": plan.capability,
-                "query_id": plan.query_id,
-                "output_mode": plan.output_mode,
-                "evidence_enough": plan.evidence_evaluation.enough,
-            });
-            self.audit.record(plan_audit);
-
-            let policy_allowed = matches!(
-                &policy_decision.status,
-                crate::chat::planner::PolicyDecisionStatus::Allowed
-            );
-            let mut policy_audit = self.audit_event(
-                session_id,
-                job_id,
-                "policy_evaluated",
-                "policy",
-                Some("evidence_evaluator"),
-                if policy_allowed {
-                    "completed"
-                } else {
-                    "blocked"
-                },
-            );
-            policy_audit.decision_json = json!({
-                "status": policy_decision.status,
-                "reason": policy_decision.reason,
-                "office_count": policy_decision.office_ids.len(),
-                "can_view_pii": policy_decision.can_view_pii,
-            });
-            policy_audit.flags_json = json!({
-                "policy_blocked": !policy_allowed,
-                "authorized_scope_only": true,
-                "pii_output_allowed": policy_decision.can_view_pii,
-            });
-            self.audit.record(policy_audit);
-
-            self.execute_and_finish(session_id, job_id, &user_message, plan, &policy_decision)
-                .await?;
-        } else if classification.outcome == ClassificationOutcome::Unsupported {
-            let mut audit = self.audit_event(
-                session_id,
-                job_id,
-                "job_failed",
-                "pipeline",
-                Some("grounded_response"),
-                "failed",
-            );
-            audit.error_json = Some(json!({
-                "code": "unsupported_request"
-            }));
-            self.audit.record(audit);
-
-            self.fail_unsupported(job_id).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn classify_with_retrieval(
-        &self,
-        message: &str,
-        client: &ClientContext,
-    ) -> ClassificationResult {
-        let today = Utc::now().date_naive();
-        if is_write_intent(message) {
-            return unsupported_result("write_intent", Vec::new());
-        }
-
-        if client.allowed_capabilities.is_empty() {
-            return unsupported_result("no_allowed_capabilities", Vec::new());
-        }
-
-        if let Some(result) = self.classify_savings_activity_list(message, today, client) {
-            return result;
-        }
-
-        if should_try_lqr(
-            self.chat_features.lqr_enabled,
-            self.llm_planner.is_enabled(),
-        ) {
-            return self.classify_with_lqr(message, today, client).await;
-        }
-
-        self.classify_with_flat_retrieval(message, today, client)
-            .await
-    }
-
-    async fn classify_with_flat_retrieval(
-        &self,
-        message: &str,
-        today: chrono::NaiveDate,
-        client: &ClientContext,
-    ) -> ClassificationResult {
-        match self.embedding_client.embed_query(message).await {
-            Ok(embedding) => match self
-                .knowledge
-                .search_capabilities(embedding.clone(), &client.allowed_capabilities, 6)
-                .await
-            {
-                Ok(candidates) => {
-                    let context = self
-                        .knowledge
-                        .search_context(embedding, 5)
-                        .await
-                        .unwrap_or_else(|error| {
-                            warn!(error = %error, "knowledge context search failed; continuing without context");
-                            Vec::new()
-                        });
-                    let top_capability_conf = candidates
-                        .first()
-                        .map(|candidate| vector_confidence(candidate.distance))
-                        .unwrap_or(0.0);
-                    let mut result = self
-                        .classify_from_candidates(
-                            message,
-                            today,
-                            &client.allowed_capabilities,
-                            &candidates,
-                        )
-                        .unwrap_or_else(|| {
-                            unsupported_result("vector_no_match", candidates.clone())
-                        });
-                    if result.outcome != ClassificationOutcome::Unsupported
-                        && self.context_overrides_capability(message, &context, top_capability_conf)
-                    {
-                        result = unsupported_result("off_domain_match", candidates);
-                    }
-                    attach_context_candidates(&mut result, &context);
-                    result = self
-                        .llm_clarification_fallback(message, today, result)
-                        .await;
-                    return result;
-                }
-                Err(error) => {
-                    warn!(error = %error, "knowledge vector search failed; using catalog lexical retrieval");
-                }
-            },
-            Err(error) => {
-                warn!(error = %error, "query embedding failed; using catalog lexical retrieval");
-            }
-        }
-
-        let candidates = self.catalog_lexical_candidates(message, &client.allowed_capabilities, 6);
-        let result = self
-            .classify_from_candidates(message, today, &client.allowed_capabilities, &candidates)
-            .unwrap_or_else(|| unsupported_result("catalog_no_match", candidates));
-        self.llm_clarification_fallback(message, today, result)
-            .await
-    }
-
-    async fn classify_with_lqr(
-        &self,
-        message: &str,
-        today: chrono::NaiveDate,
-        client: &ClientContext,
-    ) -> ClassificationResult {
-        let inputs = LqrInputs {
-            message,
-            client,
-            llm: &self.llm_planner,
-            embedding_client: &self.embedding_client,
-            repository: &self.knowledge,
-            catalog: &self.catalog,
-            today,
-        };
-
-        match run_layered_retrieval(inputs).await {
-            Ok(result) => self.classification_from_lqr_result(message, today, result),
-            Err(error) => {
-                warn!(error = %error, "LQR classification failed; falling back to flat retrieval");
-                self.classify_with_flat_retrieval(message, today, client)
-                    .await
-            }
-        }
-    }
-
-    fn classification_from_lqr_result(
-        &self,
-        message: &str,
-        today: chrono::NaiveDate,
-        result: crate::chat::pipeline::lqr::LqrResult,
-    ) -> ClassificationResult {
-        let layers = result.layers;
-        match result.outcome {
-            LqrOutcome::Matched {
-                capability_id,
-                confidence,
-            } => {
-                let Some(capability) = self.catalog_capability(&capability_id) else {
-                    return unsupported_result("catalog_missing_capability", Vec::new());
-                };
-                if !capability_matches_prompt_shape(message, capability) {
-                    let mut classification = unsupported_result("output_mode_mismatch", Vec::new());
-                    classification.layers = layers;
-                    classification.source = Some("lqr".to_string());
-                    return classification;
-                }
-                let mut classification = classify_retrieved_capability(
-                    message,
-                    today,
-                    &capability.domain,
-                    &capability.id,
-                    &capability.output_mode,
-                    capability_requires_date_range(capability),
-                    confidence,
-                    Vec::new(),
-                );
-                classification.layers = layers;
-                classification.source = Some("lqr".to_string());
-                classification
-            }
-            LqrOutcome::Ambiguous {
-                options,
-                confidence,
-            } => {
-                let mut classification = clarify_retrieved_capabilities(
-                    message,
-                    today,
-                    None,
-                    options,
-                    confidence,
-                    Vec::new(),
-                );
-                classification.layers = layers;
-                classification.source = Some("lqr".to_string());
-                classification
-            }
-            LqrOutcome::Unsupported { reason } => {
-                let normalized = if reason.starts_with("off_domain_") {
-                    "off_domain_match"
-                } else if reason == "domain_ambiguous" {
-                    "vector_no_match"
-                } else {
-                    reason.as_str()
-                };
-                let mut classification = unsupported_result(normalized, Vec::new());
-                classification.layers = layers;
-                classification.source = Some("lqr".to_string());
-                classification
-            }
-        }
-    }
-
-    fn classify_savings_activity_list(
-        &self,
-        message: &str,
-        today: chrono::NaiveDate,
-        client: &ClientContext,
-    ) -> Option<ClassificationResult> {
-        if !is_savings_activity_request(message) {
-            return None;
-        }
-        let capability = self.catalog_capability("savings_activity_list")?;
-        if !client
-            .allowed_capabilities
-            .iter()
-            .any(|allowed| allowed == &capability.id)
-        {
-            return None;
-        }
-
-        Some(classify_retrieved_capability(
-            message,
-            today,
-            &capability.domain,
-            &capability.id,
-            &capability.output_mode,
-            capability_requires_date_range(capability),
-            0.95,
-            vec![ClassificationCandidate {
-                capability: capability.id.clone(),
-                confidence: 0.95,
-                source_type: Some("deterministic".to_string()),
-            }],
-        ))
-    }
-
-    async fn llm_clarification_fallback(
-        &self,
-        message: &str,
-        today: chrono::NaiveDate,
-        result: ClassificationResult,
-    ) -> ClassificationResult {
-        if result.outcome != ClassificationOutcome::ClarificationRequired
-            || result.options.is_empty()
-            || !self.llm_planner.is_enabled()
-        {
-            return result;
-        }
-
-        match self
-            .llm_planner
-            .choose_capability(message, &result.options)
-            .await
-        {
-            Ok(LlmPlannerDecision::Capability(capability_id)) => {
-                let Some(capability) = self.catalog_capability(&capability_id) else {
-                    return result;
-                };
-                let mut classification = classify_retrieved_capability(
-                    message,
-                    today,
-                    &capability.domain,
-                    &capability.id,
-                    &capability.output_mode,
-                    capability_requires_date_range(capability),
-                    0.74,
-                    result.candidates.clone(),
-                );
-                classification.source = Some("llm_planner".to_string());
-                classification
-            }
-            Ok(LlmPlannerDecision::Clarify(question)) => ClassificationResult {
-                clarification: Some(question),
-                source: Some("llm_planner".to_string()),
-                ..result
-            },
-            Ok(LlmPlannerDecision::Unsupported) => ClassificationResult {
-                outcome: ClassificationOutcome::Unsupported,
-                clarification: None,
-                options: Vec::new(),
-                source: Some("llm_planner".to_string()),
-                ..result
-            },
-            Err(error) => {
-                warn!(error = %error, "LLM planner fallback failed; keeping deterministic classification");
-                result
-            }
-        }
-    }
-
-    /// Returns true when the top context candidate (a non-capability row from
-    /// `search_context`) wins decisively over the top capability candidate AND
-    /// its source is a deferred/rejected area or domain. This is the signal that
-    /// the user asked about a topic outside the API key's reporting surface, and
-    /// the savings capability that scored mid-confidence is the wrong answer.
-    /// ponytail: simple two-number compare. Upgrade to per-source-type weights
-    /// only if false positives appear in production.
-    fn context_overrides_capability(
-        &self,
-        message: &str,
-        context: &[RetrievedKnowledgeCandidate],
-        top_capability_confidence: f32,
-    ) -> bool {
-        let Some((top, top_conf)) = context
-            .iter()
-            .filter(|candidate| {
-                is_deferred_context_source(
-                    &self.catalog,
-                    &candidate.source_type,
-                    &candidate.source_id,
-                )
-            })
-            .map(|candidate| (candidate, vector_confidence(candidate.distance)))
-            .max_by(|left, right| left.1.total_cmp(&right.1))
-        else {
-            return false;
-        };
-
-        if top_conf >= 0.50 && top_conf > top_capability_confidence + 0.10 {
-            return true;
-        }
-
-        top_conf >= 0.38 && has_off_domain_cue(message, &top.source_id)
-    }
-
-    fn catalog_lexical_candidates(
-        &self,
-        message: &str,
-        allowed_capabilities: &[String],
-        limit: usize,
-    ) -> Vec<RetrievedKnowledgeCandidate> {
-        let message_tokens = tokens(message);
-        if message_tokens.is_empty() {
-            return Vec::new();
-        }
-
-        let mut candidates = self
-            .catalog
-            .capabilities
-            .iter()
-            .filter(|capability| {
-                capability.status == "approved_mvp"
-                    && allowed_capabilities.iter().any(|id| id == &capability.id)
-            })
-            .filter_map(|capability| {
-                let text = capability_retrieval_text(capability);
-                let score = lexical_confidence(&message_tokens, &text);
-                (score >= 0.40).then(|| RetrievedKnowledgeCandidate {
-                    source_type: "capability".to_string(),
-                    source_id: capability.id.clone(),
-                    title: format!("Capability {}", capability.id),
-                    retrieval_text: text,
-                    metadata_json: Value::Null,
-                    distance: 1.0 - f64::from(score),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        candidates.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-        candidates.truncate(limit);
-        candidates
-    }
-
-    fn classify_from_candidates(
-        &self,
-        message: &str,
-        today: chrono::NaiveDate,
-        allowed_capabilities: &[String],
-        candidates: &[RetrievedKnowledgeCandidate],
-    ) -> Option<ClassificationResult> {
-        use crate::chat::classifier::{DecideOutcome, append_others_option, decide_from_scores};
-
-        let top = candidates.first()?;
-        let top_capability = self.catalog_capability_for_candidate(top)?;
-
-        let classification_candidates = candidates
-            .iter()
-            .filter_map(|candidate| {
-                self.catalog_capability_for_candidate(candidate)
-                    .map(|capability| (candidate, capability))
-            })
-            .map(|(candidate, capability)| ClassificationCandidate {
-                capability: capability.id.clone(),
-                confidence: vector_confidence(candidate.distance),
-                source_type: Some(candidate.source_type.clone()),
-            })
-            .collect::<Vec<_>>();
-
-        let sorted_scores: Vec<f32> = classification_candidates
-            .iter()
-            .map(|c| c.confidence)
-            .collect();
-        let sorted_ids: Vec<&str> = classification_candidates
-            .iter()
-            .map(|c| c.capability.as_str())
-            .collect();
-
-        let policy = &self.catalog.classification;
-        match decide_from_scores(policy, &sorted_scores, &sorted_ids) {
-            DecideOutcome::Unsupported => None,
-            DecideOutcome::Match { capability } => {
-                let capability = self.catalog_capability(&capability)?;
-                if !capability_matches_prompt_shape(message, capability) {
-                    return None;
-                }
-                let confidence = sorted_scores.first().copied().unwrap_or(0.0);
-                Some(classify_retrieved_capability(
-                    message,
-                    today,
-                    &capability.domain,
-                    &capability.id,
-                    &capability.output_mode,
-                    capability_requires_date_range(capability),
-                    confidence,
-                    classification_candidates,
-                ))
-            }
-            DecideOutcome::Clarify => {
-                let close_capabilities = candidates
-                    .iter()
-                    .filter_map(|candidate| self.catalog_capability_for_candidate(candidate))
-                    .collect::<Vec<_>>();
-                let mut options = if is_activity_request(message) {
-                    self.activity_options(message, &top_capability.domain, allowed_capabilities)
-                } else {
-                    close_capabilities
-                        .into_iter()
-                        .map(|capability| capability_option(capability, message))
-                        .collect::<Vec<_>>()
-                };
-                options = append_others_option(options, &policy.others_label);
-                let confidence = sorted_scores.first().copied().unwrap_or(0.0);
-                Some(clarify_retrieved_capabilities(
-                    message,
-                    today,
-                    Some(top_capability.domain.clone()),
-                    options,
-                    confidence,
-                    classification_candidates,
-                ))
-            }
-        }
-    }
-
-    fn catalog_capability(&self, capability_id: &str) -> Option<&CapabilityKnowledge> {
-        self.catalog.capabilities.iter().find(|capability| {
-            capability.id == capability_id && capability.status == "approved_mvp"
-        })
-    }
-
-    fn catalog_capability_for_candidate(
-        &self,
-        candidate: &RetrievedKnowledgeCandidate,
-    ) -> Option<&CapabilityKnowledge> {
-        if candidate.source_type == "capability" {
-            return self.catalog_capability(&candidate.source_id);
-        }
-
-        if candidate.source_type == "query" {
-            return self.catalog.capabilities.iter().find(|capability| {
-                capability.query_id == candidate.source_id && capability.status == "approved_mvp"
-            });
-        }
-
-        None
-    }
-
-    fn activity_options(
-        &self,
-        message: &str,
-        domain: &str,
-        allowed_capabilities: &[String],
-    ) -> Vec<ClarificationOption> {
-        let output_modes = if contains_any_local(
-            &message.to_lowercase(),
-            &["monthly", "per month", "by month", "breakdown"],
-        ) {
-            ["monthly_breakdown", "monthly_top_n"].as_slice()
-        } else {
-            ["list", "total", "top_n"].as_slice()
-        };
-
-        let mut options = self
-            .catalog
-            .capabilities
-            .iter()
-            .filter(|capability| {
-                capability.status == "approved_mvp"
-                    && capability.domain == domain
-                    && output_modes.contains(&capability.output_mode.as_str())
-                    && allowed_capabilities.iter().any(|id| id == &capability.id)
-            })
-            .map(|capability| capability_option(capability, message))
-            .collect::<Vec<_>>();
-
-        options.push(other_activity_option(message));
-        options
-    }
-
-    fn filter_classification_for_prompt(
-        &self,
-        message: &str,
-        mut classification: ClassificationResult,
-    ) -> ClassificationResult {
-        let had_options = !classification.options.is_empty();
-        classification.options.retain(|option| {
-            option.capability == OTHER_ACTIVITY_CAPABILITY
-                || self
-                    .catalog_capability(&option.capability)
-                    .is_some_and(|capability| capability_matches_prompt_shape(message, capability))
-        });
-        classification.candidates.retain(|candidate| {
-            self.catalog_capability(&candidate.capability)
-                .is_some_and(|capability| capability_matches_prompt_shape(message, capability))
-        });
-        if had_options && classification.options.is_empty() {
-            return unsupported_result("output_mode_mismatch", Vec::new());
-        }
-        classification
+        self.run_graph_skeleton(created.session_id, created.job_id, &client, &input.message)
+            .await?;
+        created.status = "waiting_for_user_input".into();
+        created.current_step = "complete_or_wait".into();
+        Ok(created)
     }
 
     #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
@@ -964,511 +201,139 @@ impl JobService {
     }
 
     #[tracing::instrument(skip(self, input), fields(api_key_id = %input.client.api_key_id, job_id = %input.job_id))]
-    pub async fn respond(&self, mut input: RespondToChatJobInput) -> Result<Option<ChatMessage>> {
-        let message = input.message.trim().to_string();
-        if message.is_empty() {
-            bail!("message is required");
-        }
+    pub async fn respond(&self, input: RespondToChatJobInput) -> Result<Option<ChatMessage>> {
+        let mut client = input.client;
+        resolve_wildcard_grants(&mut client, &self.catalog, &self.fineract_pool).await?;
 
-        crate::policy::authorization::resolve_wildcard_grants(
-            &mut input.client,
-            &self.catalog,
-            &self.fineract_pool,
-        )
-        .await?;
-
-        let Some(job) = self
+        let Some(message) = self
             .jobs
-            .get_for_client(input.job_id, input.client.api_key_id)
+            .respond(input.job_id, client.api_key_id, input.message)
             .await?
         else {
             return Ok(None);
         };
-
-        let Some(response) = self
-            .jobs
-            .respond(input.job_id, input.client.api_key_id, message)
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        if let Some(original) = job
-            .state_json
-            .get("classification")
-            .and_then(|value| serde_json::from_value::<ClassificationResult>(value.clone()).ok())
-        {
-            let active_pending = job
-                .state_json
-                .get("pending_intent")
-                .and_then(|value| serde_json::from_value::<PendingIntent>(value.clone()).ok())
-                .filter(PendingIntent::is_active);
-            let mut pending_intent = None;
-            let mut classification = match resolve_pending_intent(
-                active_pending,
-                &response.content,
-                Utc::now().date_naive(),
-                &self.catalog,
-            ) {
-                PendingIntentResolution::Matched(resolved, pending) => {
-                    pending_intent = Some(pending);
-                    resolved
-                }
-                PendingIntentResolution::StillWaiting(waiting, pending) => {
-                    pending_intent = Some(pending);
-                    waiting
-                }
-                PendingIntentResolution::StartNewRequest => {
-                    let classification = self
-                        .classify_with_retrieval(&response.content, &input.client)
-                        .await;
-                    self.filter_classification_for_prompt(&response.content, classification)
-                }
-                PendingIntentResolution::NoPending => self
-                    .classify_savings_activity_list(
-                        &response.content,
-                        Utc::now().date_naive(),
-                        &input.client,
-                    )
-                    .unwrap_or_else(|| {
-                        classify_clarification_response(&original, &response.content)
-                    }),
-            };
-
-            // Semantic principle: the user's reply is a natural-language
-            // statement of intent, not an ID lookup. If they didn't pick a
-            // listed option (numeric, label, or capability id) — regardless of
-            // whether an Others option was offered or not — treat the reply as
-            // a fresh prompt and run the full semantic retrieval pipeline over
-            // it. Detection is by structured source token, not by matching the
-            // human-facing clarification text.
-            let source = classification.source.as_deref().unwrap_or("");
-            let previous_source = original.source.as_deref().unwrap_or("");
-            let picked_a_listed_option = matches!(
-                source,
-                "clarification_option" | "clarification_other_selected"
-            );
-            let is_clarification =
-                classification.outcome == ClassificationOutcome::ClarificationRequired;
-            // Case 1: standard "user typed free text at a normal clarification"
-            //         → retrieve.
-            // Case 2: previous turn was the Others escape hatch (source stored
-            //         as `clarification_other_selected`) — this turn's reply
-            //         is by contract free-form; ALWAYS retrieve, even though
-            //         `classify_clarification_response` falls back to the
-            //         previous state and carries the same source forward.
-            let after_others_free_form = previous_source == "clarification_other_selected";
-            if pending_intent.is_none()
-                && ((is_clarification && !picked_a_listed_option) || after_others_free_form)
-            {
-                classification = self
-                    .classify_with_retrieval(&response.content, &input.client)
-                    .await;
-                classification =
-                    self.filter_classification_for_prompt(&response.content, classification);
-            }
-            self.record_clarification_decision(
-                job.session_id,
-                input.job_id,
-                &response.content,
-                &original,
-                &classification,
-            );
-            let execution_plan = build_execution_plan(&classification, &self.catalog);
-            let policy_decision =
-                evaluate_policy(&input.client, execution_plan.as_ref(), &self.catalog);
-            if pending_intent.is_none() {
-                pending_intent = PendingIntent::from_classification(
-                    &response.content,
-                    &classification,
-                    &self.catalog,
-                );
-            }
-            let pending_intent_json = pending_intent
-                .as_ref()
-                .map(serde_json::to_value)
-                .transpose()?;
-
-            self.jobs
-                .update_plan_state(
-                    input.job_id,
-                    input.client.api_key_id,
-                    job.state_revision,
-                    serde_json::to_value(&classification)?,
-                    serde_json::to_value(&execution_plan)?,
-                    serde_json::to_value(&policy_decision)?,
-                    pending_intent_json,
-                )
-                .await?;
-
-            let worker = self.clone();
-            let session_id = job.session_id;
-            let job_id = input.job_id;
-            let response_content = response.content.clone();
-            tokio::spawn(async move {
-                if let Err(error) = worker
-                    .run_pipeline(
-                        session_id,
-                        job_id,
-                        response_content,
-                        classification,
-                        execution_plan,
-                        policy_decision,
-                    )
-                    .await
-                {
-                    warn!(job_id = %job_id, error = %error, "chat job clarification pipeline failed");
-                }
-            });
-        }
-
-        Ok(Some(response))
+        self.run_graph_skeleton(message.session_id, input.job_id, &client, &message.content)
+            .await?;
+        Ok(Some(message))
     }
 
-    async fn write_clarification(
+    async fn run_graph_skeleton(
         &self,
         session_id: Uuid,
         job_id: Uuid,
-        classification: &ClassificationResult,
+        client: &ClientContext,
+        message: &str,
     ) -> Result<()> {
-        let content = classification
-            .clarification
-            .clone()
-            .unwrap_or_else(|| "Please clarify your request.".to_string());
+        let context = self.context_builder.build(session_id, client).await?;
+        let memory = match self.job_memory.get(job_id).await? {
+            Some(memory) => memory,
+            None => self.job_memory.create(job_id, "receive_message").await?,
+        };
+        let expected_revision = memory.revision;
+        let traced_llm = self.llm.as_ref().map(|llm| {
+            Arc::new(TracedLlmClient::new(
+                llm.clone(),
+                self.llm_traces.clone(),
+                Some(LlmTraceContext {
+                    job_id: Some(job_id),
+                    session_id: Some(session_id),
+                    api_key_id: client.api_key_id,
+                    graph_state: Some("route_intent".into()),
+                    purpose: "route_intent".into(),
+                }),
+            )) as SharedLlmClient
+        });
+        let router = traced_llm
+            .as_ref()
+            .map(|llm| SemanticRouter::new(llm.clone(), &self.catalog));
+        let result = AssistantGraphRuntime::run_with_router(
+            memory,
+            context,
+            router.as_ref(),
+            traced_llm.as_ref(),
+            Some(&self.knowledge),
+            Some(&self.fineract_pool),
+            Some(&self.catalog),
+            Some(client),
+            message,
+        )
+        .await;
+        let memory = self
+            .job_memory
+            .save(&result.memory, expected_revision)
+            .await?;
+        if let Some(pending) = result.pending_clarification.as_ref() {
+            self.session_memory
+                .set_pending_clarification(session_id, pending.as_ref())
+                .await?;
+        }
+        self.job_memory
+            .insert_checkpoint(
+                &memory,
+                json!({
+                    "transitions": result.transitions.clone(),
+                    "execution_summary": memory.execution_summary,
+                }),
+            )
+            .await?;
+        for transition in &result.transitions {
+            self.job_memory
+                .checkpoint_transition(
+                    memory.job_id,
+                    transition,
+                    memory.revision,
+                    json!({
+                        "transition": transition,
+                        "execution_summary": memory.execution_summary,
+                    }),
+                )
+                .await?;
+        }
 
-        self.jobs.wait_for_user_input(job_id).await?;
+        let Some(response) = &memory.structured_response else {
+            return Ok(());
+        };
+        let rendered = MarkdownRenderer.render(response);
+        let result_json = json!({
+            "structured_response": response,
+            "warnings": response.warnings.clone(),
+            "markdown": rendered.clone(),
+            "graph_state": memory.graph_state.clone(),
+            "terminal_state": memory.terminal_state,
+            "selected_capability": memory.selected_capability.clone(),
+        });
         self.messages
             .insert_assistant_message(
                 session_id,
                 job_id,
-                content,
-                json!({
-                    "type": "clarification",
-                    "options": classification.options,
-                }),
+                rendered.clone(),
+                json!({ "type": "assistant_response", "assistant_response": response }),
             )
             .await?;
-        self.jobs
-            .insert_checkpoint(
-                job_id,
-                "taking_decision",
-                "clarification_required",
-                json!({ "options": classification.options }),
-            )
-            .await?;
+        let completed = memory.terminal_state == Some(crate::assistant::TerminalState::Completed);
+        if completed {
+            self.jobs
+                .complete_with_assistant_response(job_id, result_json.clone())
+                .await?;
+        } else {
+            self.jobs
+                .store_assistant_response_result(job_id, result_json.clone())
+                .await?;
+            self.jobs.wait_for_user_input(job_id).await?;
+        }
         self.emit_event(
             job_id,
-            "clarification",
-            Some("taking_decision"),
-            json!({ "options": classification.options }),
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    async fn fail_unsupported(&self, job_id: Uuid) -> Result<()> {
-        self.jobs
-            .fail(
-                job_id,
-                json!({
-                    "code": "unsupported_request",
-                    "message": "No approved reporting capability matched this request.",
-                }),
-            )
-            .await?;
-        self.jobs
-            .insert_checkpoint(
-                job_id,
-                "taking_decision",
-                "job_failed",
-                json!({ "code": "unsupported_request" }),
-            )
-            .await?;
-        self.emit_event(
-            job_id,
-            "error",
-            Some("taking_decision"),
+            if completed { "final" } else { "clarification" },
+            Some("complete_or_wait"),
             json!({
-                "code": "unsupported_request",
-                "message": "No approved reporting capability matched this request.",
+                "response_type": response.response_type,
+                "structured_response": response,
+                "markdown": rendered,
             }),
         )
         .await?;
-
         Ok(())
     }
-
-    async fn execute_and_finish(
-        &self,
-        session_id: Uuid,
-        job_id: Uuid,
-        user_message: &str,
-        plan: &crate::chat::planner::ExecutionPlan,
-        policy_decision: &crate::chat::planner::PolicyDecision,
-    ) -> Result<()> {
-        let started_at = Instant::now();
-        let mut selected = self.audit_event(
-            session_id,
-            job_id,
-            "sql_selected",
-            "executor",
-            Some("hybrid_retrieval"),
-            "completed",
-        );
-        selected.output_summary_json = json!({
-            "query_id": plan.query_id,
-            "capability": plan.capability,
-            "office_count": policy_decision.office_ids.len(),
-        });
-        self.audit.record(selected);
-
-        match execute_plan(&self.fineract_pool, &self.catalog, plan, policy_decision).await {
-            Ok(mut result) => {
-                let latency_ms = started_at.elapsed().as_millis() as u64;
-                let row_count = result
-                    .get("row_count")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-
-                let mut executed = self.audit_event(
-                    session_id,
-                    job_id,
-                    "sql_executed",
-                    "executor",
-                    Some("hybrid_retrieval"),
-                    "completed",
-                );
-                executed.duration_ms = Some(latency_ms as i64);
-                executed.output_summary_json = json!({
-                    "query_id": plan.query_id,
-                    "row_count": row_count,
-                });
-                self.audit.record(executed);
-
-                if let Some(result) = result.as_object_mut() {
-                    result.insert("latency_ms".to_string(), json!(latency_ms));
-                }
-
-                if let Some(content) =
-                    format_report_response(&self.catalog, plan, policy_decision, &result)
-                {
-                    let mut formatted = self.audit_event(
-                        session_id,
-                        job_id,
-                        "response_formatted",
-                        "formatter",
-                        Some("grounded_response"),
-                        "completed",
-                    );
-                    formatted.output_summary_json = json!({
-                        "content_len": content.len(),
-                        "query_id": plan.query_id,
-                    });
-                    self.audit.record(formatted);
-
-                    let content = self
-                        .apply_llm_answer(session_id, job_id, user_message, content)
-                        .await;
-                    self.messages
-                        .insert_assistant_response(session_id, job_id, content)
-                        .await?;
-                }
-                self.jobs.complete(job_id, result).await?;
-                let mut completed = self.audit_event(
-                    session_id,
-                    job_id,
-                    "job_completed",
-                    "pipeline",
-                    Some("grounded_response"),
-                    "completed",
-                );
-                completed.duration_ms = Some(latency_ms as i64);
-                completed.output_summary_json = json!({
-                    "row_count": row_count,
-                    "status": "completed",
-                });
-                self.audit.record(completed);
-
-                self.jobs
-                    .insert_checkpoint(
-                        job_id,
-                        "response",
-                        "response_completed",
-                        json!({
-                            "row_count": row_count,
-                            "latency_ms": latency_ms,
-                        }),
-                    )
-                    .await?;
-                self.emit_event(
-                    job_id,
-                    "final",
-                    Some("response"),
-                    json!({
-                        "status": "completed",
-                        "row_count": row_count,
-                        "latency_ms": latency_ms,
-                    }),
-                )
-                .await?;
-            }
-            Err(error) => {
-                let latency_ms = started_at.elapsed().as_millis() as u64;
-                warn!(job_id = %job_id, error = %error, "chat job execution failed");
-
-                let mut failed = self.audit_event(
-                    session_id,
-                    job_id,
-                    "job_failed",
-                    "executor",
-                    Some("grounded_response"),
-                    "failed",
-                );
-                failed.duration_ms = Some(latency_ms as i64);
-                failed.error_json = Some(json!({
-                    "code": "execution_failed",
-                    "message": "Report execution failed."
-                }));
-                self.audit.record(failed);
-
-                self.jobs
-                    .fail(
-                        job_id,
-                        json!({
-                            "code": "execution_failed",
-                            "message": "Report execution failed.",
-                            "latency_ms": latency_ms,
-                        }),
-                    )
-                    .await?;
-                self.jobs
-                    .insert_checkpoint(
-                        job_id,
-                        "response",
-                        "job_failed",
-                        json!({
-                            "code": "execution_failed",
-                            "latency_ms": latency_ms,
-                        }),
-                    )
-                    .await?;
-                self.emit_event(
-                    job_id,
-                    "error",
-                    Some("response"),
-                    json!({
-                        "code": "execution_failed",
-                        "message": "Report execution failed.",
-                        "latency_ms": latency_ms,
-                    }),
-                )
-                .await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn apply_llm_answer(
-        &self,
-        session_id: Uuid,
-        job_id: Uuid,
-        user_message: &str,
-        content: String,
-    ) -> String {
-        if !self.llm_planner.is_enabled() {
-            let mut audit = self.audit_event(
-                session_id,
-                job_id,
-                "llm_answer_generation_completed",
-                "llm",
-                Some("answer_generator"),
-                "skipped",
-            );
-            audit.decision_json = json!({
-                "reason": "llm_disabled"
-            });
-            self.audit.record(audit);
-            return content;
-        }
-        let Ok(payload) = serde_json::from_str::<Value>(&content) else {
-            let mut audit = self.audit_event(
-                session_id,
-                job_id,
-                "llm_answer_generation_completed",
-                "llm",
-                Some("answer_generator"),
-                "skipped",
-            );
-            audit.decision_json = json!({
-                "reason": "formatter_output_not_structured_json"
-            });
-            self.audit.record(audit);
-            return content;
-        };
-        let evidence = build_llm_evidence(&payload);
-        let started_at = Instant::now();
-        let mut started = self.audit_event(
-            session_id,
-            job_id,
-            "llm_answer_generation_started",
-            "llm",
-            Some("answer_generator"),
-            "started",
-        );
-        started.input_summary_json = json!({
-            "content_len": content.len(),
-        });
-        self.audit.record(started);
-
-        match self
-            .llm_planner
-            .generate_answer(user_message, &evidence)
-            .await
-        {
-            Ok(answer) => {
-                let applied = apply_generated_answer(content.clone(), &answer);
-                let mut audit = self.audit_event(
-                    session_id,
-                    job_id,
-                    "llm_answer_generation_completed",
-                    "llm",
-                    Some("answer_generator"),
-                    "completed",
-                );
-                audit.duration_ms = Some(started_at.elapsed().as_millis() as i64);
-                audit.output_summary_json = json!({
-                    "citation_count": answer.citations.len(),
-                    "applied": applied.is_some(),
-                });
-                self.audit.record(audit);
-                applied.unwrap_or(content)
-            }
-            Err(error) => {
-                warn!(error = %error, "LLM answer generation failed; using deterministic response");
-                let mut audit = self.audit_event(
-                    session_id,
-                    job_id,
-                    "llm_answer_generation_completed",
-                    "llm",
-                    Some("answer_generator"),
-                    "failed",
-                );
-                audit.duration_ms = Some(started_at.elapsed().as_millis() as i64);
-                audit.error_json = Some(json!({
-                    "code": "llm_answer_generation_failed",
-                    "message": "LLM answer generation failed; deterministic response used."
-                }));
-                self.audit.record(audit);
-                content
-            }
-        }
-    }
-}
-
-fn should_try_lqr(lqr_enabled: bool, llm_enabled: bool) -> bool {
-    lqr_enabled && llm_enabled
 }
 
 pub(crate) fn redis_url_log_value(url: &str) -> String {
@@ -1480,349 +345,3 @@ pub(crate) fn redis_url_log_value(url: &str) -> String {
     };
     format!("{scheme}://***@{host}")
 }
-
-/// Build the compact evidence packet sent to the answer LLM. Blueprint
-/// Step 10 says the LLM should see "retrieved evidence" — aggregated shape —
-/// not the raw row set (rows are rendered by the deterministic formatter).
-/// Drop `structured.rows` and keep the pre-computed aggregates + row_count.
-/// Keeps payload well under `max_tokens` regardless of result set size.
-fn build_llm_evidence(payload: &Value) -> Value {
-    let mut cloned = payload.clone();
-    let Some(structured) = cloned.get_mut("structured") else {
-        return cloned;
-    };
-    let Some(structured_obj) = structured.as_object_mut() else {
-        return cloned;
-    };
-    let row_count = structured_obj
-        .get("rows")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    structured_obj.remove("rows");
-    structured_obj.insert("row_count".to_string(), json!(row_count));
-    cloned
-}
-
-fn apply_generated_answer(content: String, answer: &GeneratedAnswer) -> Option<String> {
-    let mut payload: Value = serde_json::from_str(&content).ok()?;
-    validate_grounded_answer(&payload, answer).ok()?;
-    payload
-        .as_object_mut()?
-        .insert("message".to_string(), json!(answer.message));
-    serde_json::to_string(&payload).ok()
-}
-
-fn is_deferred_context_source(
-    catalog: &KnowledgeCatalog,
-    source_type: &str,
-    source_id: &str,
-) -> bool {
-    match source_type {
-        "domain" => catalog
-            .domains
-            .iter()
-            .find(|domain| domain.id == source_id)
-            .is_some_and(|domain| is_non_executable_status(&domain.status)),
-        "data_area" => catalog
-            .data_areas
-            .iter()
-            .find(|area| area.id == source_id)
-            .is_some_and(|area| is_non_executable_status(&area.status)),
-        _ => false,
-    }
-}
-
-/// Statuses where the catalog explicitly declares the area / domain is NOT
-/// currently executable: deferred (work pending), rejected (won't do),
-/// out_of_scope (hard reject), or candidate (documented but no approved MVP
-/// capability yet — per knowledge-catalog.md §2.5 + group_center default rule).
-fn is_non_executable_status(status: &str) -> bool {
-    matches!(
-        status,
-        "deferred"
-            | "deferred_group"
-            | "rejected"
-            | "rejected_group"
-            | "out_of_scope"
-            | "candidate"
-    )
-}
-
-fn has_off_domain_cue(message: &str, source_id: &str) -> bool {
-    let message = message.to_lowercase();
-    let source_id = source_id.to_lowercase();
-
-    (source_id.contains("loan") && message.contains("loan"))
-        || (source_id.contains("accounting")
-            && contains_any_local(&message, &["accounting", "journal", "ledger", "gl"]))
-        || (source_id.contains("tax") && message.contains("tax"))
-        || (source_id.contains("group")
-            && contains_any_local(&message, &["group", "groups", "center", "centers"]))
-}
-
-fn vector_confidence(distance: f64) -> f32 {
-    (1.0 - distance).clamp(0.0, 1.0) as f32
-}
-
-fn is_activity_request(message: &str) -> bool {
-    contains_any_local(
-        &message.to_lowercase(),
-        &["activity", "activities", "transaction", "transactions"],
-    )
-}
-
-fn is_savings_activity_request(message: &str) -> bool {
-    let message = message.to_lowercase();
-    contains_any_local(&message, &["saving", "savings"])
-        && contains_any_local(&message, &["transaction", "transactions"])
-}
-
-fn capability_option(capability: &CapabilityKnowledge, message: &str) -> ClarificationOption {
-    ClarificationOption {
-        label: capability_option_label(capability, message),
-        capability: capability.id.clone(),
-        output_mode: Some(capability.output_mode.clone()),
-    }
-}
-
-fn capability_requires_date_range(capability: &CapabilityKnowledge) -> bool {
-    capability
-        .required_parameters
-        .iter()
-        .any(|parameter| matches!(parameter.as_str(), "from_date" | "to_date"))
-}
-
-fn capability_matches_prompt_shape(message: &str, capability: &CapabilityKnowledge) -> bool {
-    let message = message.to_lowercase();
-    let asks_for_ranked_or_list = contains_any_local(
-        &message,
-        &[
-            "list",
-            "lists",
-            "records",
-            "top",
-            "largest",
-            "biggest",
-            "highest",
-            "most",
-            "daftar",
-            "terbanyak",
-            "terbesar",
-            "paling banyak",
-        ],
-    );
-    if capability.output_mode == "summary" && asks_for_ranked_or_list {
-        return false;
-    }
-    if capability.output_mode != "summary"
-        && !asks_for_ranked_or_list
-        && contains_any_local(&message, &["summary", "ringkasan"])
-    {
-        return false;
-    }
-    if !capability_matches_domain_terms(&message, &capability.id) {
-        return false;
-    }
-
-    true
-}
-
-fn capability_matches_domain_terms(message: &str, capability_id: &str) -> bool {
-    if contains_any_local(message, &["dormant", "no activity", "zero activity"]) {
-        return capability_id == "organization_office_dormant";
-    }
-    if contains_any_local(message, &["transaction", "transactions"])
-        && contains_any_local(message, &["office", "offices"])
-    {
-        return capability_id == "organization_office_activity_ranking";
-    }
-    if contains_any_local(message, &["active client", "active clients"])
-        && contains_any_local(message, &["office", "offices"])
-    {
-        return capability_id == "organization_office_client_summary";
-    }
-    if contains_any_local(message, &["savings account", "saving account"])
-        && contains_any_local(message, &["client", "clients"])
-    {
-        return matches!(
-            capability_id,
-            "client_top_n_by_savings_account_count"
-                | "client_top_n_by_savings_balance"
-                | "client_top_n_by_deposit_volume"
-        );
-    }
-    if contains_any_local(message, &["deposit", "deposits", "depositor", "setoran"])
-        && contains_any_local(message, &["client", "clients"])
-    {
-        return capability_id == "client_top_n_by_deposit_volume";
-    }
-    if contains_any_local(message, &["balance", "saldo", "tabungan"])
-        && contains_any_local(message, &["client", "clients"])
-    {
-        return capability_id == "client_top_n_by_savings_balance";
-    }
-    if contains_any_local(message, &["balance", "saldo", "savings", "tabungan"])
-        && contains_any_local(message, &["office", "offices"])
-    {
-        return capability_id == "organization_office_savings_summary";
-    }
-    if contains_any_local(message, &["list", "lists", "daftar"])
-        && contains_any_local(message, &["office", "offices"])
-    {
-        return capability_id == "organization_office_hierarchy_tree";
-    }
-
-    true
-}
-
-fn other_activity_option(_message: &str) -> ClarificationOption {
-    // Free-form escape hatch. Deliberately does NOT bake the period (e.g.
-    // "for two months") into the label — picking this option lets the user
-    // describe an entirely new request.
-    ClarificationOption {
-        label: "Others — let me describe it in my own words".to_string(),
-        capability: OTHER_ACTIVITY_CAPABILITY.to_string(),
-        output_mode: None,
-    }
-}
-
-fn capability_option_label(capability: &CapabilityKnowledge, message: &str) -> String {
-    let format = match capability.output_mode.as_str() {
-        "total" => "Total",
-        "top_n" => "Largest",
-        "list" => "List",
-        "monthly_breakdown" => "Monthly total",
-        "monthly_top_n" => "Monthly largest",
-        _ => return capability.id.clone(),
-    };
-    let subject = capability_subject(capability);
-    let period = period_label(message);
-
-    format!("{format} {subject}{period}")
-}
-
-fn capability_subject(capability: &CapabilityKnowledge) -> String {
-    let without_domain = capability
-        .id
-        .strip_prefix(&format!("{}_", capability.domain))
-        .unwrap_or(&capability.id);
-    let without_mode = without_domain
-        .strip_suffix("_monthly_breakdown")
-        .or_else(|| without_domain.strip_suffix("_monthly_top_n"))
-        .or_else(|| without_domain.strip_suffix("_top_n"))
-        .or_else(|| without_domain.strip_suffix("_total"))
-        .or_else(|| without_domain.strip_suffix("_list"))
-        .unwrap_or(without_domain);
-
-    without_mode.replace('_', " ")
-}
-
-fn period_label(message: &str) -> &'static str {
-    let message = message.to_lowercase();
-    if contains_any_local(&message, &["today"]) {
-        " today"
-    } else if contains_any_local(&message, &["this week", "minggu ini"]) {
-        " this week"
-    } else if contains_any_local(&message, &["last week", "minggu lalu"]) {
-        " last week"
-    } else if contains_any_local(&message, &["this month", "bulan ini"]) {
-        " this month"
-    } else if contains_any_local(&message, &["last month", "bulan lalu", "bulan kemarin"]) {
-        " last month"
-    } else if contains_any_local(
-        &message,
-        &["this year", "year to date", "year-to-date", "ytd"],
-    ) {
-        " this year"
-    } else {
-        " for the requested period"
-    }
-}
-
-fn unsupported_result(
-    source: &str,
-    candidates: Vec<RetrievedKnowledgeCandidate>,
-) -> ClassificationResult {
-    ClassificationResult {
-        outcome: ClassificationOutcome::Unsupported,
-        domain: None,
-        capability: None,
-        confidence: 0.0,
-        params: json!({}),
-        clarification: None,
-        options: Vec::new(),
-        source: Some(source.to_string()),
-        candidates: candidates
-            .into_iter()
-            .map(|candidate| ClassificationCandidate {
-                capability: candidate.source_id,
-                confidence: vector_confidence(candidate.distance),
-                source_type: Some(candidate.source_type),
-            })
-            .collect(),
-        layers: Vec::new(),
-    }
-}
-
-/// Append non-capability retrieval rows (data_area, domain, query) to the
-/// classification's candidate list for audit/observability. They do not
-/// influence the local-rule decision, but LLM planner fallback can read
-/// them off `chat_jobs.state_json.classification.candidates`.
-fn attach_context_candidates(
-    result: &mut ClassificationResult,
-    context: &[RetrievedKnowledgeCandidate],
-) {
-    result
-        .candidates
-        .extend(context.iter().map(|candidate| ClassificationCandidate {
-            capability: candidate.source_id.clone(),
-            confidence: vector_confidence(candidate.distance),
-            source_type: Some(candidate.source_type.clone()),
-        }));
-}
-
-fn capability_retrieval_text(capability: &CapabilityKnowledge) -> String {
-    [
-        capability.id.clone(),
-        capability.domain.clone(),
-        capability.output_mode.clone(),
-        capability.data_areas.join(" "),
-        capability.metrics.join(" "),
-        capability.examples.join(" "),
-        capability.required_parameters.join(" "),
-        capability.optional_parameters.join(" "),
-    ]
-    .join(" ")
-    .to_lowercase()
-}
-
-fn lexical_confidence(message_tokens: &[String], text: &str) -> f32 {
-    let matches = message_tokens
-        .iter()
-        .filter(|token| text.contains(token.as_str()))
-        .count();
-    (matches as f32 / message_tokens.len().min(6) as f32).min(0.95)
-}
-
-fn tokens(value: &str) -> Vec<String> {
-    value
-        .to_lowercase()
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|token| token.len() >= 3)
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn is_write_intent(message: &str) -> bool {
-    let normalized = message.to_lowercase();
-    contains_any_local(&normalized, &["create", "open", "add", "new"])
-        && contains_any_local(&normalized, &["account", "customer", "client"])
-}
-
-fn contains_any_local(value: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| value.contains(needle))
-}
-
-#[cfg(test)]
-mod tests;

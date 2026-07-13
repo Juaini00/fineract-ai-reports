@@ -97,10 +97,11 @@ impl KnowledgeRepository {
     pub async fn search_capabilities(
         &self,
         embedding: Vec<f32>,
+        allow_all_capabilities: bool,
         allowed_capabilities: &[String],
         limit: i64,
     ) -> Result<Vec<RetrievedKnowledgeCandidate>> {
-        if allowed_capabilities.is_empty() {
+        if !allow_all_capabilities && allowed_capabilities.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -126,7 +127,7 @@ impl KnowledgeRepository {
                 WHERE catalog_version_id = (SELECT id FROM latest_catalog)
                   AND embedding IS NOT NULL
                   AND source_type = 'capability'
-                  AND source_id = ANY($2)
+                  AND ($2 OR source_id = ANY($3))
             )
             SELECT
                 source_type,
@@ -138,10 +139,11 @@ impl KnowledgeRepository {
             FROM ranked
             WHERE row_number = 1
             ORDER BY distance
-            LIMIT $3
+            LIMIT $4
             "#,
         )
         .bind(embedding)
+        .bind(allow_all_capabilities)
         .bind(allowed_capabilities)
         .bind(limit)
         .fetch_all(&self.pool)

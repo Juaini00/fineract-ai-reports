@@ -30,7 +30,6 @@ impl JobRepository {
         classification_json: serde_json::Value,
         execution_plan_json: serde_json::Value,
         policy_decision_json: serde_json::Value,
-        pending_intent_json: Option<serde_json::Value>,
     ) -> Result<CreatedChatJob> {
         let session_id = match session_id {
             Some(session_id) => {
@@ -57,11 +56,6 @@ impl JobRepository {
             "execution_plan": execution_plan_json,
             "policy_decision": policy_decision_json,
         });
-        let mut state_json = state_json;
-        if let Some(pending_intent) = pending_intent_json {
-            state_json["pending_intent"] = pending_intent;
-        }
-
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -232,15 +226,12 @@ impl JobRepository {
         classification_json: serde_json::Value,
         execution_plan_json: serde_json::Value,
         policy_decision_json: serde_json::Value,
-        pending_intent_json: Option<serde_json::Value>,
     ) -> Result<()> {
-        let mut state = json!({
+        let state = json!({
             "classification": classification_json,
             "execution_plan": execution_plan_json,
             "policy_decision": policy_decision_json,
         });
-        state["pending_intent"] = pending_intent_json.unwrap_or(serde_json::Value::Null);
-
         let result = sqlx::query(
             r#"
             UPDATE chat_jobs
@@ -459,6 +450,36 @@ impl JobRepository {
                 result_json = $1,
                 error_json = NULL,
                 completed_at = now(),
+                updated_at = now()
+            WHERE id = $2
+            "#,
+        )
+        .bind(result_json)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn complete_with_assistant_response(
+        &self,
+        job_id: Uuid,
+        result_json: serde_json::Value,
+    ) -> Result<()> {
+        self.complete(job_id, result_json).await
+    }
+
+    pub async fn store_assistant_response_result(
+        &self,
+        job_id: Uuid,
+        result_json: serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE chat_jobs
+            SET
+                result_json = $1,
                 updated_at = now()
             WHERE id = $2
             "#,

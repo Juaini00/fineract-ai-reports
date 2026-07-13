@@ -1,6 +1,8 @@
 use app_core::api::{
     error::ApiError,
-    extractors::{authenticated_client::AuthenticatedClient, validated_json::ValidatedJson},
+    extractors::{
+        authenticated_chat_client::AuthenticatedChatClient, validated_json::ValidatedJson,
+    },
     response,
 };
 use axum::{
@@ -23,7 +25,7 @@ use crate::chat::service::job::redis_url_log_value;
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
 pub async fn create(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatJobRequest>,
 ) -> Result<Response, ApiError> {
@@ -50,7 +52,7 @@ pub async fn create(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
 pub async fn get(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -71,7 +73,7 @@ pub async fn get(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
 pub async fn audit(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -90,7 +92,7 @@ pub async fn audit(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
 pub async fn stream(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -179,18 +181,24 @@ pub async fn stream(
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
 pub async fn respond(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
     ValidatedJson(request): ValidatedJson<RespondToChatJobRequest>,
 ) -> Result<Response, ApiError> {
+    let message = request
+        .option_id
+        .map(|option_id| option_id.trim().to_owned())
+        .filter(|option_id| !option_id.is_empty())
+        .unwrap_or(request.message);
+
     let Some(message) = state
         .chat
         .jobs
         .respond(RespondToChatJobInput {
             client,
             job_id,
-            message: request.message,
+            message,
         })
         .await
         .map_err(ApiError::internal)?

@@ -22,7 +22,7 @@ This file is the short source of truth for the current development state. Detail
 - Chat job endpoints, clarification response endpoint, background worker, Redis-backed SSE fallback behavior.
 - Authorization helpers for capability, office scope, and PII.
 
-## Catalog and retrieval state
+## Catalog, retrieval, and assistant state
 
 - `knowledge/` folders exist for data scope, domains, schema, metrics, capabilities, queries, policies, and responses.
 - Runtime catalog loader and validator exist under `crates/chat/src/knowledge/catalog`.
@@ -33,6 +33,9 @@ This file is the short source of truth for the current development state. Detail
 - Voyage embeddings run when configured.
 - Runtime vector capability search and lexical fallback are wired into chat job creation.
 - Broader non-capability retrieval context is appended for audit/future LLM use; it does not execute SQL.
+- Semantic assistant foundation is partially implemented. The runtime has structured assistant types, structured responses, some job/session memory, catalog-aware execution, policy guards, and regression coverage for recent chat bugs.
+- Semantic assistant migration is not complete: `petgraph` is not yet the graph control plane, `rig-core` is not yet the primary runtime agent/tool boundary, clarification still lacks clean source-intent snapshot preservation, context carry-over still uses tactical glue in places, and scenario coverage is not a full acceptance matrix.
+- Tactical deterministic/manual fallback paths remain migration debt and must be deleted or quarantined before the semantic assistant platform can be called complete.
 - LQR is available behind `LQR_ENABLED=false` and is not the default path yet.
 
 ## Reporting capability state
@@ -46,4 +49,4 @@ This file is the short source of truth for the current development state. Detail
 
 ## Known documentation sync issue
 
-The old long-form docs referenced older catalog snapshots such as 16/16. The new docs keep the Phase 21 status above as current and preserve old details in split phase files for review.
+Some old long-form docs referenced older catalog snapshots such as 16/16, classifier-first runtime behavior, or overstated semantic assistant completion. Current docs should treat the assistant as partial foundation plus active full-brain migration until the target architecture plan passes its acceptance gates.

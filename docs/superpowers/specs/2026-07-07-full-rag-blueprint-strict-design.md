@@ -1,5 +1,7 @@
 # Full RAG Blueprint Strict Design
 
+> Superseded on 2026-07-13 by the semantic assistant graph migration. Keep this file as historical design context only; current runtime is documented in `docs/current/status.md` and `docs/product/capability-coverage/13-how-outcomes-map-at-runtime.md`.
+
 ## Goal
 
 Make `docs/Modern_RAG_Architecture_Blueprint.md` the authoritative runtime flow for chat reporting.

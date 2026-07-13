@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     pub query: QueryConfig,
     pub llm: LlmConfig,
+    pub embedding: EmbeddingConfig,
     pub voyage_ai: VoyageAiConfig,
     pub catalog: CatalogConfig,
     pub chat_features: ChatFeatureConfig,
@@ -57,10 +58,47 @@ pub struct LlmConfig {
     pub provider: String,
     pub api_key: String,
     pub chat_completions_url: String,
+    pub base_url: String,
     pub model: String,
     pub timeout_ms: u64,
+    pub max_retries: u32,
     pub max_output_tokens: u32,
     pub temperature: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct EmbeddingConfig {
+    pub provider: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub timeout_ms: u64,
+    pub max_retries: u32,
+    pub dimensions: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LlmPrice {
+    pub input_usd_per_1m: f64,
+    pub output_usd_per_1m: f64,
+}
+
+pub fn llm_pricing(provider: &str, model: &str) -> Option<LlmPrice> {
+    match (provider, model) {
+        ("deepseek", "deepseek-chat") => Some(LlmPrice {
+            input_usd_per_1m: 0.27,
+            output_usd_per_1m: 1.10,
+        }),
+        ("openai", "gpt-4o-mini") => Some(LlmPrice {
+            input_usd_per_1m: 0.15,
+            output_usd_per_1m: 0.60,
+        }),
+        ("anthropic", "claude-3-5-haiku-latest") => Some(LlmPrice {
+            input_usd_per_1m: 0.80,
+            output_usd_per_1m: 4.00,
+        }),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +121,10 @@ pub struct CatalogConfig {
 #[derive(Clone, Debug)]
 pub struct ChatFeatureConfig {
     pub lqr_enabled: bool,
+    pub context_soft_token_limit: usize,
+    pub context_hard_token_limit: usize,
+    pub context_max_recent_messages: usize,
+    pub context_max_relevant_jobs: usize,
 }
 
 impl AppConfig {
@@ -160,6 +202,7 @@ impl AppConfig {
                         "https://api.deepseek.com/chat/completions",
                     ),
                 ),
+                base_url: get_env_or("LLM_BASE_URL", ""),
                 model: get_env_or("LLM_MODEL", &get_env_or("DEEPSEEK_MODEL", "deepseek-chat")),
                 timeout_ms: get_env_or(
                     "LLM_TIMEOUT_MS",
@@ -167,6 +210,9 @@ impl AppConfig {
                 )
                 .parse()
                 .context("LLM_TIMEOUT_MS must be an integer")?,
+                max_retries: get_env_or("LLM_MAX_RETRIES", "1")
+                    .parse()
+                    .context("LLM_MAX_RETRIES must be an integer")?,
                 max_output_tokens: get_env_or(
                     "LLM_MAX_OUTPUT_TOKENS",
                     &get_env_or("DEEPSEEK_MAX_OUTPUT_TOKENS", "4000"),
@@ -191,6 +237,30 @@ impl AppConfig {
                     .parse()
                     .context("EMBEDDING_DIMENSIONS must be an integer")?,
             },
+            embedding: EmbeddingConfig {
+                provider: get_env_or("EMBEDDING_PROVIDER", "voyageai"),
+                api_key: get_env_or("EMBEDDING_API_KEY", &get_env_or("VOYAGEAI_API_KEY", "")),
+                base_url: get_env_or(
+                    "EMBEDDING_BASE_URL",
+                    &get_env_or("VOYAGEAI_BASE_URL", "https://api.voyageai.com/v1"),
+                ),
+                model: get_env_or(
+                    "EMBEDDING_MODEL",
+                    &get_env_or("VOYAGEAI_EMBEDDING_MODEL", "voyage-3-large"),
+                ),
+                timeout_ms: get_env_or(
+                    "EMBEDDING_TIMEOUT_MS",
+                    &get_env_or("VOYAGEAI_TIMEOUT_MS", "30000"),
+                )
+                .parse()
+                .context("EMBEDDING_TIMEOUT_MS must be an integer")?,
+                max_retries: get_env_or("EMBEDDING_MAX_RETRIES", "1")
+                    .parse()
+                    .context("EMBEDDING_MAX_RETRIES must be an integer")?,
+                dimensions: get_env_or("EMBEDDING_DIMENSIONS", "1024")
+                    .parse()
+                    .context("EMBEDDING_DIMENSIONS must be an integer")?,
+            },
             catalog: CatalogConfig {
                 path: get_env_or("CATALOG_PATH", "knowledge"),
                 query_path: get_env_or("QUERY_PATH", "queries"),
@@ -203,6 +273,18 @@ impl AppConfig {
             },
             chat_features: ChatFeatureConfig {
                 lqr_enabled: get_env_or("LQR_ENABLED", "true").eq_ignore_ascii_case("true"),
+                context_soft_token_limit: get_env_or("CHAT_CONTEXT_SOFT_TOKEN_LIMIT", "6000")
+                    .parse()
+                    .context("CHAT_CONTEXT_SOFT_TOKEN_LIMIT must be an integer")?,
+                context_hard_token_limit: get_env_or("CHAT_CONTEXT_HARD_TOKEN_LIMIT", "8000")
+                    .parse()
+                    .context("CHAT_CONTEXT_HARD_TOKEN_LIMIT must be an integer")?,
+                context_max_recent_messages: get_env_or("CHAT_CONTEXT_MAX_RECENT_MESSAGES", "12")
+                    .parse()
+                    .context("CHAT_CONTEXT_MAX_RECENT_MESSAGES must be an integer")?,
+                context_max_relevant_jobs: get_env_or("CHAT_CONTEXT_MAX_RELEVANT_JOBS", "3")
+                    .parse()
+                    .context("CHAT_CONTEXT_MAX_RELEVANT_JOBS must be an integer")?,
             },
         })
     }

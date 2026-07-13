@@ -1,5 +1,7 @@
 # RAG + LQR Overlay — Design Spec
 
+> Superseded on 2026-07-13 by the semantic assistant graph migration. LQR remains an optional retrieval strategy behind config, not the source-of-truth runtime flow.
+
 **Companion to:** `docs/superpowers/plans/2026-07-07-full-rag-blueprint-strict.md`
 **Blueprint reference:** `docs/Modern_RAG_Architecture_Blueprint.md`
 **Status:** Draft — approved to implement after review.

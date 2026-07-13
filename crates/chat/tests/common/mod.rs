@@ -50,7 +50,10 @@ impl TestApp {
     pub async fn get(&self, path: &str, api_key: Option<&str>) -> reqwest::Response {
         let mut req = self.http.get(format!("{}{path}", self.base_url));
         if let Some(key) = api_key {
-            req = req.header("X-API-Key", key);
+            let access_token = self.login_admin().await;
+            req = req
+                .header("X-API-Key", key)
+                .header(header::AUTHORIZATION, format!("Bearer {access_token}"));
         }
         req.send().await.expect("http get")
     }
@@ -77,7 +80,10 @@ impl TestApp {
             .post(format!("{}{path}", self.base_url))
             .json(body);
         if let Some(key) = api_key {
-            req = req.header("X-API-Key", key);
+            let access_token = self.login_admin().await;
+            req = req
+                .header("X-API-Key", key)
+                .header(header::AUTHORIZATION, format!("Bearer {access_token}"));
         }
         req.send().await.expect("http post")
     }
@@ -135,6 +141,37 @@ impl TestApp {
             resp.status(),
             reqwest::StatusCode::CREATED,
             "provision_api_key failed: {}",
+            resp.text().await.unwrap_or_default()
+        );
+        let payload: Value = resp.json().await.expect("api key json");
+        ApiKey {
+            raw: payload["data"]["api_key"].as_str().unwrap().to_string(),
+            id: Uuid::parse_str(payload["data"]["id"].as_str().unwrap()).unwrap(),
+        }
+    }
+
+    pub async fn provision_wildcard_api_key(&self, can_view_pii: bool) -> ApiKey {
+        let access_token = self.login_admin().await;
+        let body = json!({
+            "name": format!("harness-{}", &Uuid::new_v4().to_string()[..8]),
+            "allowed_capabilities": [],
+            "allowed_office_ids": [],
+            "allow_all_offices": true,
+            "allow_all_capabilities": true,
+            "can_view_pii": can_view_pii,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/auth/api-keys", self.base_url))
+            .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+            .json(&body)
+            .send()
+            .await
+            .expect("post wildcard api key");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::CREATED,
+            "provision_wildcard_api_key failed: {}",
             resp.text().await.unwrap_or_default()
         );
         let payload: Value = resp.json().await.expect("api key json");
@@ -272,10 +309,21 @@ pub async fn spawn_app() -> TestApp {
             provider: "test".into(),
             api_key: String::new(),
             chat_completions_url: "https://example.invalid".into(),
+            base_url: "https://example.invalid".into(),
             model: "test".into(),
             timeout_ms: 5000,
+            max_retries: 1,
             max_output_tokens: 100,
             temperature: 0.0,
+        },
+        embedding: app_core::config::EmbeddingConfig {
+            provider: "test".into(),
+            api_key: String::new(),
+            base_url: "https://example.invalid".into(),
+            model: "test".into(),
+            timeout_ms: 5000,
+            max_retries: 1,
+            dimensions: 1024,
         },
         voyage_ai: VoyageAiConfig {
             api_key: String::new(),
@@ -290,7 +338,13 @@ pub async fn spawn_app() -> TestApp {
             validate_on_startup: true,
             sync_on_startup: false,
         },
-        chat_features: app_core::config::ChatFeatureConfig { lqr_enabled: false },
+        chat_features: app_core::config::ChatFeatureConfig {
+            lqr_enabled: false,
+            context_soft_token_limit: 6000,
+            context_hard_token_limit: 8000,
+            context_max_recent_messages: 12,
+            context_max_relevant_jobs: 3,
+        },
     };
     let pools = DatabasePools::connect(&config)
         .await

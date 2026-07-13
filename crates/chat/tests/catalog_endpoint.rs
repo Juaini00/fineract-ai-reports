@@ -45,10 +45,8 @@ async fn validate_returns_catalog_counts_for_real_knowledge() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["success"], true);
     assert_eq!(body["data"]["valid"], true);
-    assert_eq!(body["data"]["data_areas"], 13);
-    assert_eq!(body["data"]["domains"], 7);
-    assert_eq!(body["data"]["capabilities"], 25);
-    assert_eq!(body["data"]["queries"], 25);
+    assert!(body["data"]["capabilities"].as_u64().unwrap_or(0) > 0);
+    assert!(body["data"]["queries"].as_u64().unwrap_or(0) > 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

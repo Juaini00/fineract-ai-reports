@@ -18,13 +18,14 @@ Dashboard auth and API-key management endpoints use the user access token:
 Authorization: Bearer <ACCESS_TOKEN>
 ```
 
-All chat endpoints use an API key owned by a user:
+Chat endpoints require both the logged-in user token and that user's API key:
 
 ```http
+Authorization: Bearer <ACCESS_TOKEN>
 X-API-Key: <API_KEY>
 ```
 
-API keys without a `user_id` are rejected. The client should not send `owner` when creating an API key; ownership is derived from the authenticated user.
+The API key must belong to the same `user_id` as the bearer token. API keys without a `user_id`, missing bearer tokens, and mismatched token/key pairs are rejected. The client should not send `owner` when creating an API key; ownership is derived from the authenticated user.
 
 ## Endpoints
 
@@ -60,7 +61,7 @@ Response `200`:
 
 Lists chat sessions owned by the API key's user. Use this to render the left-side/session history list.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Response `200`:
 
@@ -88,7 +89,7 @@ Response `200`:
 
 Creates a new chat session.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Payload:
 
@@ -115,7 +116,7 @@ Response `201`:
 
 Returns one session for the API-key owner.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Response `200`: same session object as above.
 
@@ -123,7 +124,7 @@ Response `200`: same session object as above.
 
 Returns existing chat messages for a session.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Response `200`:
 
@@ -149,7 +150,7 @@ Response `200`:
 
 Starts an AI job. The HTTP response returns immediately; progress comes from SSE.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Payload:
 
@@ -185,7 +186,7 @@ Response `201`:
 
 Streams job progress with Server-Sent Events.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Events:
 
@@ -219,7 +220,7 @@ Common `step` values:
 
 Fetches the latest job state, useful after reconnect or page refresh.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Response `200` includes `status`, `current_step`, `state_json`, `result_json`, and `error_json`.
 
@@ -227,7 +228,7 @@ Response `200` includes `status`, `current_step`, `state_json`, `result_json`, a
 
 Continues the same job after a clarification. Do not create a new job.
 
-Auth: API key.
+Auth: bearer token + API key.
 
 Payload:
 
@@ -240,31 +241,55 @@ Accepted values:
 - 1-based option number, for example `"1"`.
 - Option label.
 - Capability id.
+- `"others"` to choose the free-form Others path.
 
 Response `201`: inserted user message. Then reconnect/open SSE for the same `job_id`.
+
+## Assistant response payload
+
+Assistant messages and job events include `structured_response`; render that as the source of truth. `markdown` is a backend convenience fallback generated from the same object.
+
+Common shape:
+
+```json
+{
+  "response_type": "table",
+  "title": "...",
+  "message": "...",
+  "sections": [],
+  "table": { "columns": [], "rows": [] },
+  "cards": [],
+  "options": [],
+  "warnings": [],
+  "actions": []
+}
+```
+
+Known `response_type` values: `summary`, `table`, `metric_cards`, `clarification`, `help`, `unsupported`, `out_of_domain`, `policy_blocked`, `error`.
 
 ## Client flow
 
 1. Login and store `access_token` in memory or secure storage.
 2. Create or fetch a user-owned API key from the dashboard flow. Do not send `owner`; the backend uses the logged-in `user_id`.
-3. Load session list with `GET /chat/sessions` using `API_KEY`.
-4. If no session is selected, create one with `POST /chat/sessions` using `API_KEY`.
-5. Load messages with `GET /chat/sessions/{session_id}/messages`.
-6. When user sends a prompt:
+3. Send both `Authorization: Bearer <ACCESS_TOKEN>` and `X-API-Key: <API_KEY>` on every chat request.
+4. Load session list with `GET /chat/sessions`.
+5. If no session is selected, create one with `POST /chat/sessions`.
+6. Load messages with `GET /chat/sessions/{session_id}/messages`.
+7. When user sends a prompt:
    - Disable the send button immediately.
    - Append the user message optimistically or after `POST /chat/jobs` returns.
    - Call `POST /chat/jobs`.
    - Open `GET /chat/jobs/{job_id}/stream`.
-7. Render AI state from SSE:
+8. Render AI state from SSE:
    - `status`/`kind=status`: show text like "AI is thinking..." and map `step` to pipeline text.
    - `kind=clarification`: show the options above the input and keep normal send disabled.
    - `kind=final`: refresh messages and re-enable send.
    - `kind=error`: show the sanitized error and re-enable send.
-8. If clarification appears, render option buttons above the input. On click:
+9. If clarification appears, render option buttons above the input. Always include the `Others` option when returned. On click:
    - Call `POST /chat/jobs/{job_id}/responses` with the selected option.
    - Keep the same `job_id`.
    - Reopen/continue SSE.
-9. If the browser refreshes mid-job, call `GET /chat/jobs/{job_id}` with `API_KEY`. If status is `queued`, `running`, or `waiting_for_user_input`, restore the disabled/clarification UI from job state and SSE.
+10. If the browser refreshes mid-job, call `GET /chat/jobs/{job_id}` with both auth headers. If status is `queued`, `running`, or `waiting_for_user_input`, restore the disabled/clarification UI from job state and SSE.
 
 ## Button state
 

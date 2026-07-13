@@ -1,6 +1,8 @@
 use app_core::api::{
     error::ApiError,
-    extractors::{authenticated_client::AuthenticatedClient, validated_json::ValidatedJson},
+    extractors::{
+        authenticated_chat_client::AuthenticatedChatClient, validated_json::ValidatedJson,
+    },
     response,
 };
 use axum::{
@@ -17,7 +19,7 @@ use crate::chat::model::CreateChatSessionInput;
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id))]
 pub async fn list(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
 ) -> Result<Response, ApiError> {
     let user_id = client
@@ -37,7 +39,7 @@ pub async fn list(
 
 #[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
 pub async fn create(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatSessionRequest>,
 ) -> Result<Response, ApiError> {
@@ -58,7 +60,7 @@ pub async fn create(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
 pub async fn get(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -79,7 +81,7 @@ pub async fn get(
 
 #[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
 pub async fn list_messages(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {

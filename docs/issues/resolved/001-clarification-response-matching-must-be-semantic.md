@@ -1,5 +1,12 @@
 # 001 — Clarification response matching must be semantic, not literal
 
+Status: resolved
+Resolved: 2026-07-13
+
+## Resolution note
+
+The semantic assistant graph now models clarification replies as assistant intents, keeps pending clarification in session context, and resolves replies through `ClarificationResolver` instead of the old classifier-first/pending-intent path. Phase 9 adds the scenario matrix coverage for `yang balance aja` and documents the graph runtime as current behavior.
+
 ## Summary
 
 The pipeline must interpret a user's clarification reply by **meaning**, not by string equality against option labels. A literal-match approach traps users into repeating the exact label, causes infinite clarification loops when they don't, and does not align with the RAG blueprint's principle that the LLM is the reasoning component.

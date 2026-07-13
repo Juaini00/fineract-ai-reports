@@ -1,0 +1,18 @@
+id: client.name_lookup
+domain: client
+status: approved_mvp
+description: Client display-name lookup within authorized office scope.
+data_areas:
+  - client_foundation
+source_table: m_client
+source_columns:
+  - id
+  - display_name
+  - office_id
+expression: m_client.display_name ILIKE supplied search term
+filters:
+  - m_client.office_id constrained to authorized office_ids
+sensitivity: pii
+checks:
+  - id: office_scope_required
+    rule: lookup must always constrain m_client.office_id to authorized office_ids.

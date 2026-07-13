@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS chat_jobs (
     resume_from_step TEXT NULL,
     message TEXT NOT NULL,
     state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    state_revision BIGINT NOT NULL DEFAULT 0,
     result_json JSONB NULL,
     error_json JSONB NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -41,8 +42,8 @@ CREATE TABLE IF NOT EXISTS chat_jobs (
     failed_at TIMESTAMPTZ NULL,
     cancelled_at TIMESTAMPTZ NULL,
     CONSTRAINT chk_chat_jobs_status CHECK (status IN ('queued', 'running', 'waiting_for_user_input', 'completed', 'failed', 'expired', 'cancelled')),
-    CONSTRAINT chk_chat_jobs_current_step CHECK (current_step IN ('queued', 'checking_context', 'embedding', 'taking_decision', 'response', 'authorizing', 'estimating_cost', 'executing_query', 'shaping_result', 'formatting_response')),
-    CONSTRAINT chk_chat_jobs_resume_from_step CHECK (resume_from_step IS NULL OR resume_from_step IN ('queued', 'checking_context', 'embedding', 'taking_decision', 'response', 'authorizing', 'estimating_cost', 'executing_query', 'shaping_result', 'formatting_response'))
+    CONSTRAINT chk_chat_jobs_current_step CHECK (current_step IN ('queued', 'checking_context', 'embedding', 'taking_decision', 'response', 'authorizing', 'estimating_cost', 'executing_query', 'shaping_result', 'formatting_response', 'complete_or_wait', 'route_intent', 'plan_retrieval', 'retrieve_knowledge', 'evaluate_evidence', 'plan_tool_or_capability', 'guard_execution', 'execute_tool_or_sql', 'build_structured_response', 'render_response')),
+    CONSTRAINT chk_chat_jobs_resume_from_step CHECK (resume_from_step IS NULL OR resume_from_step IN ('queued', 'checking_context', 'embedding', 'taking_decision', 'response', 'authorizing', 'estimating_cost', 'executing_query', 'shaping_result', 'formatting_response', 'complete_or_wait', 'route_intent', 'plan_retrieval', 'retrieve_knowledge', 'evaluate_evidence', 'plan_tool_or_capability', 'guard_execution', 'execute_tool_or_sql', 'build_structured_response', 'render_response'))
 );
 
 DO $$

@@ -91,3 +91,21 @@ async fn me_with_invalid_api_key_is_unauthorized() {
 
     assert_eq!(resp.status(), 401);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_route_with_api_key_but_no_bearer_is_unauthorized() {
+    let app = spawn_app().await;
+    let created = app
+        .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
+        .await;
+
+    let resp = app
+        .http
+        .get(format!("{}/chat/sessions", app.base_url))
+        .header("X-API-Key", created.raw)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
+}

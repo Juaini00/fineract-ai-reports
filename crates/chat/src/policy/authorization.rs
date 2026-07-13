@@ -82,6 +82,10 @@ pub fn ensure_capability_allowed(
     client: &ClientContext,
     capability: &str,
 ) -> Result<(), AuthorizationError> {
+    if client.allow_all_capabilities {
+        return Ok(());
+    }
+
     if client
         .allowed_capabilities
         .iter()
@@ -99,6 +103,19 @@ pub fn effective_office_scope(
     client: &ClientContext,
     requested_office_ids: Option<&[i64]>,
 ) -> Result<Vec<i64>, AuthorizationError> {
+    if client.allow_all_offices {
+        let office_ids = match requested_office_ids {
+            Some(requested) => requested.to_vec(),
+            None => client.allowed_office_ids.clone(),
+        };
+
+        return if office_ids.is_empty() {
+            Err(AuthorizationError::MissingOfficeScope)
+        } else {
+            Ok(office_ids)
+        };
+    }
+
     if client.allowed_office_ids.is_empty() {
         return Err(AuthorizationError::MissingOfficeScope);
     }
@@ -182,6 +199,14 @@ mod tests {
     }
 
     #[test]
+    fn allows_unconfigured_capability_when_all_capabilities_allowed() {
+        let mut client = client();
+        client.allow_all_capabilities = true;
+
+        assert!(ensure_capability_allowed(&client, "savings_deposit_top_n").is_ok());
+    }
+
+    #[test]
     fn uses_all_allowed_offices_when_request_omits_scope() {
         let client = client();
 
@@ -209,6 +234,26 @@ mod tests {
     fn rejects_empty_office_scope() {
         let mut client = client();
         client.allowed_office_ids.clear();
+
+        assert_eq!(
+            effective_office_scope(&client, None),
+            Err(AuthorizationError::MissingOfficeScope)
+        );
+    }
+
+    #[test]
+    fn uses_expanded_offices_when_all_offices_allowed_and_request_omits_scope() {
+        let mut client = client();
+        client.allow_all_offices = true;
+
+        assert_eq!(effective_office_scope(&client, None), Ok(vec![1, 2]));
+    }
+
+    #[test]
+    fn rejects_empty_expanded_office_scope_when_all_offices_allowed() {
+        let mut client = client();
+        client.allowed_office_ids.clear();
+        client.allow_all_offices = true;
 
         assert_eq!(
             effective_office_scope(&client, None),
