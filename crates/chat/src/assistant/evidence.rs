@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    assistant::{AssistantDomain, AssistantIntent, AssistantIntentKind},
+    assistant::{AssistantDomain, AssistantEntity, AssistantIntent, AssistantIntentKind},
     knowledge::index::repository::RetrievedKnowledgeCandidate,
 };
 
@@ -11,8 +11,16 @@ pub struct RetrievalPlan {
     pub query_text: String,
     pub domain: AssistantDomain,
     pub intent: AssistantIntentKind,
+    #[serde(default)]
+    pub entities: Vec<AssistantEntity>,
+    #[serde(default)]
+    pub constraints: serde_json::Value,
+    #[serde(default)]
+    pub metadata_filters: std::collections::BTreeMap<String, String>,
     pub allow_all_capabilities: bool,
     pub allowed_capabilities: Vec<String>,
+    #[serde(default)]
+    pub source_snippets: Vec<String>,
 }
 
 impl RetrievalPlan {
@@ -26,10 +34,22 @@ impl RetrievalPlan {
             query_text: query_text.into(),
             domain: intent.domain.clone(),
             intent: intent.intent.clone(),
+            entities: intent.entities.clone(),
+            constraints: serde_json::to_value(&intent.constraints).unwrap_or_default(),
+            metadata_filters: domain_filter(&intent.domain),
             allow_all_capabilities,
             allowed_capabilities,
+            source_snippets: Vec::new(),
         }
     }
+}
+
+fn domain_filter(domain: &AssistantDomain) -> std::collections::BTreeMap<String, String> {
+    let mut filters = std::collections::BTreeMap::new();
+    if !matches!(domain, AssistantDomain::Unknown) {
+        filters.insert("domain".into(), format!("{:?}", domain).to_lowercase());
+    }
+    filters
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -39,6 +59,8 @@ pub struct Evidence {
     pub score: f32,
     pub source_type: String,
     pub metadata: serde_json::Value,
+    #[serde(default)]
+    pub conflicting: bool,
 }
 
 impl From<RetrievedKnowledgeCandidate> for Evidence {
@@ -49,6 +71,7 @@ impl From<RetrievedKnowledgeCandidate> for Evidence {
             score: (1.0 - candidate.distance as f32).clamp(0.0, 1.0),
             source_type: candidate.source_type,
             metadata: candidate.metadata_json,
+            conflicting: false,
         }
     }
 }
@@ -60,6 +83,7 @@ pub enum EvidenceDecision {
     Clarify,
     UnsupportedInDomain,
     OutOfDomain,
+    BlockedByPolicy,
 }
 
 pub struct EvidenceEvaluator {
@@ -78,21 +102,76 @@ impl EvidenceEvaluator {
     pub fn evaluate(&self, plan: &RetrievalPlan, evidence: &[Evidence]) -> EvidenceDecision {
         match plan.intent {
             AssistantIntentKind::OutOfDomain => EvidenceDecision::OutOfDomain,
-            AssistantIntentKind::UnsupportedInDomain | AssistantIntentKind::UnsafeRequest => {
-                EvidenceDecision::UnsupportedInDomain
-            }
+            AssistantIntentKind::UnsafeRequest => EvidenceDecision::BlockedByPolicy,
+            AssistantIntentKind::UnsupportedInDomain => EvidenceDecision::UnsupportedInDomain,
             AssistantIntentKind::ReportRequest
             | AssistantIntentKind::DataLookup
-            | AssistantIntentKind::FollowUp => evidence
-                .first()
-                .filter(|item| item.score >= self.strong_capability_score)
-                .map(|item| EvidenceDecision::Select {
-                    capability_id: item.capability_id.clone(),
-                })
-                .unwrap_or(EvidenceDecision::Clarify),
+            | AssistantIntentKind::FollowUp => {
+                let allowed = evidence
+                    .iter()
+                    .filter(|item| is_allowed(plan, item))
+                    .collect::<Vec<_>>();
+                metric_match(plan, &allowed)
+                    .or_else(|| {
+                        allowed
+                            .as_slice()
+                            .first()
+                            .filter(|_| !evidence.iter().any(|item| item.conflicting))
+                            .filter(|item| item.score >= self.strong_capability_score)
+                            .map(|item| EvidenceDecision::Select {
+                                capability_id: item.capability_id.clone(),
+                            })
+                    })
+                    .unwrap_or(if evidence.is_empty() {
+                        EvidenceDecision::UnsupportedInDomain
+                    } else {
+                        EvidenceDecision::Clarify
+                    })
+            }
             _ => EvidenceDecision::Clarify,
         }
     }
+}
+
+fn metric_match(plan: &RetrievalPlan, evidence: &[&Evidence]) -> Option<EvidenceDecision> {
+    let terms = plan
+        .entities
+        .iter()
+        .filter(|entity| {
+            matches!(
+                entity.entity_type,
+                crate::assistant::AssistantEntityType::Metric
+            )
+        })
+        .flat_map(|entity| {
+            entity
+                .canonical
+                .as_deref()
+                .unwrap_or(&entity.value)
+                .split(|ch: char| !ch.is_alphanumeric())
+                .filter(|part| part.len() > 2)
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return None;
+    }
+    evidence
+        .iter()
+        .copied()
+        .find(|item| terms.iter().all(|term| item.capability_id.contains(term)))
+        .map(|item| EvidenceDecision::Select {
+            capability_id: item.capability_id.clone(),
+        })
+}
+
+fn is_allowed(plan: &RetrievalPlan, evidence: &Evidence) -> bool {
+    plan.allow_all_capabilities
+        || plan
+            .allowed_capabilities
+            .iter()
+            .any(|id| id == &evidence.capability_id)
 }
 
 #[cfg(test)]
@@ -112,6 +191,7 @@ mod tests {
                 entities: Vec::new(),
                 constraints: Default::default(),
                 context_reference: ContextReference::None,
+                source: None,
                 confidence: 0.9,
                 reason: "test".into(),
             },
@@ -127,6 +207,7 @@ mod tests {
             score,
             source_type: "capability".into(),
             metadata: json!({}),
+            conflicting: false,
         }
     }
 

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -15,6 +15,25 @@ pub struct LlmTrace {
     pub input_tokens: i32,
     pub output_tokens: i32,
     pub cost_usd: Option<f64>,
+    pub latency_ms: i32,
+    pub status: String,
+    pub error_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct LlmTraceRecord {
+    pub id: Uuid,
+    pub job_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub api_key_id: Uuid,
+    pub graph_state: Option<String>,
+    pub purpose: String,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub total_tokens: i32,
+    pub cost_usd: Option<Decimal>,
     pub latency_ms: i32,
     pub status: String,
     pub error_kind: Option<String>,
@@ -59,5 +78,33 @@ impl LlmTraceRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn list_for_job(&self, job_id: Uuid) -> Result<Vec<LlmTraceRecord>> {
+        self.list_for_job_filtered(job_id, None, None).await
+    }
+
+    pub async fn list_for_job_filtered(
+        &self,
+        job_id: Uuid,
+        purpose: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<LlmTraceRecord>> {
+        Ok(sqlx::query_as::<_, LlmTraceRecord>(
+            r#"
+            SELECT id, job_id, session_id, api_key_id, graph_state, purpose, provider, model,
+                input_tokens, output_tokens, total_tokens, cost_usd, latency_ms, status, error_kind
+            FROM assistant_llm_traces
+            WHERE job_id = $1
+              AND ($2::text IS NULL OR purpose = $2)
+              AND ($3::text IS NULL OR status = $3)
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(job_id)
+        .bind(purpose)
+        .bind(status)
+        .fetch_all(&self.pool)
+        .await?)
     }
 }

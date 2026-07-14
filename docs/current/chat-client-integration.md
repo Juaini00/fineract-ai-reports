@@ -2,13 +2,13 @@
 
 Base URL local: `http://127.0.0.1:3007`.
 
-All JSON responses use:
+All JSON responses use the API envelope:
 
 ```json
 { "success": true, "data": {}, "error": null }
 ```
 
-Errors use `success=false` and a sanitized `error.message`.
+Errors use `success=false` and a sanitized `error.message`. Do not render raw backend error internals.
 
 ## Authentication
 
@@ -59,7 +59,7 @@ Response `200`:
 
 ### `GET /chat/sessions`
 
-Lists chat sessions owned by the API key's user. Use this to render the left-side/session history list.
+Lists chat sessions owned by the API key's user. Use this to render session history.
 
 Auth: bearer token + API key.
 
@@ -136,9 +136,12 @@ Response `200`:
       "id": "<message_id>",
       "session_id": "<session_id>",
       "job_id": "<job_id>",
-      "role": "user",
-      "content": "What is total deposit this month?",
-      "metadata_json": {},
+      "role": "assistant",
+      "content": "...",
+      "metadata_json": {
+        "structured_response": {},
+        "rendered_markdown": "..."
+      },
       "created_at": "..."
     }
   ],
@@ -148,7 +151,7 @@ Response `200`:
 
 ### `POST /chat/jobs`
 
-Starts an AI job. The HTTP response returns immediately; progress comes from SSE.
+Starts an assistant job. The HTTP response returns immediately; progress comes from SSE.
 
 Auth: bearer token + API key.
 
@@ -163,7 +166,7 @@ Payload:
 
 Validation:
 
-- `session_id` must be a valid UUID and must belong to the API key.
+- `session_id` must be a valid UUID and must belong to the API-key user.
 - `message` is required and must not be empty.
 
 Response `201`:
@@ -182,13 +185,20 @@ Response `201`:
 }
 ```
 
+Immediately open `GET /chat/jobs/{job_id}/stream` with the same auth headers.
+
 ### `GET /chat/jobs/{job_id}/stream`
 
 Streams job progress with Server-Sent Events.
 
 Auth: bearer token + API key.
 
-Events:
+Event names currently used:
+
+- `status`: snapshot-style live state.
+- `update`: job event emitted by the worker.
+
+Example stream:
 
 ```text
 event: status
@@ -204,17 +214,39 @@ event: update
 data: {"kind":"final","step":"response","payload":{"status":"completed"},"at":"..."}
 ```
 
-Common `step` values:
+`update.data` is JSON shaped as:
+
+```json
+{ "kind": "status", "step": "checking_context", "payload": {}, "at": "..." }
+```
+
+Treat `payload` as event-specific. Known `kind` values include `status`, `clarification`, `final`, and `error`.
+
+Common job statuses:
 
 - `queued`
-- `checking_context`
-- `embedding`
-- `taking_decision`
-- `authorizing`
-- `executing_query`
-- `shaping_result`
-- `formatting_response`
-- `response`
+- `running`
+- `waiting_for_user_input`
+- `completed`
+- `failed`
+- `expired`
+- `cancelled`
+
+Common `current_step` / event `step` values and practical UI labels:
+
+| Step | Suggested label |
+| --- | --- |
+| `queued` | Queued |
+| `checking_context` | Checking conversation context |
+| `embedding` | Finding relevant reporting knowledge |
+| `taking_decision` | Choosing the right report or asking a question |
+| `authorizing` | Checking permissions |
+| `executing_query` | Running the approved report query |
+| `shaping_result` | Shaping report data |
+| `formatting_response` | Preparing the answer |
+| `response` | Finalizing response |
+
+Terminal live states are `completed`, `failed`, `expired`, and `cancelled`. On terminal state, close SSE, fetch messages, and re-enable normal send.
 
 ### `GET /chat/jobs/{job_id}`
 
@@ -224,82 +256,155 @@ Auth: bearer token + API key.
 
 Response `200` includes `status`, `current_step`, `state_json`, `result_json`, and `error_json`.
 
+Use this for recovery:
+
+- `queued` or `running`: restore disabled send, show the step label, reopen SSE.
+- `waiting_for_user_input`: restore clarification UI from `state_json`/latest event when present; keep normal send disabled.
+- `completed`: fetch messages and render the latest assistant response.
+- `failed`, `expired`, `cancelled`: show the sanitized terminal state/error, then allow a new user prompt.
+
 ### `POST /chat/jobs/{job_id}/responses`
 
 Continues the same job after a clarification. Do not create a new job.
 
 Auth: bearer token + API key.
 
-Payload:
+Request type: `RespondToChatJobRequest`.
+
+Payload fields:
+
+- `message` string, required.
+- `option_id` string, optional by schema but required by the client for option-button selections.
+
+For any returned option except `others`, send both:
+
+- `option_id`: the exact option id returned by the backend.
+- `message`: the visible option label or description for audit/display.
+
+The server uses `option_id`, not `message`, to resolve non-`others` selections. Invalid `option_id` is rejected and the job remains waiting.
+
+Non-`others` example:
 
 ```json
-{ "message": "1" }
+{
+  "option_id": "total_deposits",
+  "message": "Total deposits"
+}
 ```
 
-Accepted values:
+For `others`, send `option_id="others"` and a user-provided message:
 
-- 1-based option number, for example `"1"`.
-- Option label.
-- Capability id.
-- `"others"` to choose the free-form Others path.
+```json
+{
+  "option_id": "others",
+  "message": "Show deposits grouped by branch for last quarter"
+}
+```
 
-Response `201`: inserted user message. Then reconnect/open SSE for the same `job_id`.
+If the user clicks Others before entering free text, the client may send:
+
+```json
+{ "option_id": "others", "message": "others" }
+```
+
+Then keep the same job and prompt for free text if the server response keeps the job in `waiting_for_user_input`.
+
+Response `201`: inserted user message. Reopen or continue SSE for the same `job_id`.
 
 ## Assistant response payload
 
-Assistant messages and job events include `structured_response`; render that as the source of truth. `markdown` is a backend convenience fallback generated from the same object.
+Render `structured_response` as the source of truth. Use `rendered_markdown`/`markdown` only as a fallback if structured data is missing or a renderer has not implemented a shape yet.
+
+Do not assume the requested row count was returned. Always read and display the actual returned rows/cards and any warnings.
 
 Common shape:
 
 ```json
 {
   "response_type": "table",
-  "title": "...",
-  "message": "...",
+  "title": "Total deposits",
+  "message": "Here are the matching deposit records.",
   "sections": [],
-  "table": { "columns": [], "rows": [] },
+  "table": {
+    "columns": [{ "key": "client_name", "label": "Client" }],
+    "rows": [{ "client_name": "Amina" }]
+  },
   "cards": [],
   "options": [],
   "warnings": [],
-  "actions": []
+  "actions": [],
+  "evidence_refs": [],
+  "rendered_markdown": "..."
 }
 ```
 
-Known `response_type` values: `summary`, `table`, `metric_cards`, `clarification`, `help`, `unsupported`, `out_of_domain`, `policy_blocked`, `error`.
+Known `response_type` values:
+
+- `summary`: render title/message, sections, cards, warnings, actions, and evidence refs.
+- `table`: render table columns/rows exactly as returned; show zero-state if `rows=[]`.
+- `metric_cards`: render `cards` as metric tiles; do not invent missing metrics.
+- `clarification`: render `message` and `options` as selectable actions.
+- `help`: render guidance/help text.
+- `unsupported`: explain unsupported request and any suggested actions/options.
+- `out_of_domain`: explain that the request is outside approved reporting scope.
+- `policy_blocked`: show policy-safe block message and warnings/actions if present.
+- `error`: show sanitized error copy.
+
+Field rendering notes:
+
+- `table.columns`: preserve backend order; use `label` for headers and `key` for row lookup.
+- `table.rows`: render actual row count returned; never pad or promise additional rows.
+- `cards`: render `label`, `value`, and any provided unit/trend/metadata fields defensively.
+- `options`: render buttons; submit selected `id` as `option_id`.
+- `warnings`: show near the result, not as fatal errors unless response type says so.
+- `actions`: render as follow-up suggestions/buttons when present.
+- `evidence_refs`: render in a collapsible details area if useful; do not expose hidden prompt/debug text.
+- `rendered_markdown`: fallback display only.
+
+## Deterministic extraction debug metadata
+
+Verified extraction may record `deterministic_extraction` and `deterministic_extraction_conflicts` in job state, result, or message metadata. This metadata is for diagnostics; exact shape and location can evolve.
+
+Client rule:
+
+- Production UI must not depend on this metadata.
+- Development builds may show it in a debug panel for support and QA.
+- If conflicts exist, prefer server clarification/results over client-side guessing.
 
 ## Client flow
 
 1. Login and store `access_token` in memory or secure storage.
 2. Create or fetch a user-owned API key from the dashboard flow. Do not send `owner`; the backend uses the logged-in `user_id`.
 3. Send both `Authorization: Bearer <ACCESS_TOKEN>` and `X-API-Key: <API_KEY>` on every chat request.
-4. Load session list with `GET /chat/sessions`.
+4. Load sessions with `GET /chat/sessions`.
 5. If no session is selected, create one with `POST /chat/sessions`.
 6. Load messages with `GET /chat/sessions/{session_id}/messages`.
-7. When user sends a prompt:
-   - Disable the send button immediately.
+7. When the user sends a prompt:
+   - Disable normal send immediately for the selected session.
    - Append the user message optimistically or after `POST /chat/jobs` returns.
    - Call `POST /chat/jobs`.
    - Open `GET /chat/jobs/{job_id}/stream`.
-8. Render AI state from SSE:
-   - `status`/`kind=status`: show text like "AI is thinking..." and map `step` to pipeline text.
-   - `kind=clarification`: show the options above the input and keep normal send disabled.
-   - `kind=final`: refresh messages and re-enable send.
-   - `kind=error`: show the sanitized error and re-enable send.
-9. If clarification appears, render option buttons above the input. Always include the `Others` option when returned. On click:
-   - Call `POST /chat/jobs/{job_id}/responses` with the selected option.
+8. Render live state from SSE:
+   - `status` event or `kind=status`: show the mapped step label.
+   - `kind=clarification`: show returned options above the input; keep normal send disabled.
+   - `kind=final` or terminal `completed`: fetch messages, render `structured_response`, close SSE, re-enable send.
+   - `kind=error` or terminal `failed`: show sanitized error, close SSE, re-enable send.
+9. If clarification appears, render option buttons. Always include `Others` when returned. On click:
+   - For normal options, call `POST /chat/jobs/{job_id}/responses` with `option_id` and the visible label/description as `message`.
+   - For Others, collect free text and send `option_id="others"` with that text as `message`.
    - Keep the same `job_id`.
-   - Reopen/continue SSE.
-10. If the browser refreshes mid-job, call `GET /chat/jobs/{job_id}` with both auth headers. If status is `queued`, `running`, or `waiting_for_user_input`, restore the disabled/clarification UI from job state and SSE.
+   - Reopen or continue SSE.
+10. If the browser refreshes mid-job, call `GET /chat/jobs/{job_id}` with both auth headers and apply the recovery rules above.
 
 ## Button state
 
-Disable send when the selected session has an active job with status:
+Disable normal send when the selected session has an active job with status:
 
 - `queued`
 - `running`
 - `waiting_for_user_input`
 
-For `waiting_for_user_input`, enable only clarification option buttons. Re-enable normal send after:
+For `waiting_for_user_input`, enable only clarification option buttons and any required Others free-text submit. Re-enable normal send after:
 
 - `completed`
 - `failed`

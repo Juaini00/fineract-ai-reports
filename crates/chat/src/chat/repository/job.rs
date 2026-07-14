@@ -263,7 +263,8 @@ impl JobRepository {
         &self,
         job_id: Uuid,
         api_key_id: Uuid,
-        message: String,
+        source_message: String,
+        selected_option_id: Option<String>,
     ) -> Result<Option<ChatMessage>> {
         let mut tx = self.pool.begin().await?;
 
@@ -288,6 +289,14 @@ impl JobRepository {
         let message_id = Uuid::new_v4();
         let checkpoint_id = Uuid::new_v4();
         let event_id = Uuid::new_v4();
+        let metadata = match &selected_option_id {
+            Some(option_id) => json!({
+                "type": "clarification_response",
+                "selected_option_id": option_id,
+                "source_message": source_message.clone(),
+            }),
+            None => json!({ "type": "clarification_response" }),
+        };
 
         let message_row = sqlx::query_as::<_, ChatMessageRow>(
             r#"
@@ -306,8 +315,8 @@ impl JobRepository {
         .bind(message_id)
         .bind(target.session_id)
         .bind(job_id)
-        .bind(&message)
-        .bind(json!({ "type": "clarification_response" }))
+        .bind(&source_message)
+        .bind(&metadata)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -345,6 +354,7 @@ impl JobRepository {
         .bind(json!({
             "message_id": message_id,
             "resume_from_step": target.current_step,
+            "selected_option_id": selected_option_id.clone(),
         }))
         .execute(&mut *tx)
         .await?;
@@ -367,6 +377,7 @@ impl JobRepository {
             "status": "queued",
             "current_step": "queued",
             "message_id": message_id,
+            "selected_option_id": selected_option_id.clone(),
         }))
         .execute(&mut *tx)
         .await?;

@@ -39,7 +39,6 @@ async fn main() -> anyhow::Result<()> {
             session_id: None,
             api_key_id: API_KEY_ID,
             graph_state: None,
-            purpose: "router".into(),
         }),
     ));
 
@@ -72,6 +71,8 @@ fn empty_context() -> ContextWindow {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: None,
+        source_intent: None,
+        source_snippets: Vec::new(),
         client_scope: json!({}),
         warnings: Vec::new(),
     }

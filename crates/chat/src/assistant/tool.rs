@@ -1,9 +1,11 @@
 use anyhow::{Result, bail};
 use app_core::auth::model::ClientContext;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    assistant::{AssistantEntityType, AssistantIntent, Quantity},
+    assistant::{AssistantEntityType, AssistantIntent, DeterministicExtraction, Quantity},
     chat::planner::{
         AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
         evaluate_policy,
@@ -11,22 +13,99 @@ use crate::{
     knowledge::model::{KnowledgeCatalog, QueryKnowledge},
 };
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolRequest {
+    pub tool_name: String,
+    pub capability_id: Option<String>,
+    pub query_id: Option<String>,
+    #[serde(default)]
+    pub params: Value,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolResult {
+    pub tool_name: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub rows: Vec<Value>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub error: Option<ToolValidationError>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+}
+
+pub const APPROVED_SQL_TOOL: &str = "approved_catalog_sql";
+
+pub fn tool_request_from_plan(plan: &ExecutionPlan, evidence_refs: Vec<String>) -> ToolRequest {
+    ToolRequest {
+        tool_name: APPROVED_SQL_TOOL.into(),
+        capability_id: Some(plan.capability.clone()),
+        query_id: Some(plan.query_id.clone()),
+        params: plan.params.clone(),
+        evidence_refs,
+    }
+}
+
+pub fn tool_result_from_execution(request: &ToolRequest, execution_result: Value) -> ToolResult {
+    ToolResult {
+        tool_name: request.tool_name.clone(),
+        ok: true,
+        rows: execution_result
+            .get("rows")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        summary: execution_result
+            .get("row_count")
+            .and_then(Value::as_u64)
+            .map(|count| format!("{count} row(s) returned")),
+        error: None,
+        evidence_refs: request.evidence_refs.clone(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolValidationError {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub field: Option<String>,
+}
+
 pub fn plan_selected_capability(
     catalog: &KnowledgeCatalog,
     capability_id: &str,
     intent: &AssistantIntent,
+) -> Result<ExecutionPlan> {
+    let legacy_extraction = DeterministicExtraction {
+        entities: intent.entities.clone(),
+        ..Default::default()
+    };
+    plan_selected_capability_verified(catalog, capability_id, intent, Some(&legacy_extraction))
+}
+
+pub fn plan_selected_capability_verified(
+    catalog: &KnowledgeCatalog,
+    capability_id: &str,
+    intent: &AssistantIntent,
+    deterministic_extraction: Option<&DeterministicExtraction>,
 ) -> Result<ExecutionPlan> {
     let capability = catalog
         .capabilities
         .iter()
         .find(|item| item.id == capability_id && item.status == "approved_mvp")
         .ok_or_else(|| anyhow::anyhow!("selected capability is not executable"))?;
+    verify_capability_metric(capability.metrics.as_slice(), deterministic_extraction)?;
     let query = catalog
         .queries
         .iter()
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
-    let params = params_from_intent(query, intent)?;
+    let params = params_from_verified(query, intent, deterministic_extraction)?;
 
     Ok(ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,
@@ -67,32 +146,29 @@ pub fn guard_selected_capability(
     evaluate_policy(client, Some(plan), catalog)
 }
 
-fn params_from_intent(query: &QueryKnowledge, intent: &AssistantIntent) -> Result<Value> {
+fn params_from_verified(
+    query: &QueryKnowledge,
+    intent: &AssistantIntent,
+    deterministic_extraction: Option<&DeterministicExtraction>,
+) -> Result<Value> {
     let mut params = serde_json::Map::new();
-    let person_name = entity_value(intent, AssistantEntityType::PersonName);
+    let person_name = deterministic_extraction.and_then(|extraction| {
+        entity_value_from(&extraction.entities, AssistantEntityType::PersonName)
+    });
     let office = entity_value(intent, AssistantEntityType::Office);
     let product = entity_value(intent, AssistantEntityType::Product);
-    let currency = intent
-        .constraints
-        .currency_code
-        .as_deref()
-        .or_else(|| entity_value(intent, AssistantEntityType::Currency));
+    let trusted = deterministic_extraction.map(|extraction| &extraction.constraints);
+    let currency = trusted.and_then(|constraints| constraints.currency_code.as_deref());
 
     for parameter in &query.parameters {
         if parameter.source.as_deref() == Some("authorized_scope") {
             continue;
         }
         let value = match parameter.name.as_str() {
-            "from_date" => intent
-                .constraints
-                .from_date
-                .as_ref()
-                .map(|value| json!(value)),
-            "to_date" => intent
-                .constraints
-                .to_date
-                .as_ref()
-                .map(|value| json!(value)),
+            "from_date" => trusted
+                .and_then(|constraints| constraints.from_date.as_ref().map(|value| json!(value))),
+            "to_date" => trusted
+                .and_then(|constraints| constraints.to_date.as_ref().map(|value| json!(value))),
             "currency_code" => currency.map(|value| json!(value)),
             "product_ids" => intent
                 .constraints
@@ -112,7 +188,7 @@ fn params_from_intent(query: &QueryKnowledge, intent: &AssistantIntent) -> Resul
                 }),
             "search" | "name" => person_name.or(office).or(product).map(|value| json!(value)),
             "office" | "office_name" => office.map(|value| json!(value)),
-            "limit" | "top_n" => Some(json!(quantity_limit(intent).unwrap_or(20))),
+            "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
             _ => None,
         };
         if let Some(value) = value {
@@ -125,19 +201,58 @@ fn params_from_intent(query: &QueryKnowledge, intent: &AssistantIntent) -> Resul
     Ok(Value::Object(params))
 }
 
+fn verify_capability_metric(
+    capability_metrics: &[String],
+    deterministic_extraction: Option<&DeterministicExtraction>,
+) -> Result<()> {
+    let Some(metric) =
+        deterministic_extraction.and_then(|extraction| extraction.constraints.metric.as_deref())
+    else {
+        return Ok(());
+    };
+    let trusted = normalize_metric(metric);
+    if capability_metrics
+        .iter()
+        .any(|metric| normalize_metric(metric) == trusted)
+    {
+        Ok(())
+    } else {
+        bail!("selected capability does not match requested metric {metric}")
+    }
+}
+
+fn normalize_metric(metric: &str) -> String {
+    match metric.replace('_', ".").as_str() {
+        "savings.account.count" => "savings.account_count".into(),
+        "savings.balance" => "savings.balance_total".into(),
+        "deposit.volume" | "savings.deposit.volume" => "savings.deposit_total".into(),
+        other => other.into(),
+    }
+}
+
 fn entity_value(intent: &AssistantIntent, entity_type: AssistantEntityType) -> Option<&str> {
-    intent
-        .entities
+    entity_value_from(&intent.entities, entity_type)
+}
+
+fn entity_value_from(
+    entities: &[crate::assistant::AssistantEntity],
+    entity_type: AssistantEntityType,
+) -> Option<&str> {
+    entities
         .iter()
         .find(|entity| entity.entity_type == entity_type)
         .map(|entity| entity.value.trim())
         .filter(|value| !value.is_empty())
 }
 
-fn quantity_limit(intent: &AssistantIntent) -> Option<i64> {
-    match intent.constraints.quantity.as_ref()? {
+fn quantity_limit(constraints: &crate::assistant::AssistantConstraints) -> Option<i64> {
+    quantity_limit_from(constraints.quantity.as_ref())
+}
+
+fn quantity_limit_from(quantity: Option<&Quantity>) -> Option<i64> {
+    match quantity? {
         Quantity::Limit { value } | Quantity::TopN { value } => Some(*value),
-        Quantity::Default => Some(20),
+        Quantity::Default => None,
         Quantity::All => None,
     }
 }
@@ -148,7 +263,7 @@ mod tests {
     use crate::{
         assistant::{
             AssistantConstraints, AssistantDomain, AssistantEntity, AssistantIntentKind,
-            AssistantLanguage, ContextReference, Quantity,
+            AssistantLanguage, ContextReference, Quantity, extract_message_facts,
         },
         knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator},
     };
@@ -166,9 +281,12 @@ mod tests {
                 entities: vec![AssistantEntity {
                     entity_type: AssistantEntityType::PersonName,
                     value: "Tony".into(),
+                    canonical: None,
+                    confidence: None,
                 }],
                 constraints: Default::default(),
                 context_reference: ContextReference::None,
+                source: None,
                 confidence: 0.9,
                 reason: "test".into(),
             },
@@ -192,6 +310,7 @@ mod tests {
                 entities: vec![],
                 constraints: Default::default(),
                 context_reference: ContextReference::None,
+                source: None,
                 confidence: 0.9,
                 reason: "test".into(),
             },
@@ -219,7 +338,9 @@ mod tests {
             ],
             output_fields: Vec::new(),
         };
-        let params = params_from_intent(
+        let extraction =
+            extract_message_facts("show top 5 savings in USD from 2026-01-01 to 2026-01-31");
+        let params = params_from_verified(
             &query,
             &AssistantIntent {
                 intent: AssistantIntentKind::ReportRequest,
@@ -231,12 +352,16 @@ mod tests {
                     to_date: Some("2026-01-31".into()),
                     currency_code: Some("USD".into()),
                     product_ids: Some(vec![7]),
+                    office_ids: None,
+                    metric: None,
                     quantity: Some(Quantity::TopN { value: 5 }),
                 },
                 context_reference: ContextReference::None,
+                source: None,
                 confidence: 0.9,
                 reason: "test".into(),
             },
+            Some(&extraction),
         )
         .unwrap();
 
@@ -245,6 +370,159 @@ mod tests {
         assert_eq!(params["currency_code"], "USD");
         assert_eq!(params["product_id"], 7);
         assert_eq!(params["limit"], 5);
+    }
+
+    #[test]
+    fn verified_quantity_overrides_missing_llm_quantity() {
+        let query = QueryKnowledge {
+            id: "test.query".into(),
+            database: "fineract".into(),
+            sql_file: "test.sql".into(),
+            data_areas: Vec::new(),
+            tables: Vec::new(),
+            metrics: Vec::new(),
+            parameters: vec![parameter("limit", true)],
+            output_fields: Vec::new(),
+        };
+        let extraction = extract_message_facts("show top 10 clients");
+        let params =
+            params_from_verified(&query, &intent_with_quantity(None), Some(&extraction)).unwrap();
+
+        assert_eq!(params["limit"], 10);
+    }
+
+    #[test]
+    fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
+        let query = QueryKnowledge {
+            id: "test.query".into(),
+            database: "fineract".into(),
+            sql_file: "test.sql".into(),
+            data_areas: Vec::new(),
+            tables: Vec::new(),
+            metrics: Vec::new(),
+            parameters: vec![parameter("limit", true)],
+            output_fields: Vec::new(),
+        };
+        let error = params_from_verified(
+            &query,
+            &intent_with_quantity(Some(Quantity::TopN { value: 20 })),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("missing parameter limit"));
+    }
+
+    #[test]
+    fn hallucinated_optional_currency_is_omitted_without_verified_extraction() {
+        let query = QueryKnowledge {
+            id: "test.query".into(),
+            database: "fineract".into(),
+            sql_file: "test.sql".into(),
+            data_areas: Vec::new(),
+            tables: Vec::new(),
+            metrics: Vec::new(),
+            parameters: vec![parameter("currency_code", false)],
+            output_fields: Vec::new(),
+        };
+        let mut intent = intent_with_quantity(None);
+        intent.constraints.currency_code = Some("USD".into());
+
+        let params = params_from_verified(&query, &intent, None).unwrap();
+
+        assert!(params.get("currency_code").is_none());
+    }
+
+    #[test]
+    fn metric_mismatch_rejected() {
+        let catalog = catalog();
+        let extraction =
+            extract_message_facts("show top 10 clients with the most savings accounts");
+        let error = plan_selected_capability_verified(
+            &catalog,
+            "client_top_n_by_deposit_volume",
+            &intent_with_quantity(None),
+            Some(&extraction),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("requested metric"));
+    }
+
+    #[test]
+    fn metric_match_accepted() {
+        let catalog = catalog();
+        let extraction =
+            extract_message_facts("show top 10 clients with the most savings accounts");
+        let plan = plan_selected_capability_verified(
+            &catalog,
+            "client_top_n_by_savings_account_count",
+            &intent_with_quantity(None),
+            Some(&extraction),
+        )
+        .unwrap();
+
+        assert_eq!(plan.params["limit"], 10);
+    }
+
+    #[test]
+    fn hallucinated_required_search_rejected_without_trusted_entity() {
+        let query = QueryKnowledge {
+            id: "test.query".into(),
+            database: "fineract".into(),
+            sql_file: "test.sql".into(),
+            data_areas: Vec::new(),
+            tables: Vec::new(),
+            metrics: Vec::new(),
+            parameters: vec![parameter("search", true)],
+            output_fields: Vec::new(),
+        };
+        let mut intent = intent_with_quantity(None);
+        intent.entities.push(AssistantEntity {
+            entity_type: AssistantEntityType::PersonName,
+            value: "Tony".into(),
+            canonical: None,
+            confidence: None,
+        });
+        let error = params_from_verified(&query, &intent, None).unwrap_err();
+
+        assert!(error.to_string().contains("missing parameter search"));
+    }
+
+    #[test]
+    fn trusted_named_tony_fills_search() {
+        let query = QueryKnowledge {
+            id: "test.query".into(),
+            database: "fineract".into(),
+            sql_file: "test.sql".into(),
+            data_areas: Vec::new(),
+            tables: Vec::new(),
+            metrics: Vec::new(),
+            parameters: vec![parameter("search", true)],
+            output_fields: Vec::new(),
+        };
+        let extraction = extract_message_facts("find client named Tony");
+        let params =
+            params_from_verified(&query, &intent_with_quantity(None), Some(&extraction)).unwrap();
+
+        assert_eq!(params["search"], "Tony");
+    }
+
+    fn intent_with_quantity(quantity: Option<Quantity>) -> AssistantIntent {
+        AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain: AssistantDomain::Client,
+            language: AssistantLanguage::En,
+            entities: Vec::new(),
+            constraints: AssistantConstraints {
+                quantity,
+                ..Default::default()
+            },
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 0.9,
+            reason: "test".into(),
+        }
     }
 
     fn parameter(name: &str, required: bool) -> crate::knowledge::model::QueryParameter {

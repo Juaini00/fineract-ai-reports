@@ -24,7 +24,7 @@ Read this before changing code or docs.
 - API key authorization must check capability scope, office scope, and PII behavior.
 - Office filtering belongs inside approved SQL using authorized office ids. Do not post-filter in Rust.
 - Client-facing errors must be sanitized.
-- MVP user-facing language is English only unless multilingual support is explicitly added later.
+- User-facing language is English only until multilingual extraction, classification, and templates are implemented and tested.
 
 ## Documentation rules
 

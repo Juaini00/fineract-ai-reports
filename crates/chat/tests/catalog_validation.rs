@@ -254,8 +254,9 @@ fn pii_policy_uses_selected_query_output_fields() {
         requires_policy_check: true,
     };
 
-    let blocked = evaluate_policy(&client(false), Some(&plan), &catalog);
-    assert_eq!(blocked.status, PolicyDecisionStatus::Blocked);
+    let hidden = evaluate_policy(&client(false), Some(&plan), &catalog);
+    assert_eq!(hidden.status, PolicyDecisionStatus::Allowed);
+    assert!(!hidden.can_view_pii);
 
     let allowed = evaluate_policy(&client(true), Some(&plan), &catalog);
     assert_eq!(allowed.status, PolicyDecisionStatus::Allowed);
@@ -263,7 +264,7 @@ fn pii_policy_uses_selected_query_output_fields() {
 }
 
 #[test]
-fn client_name_lookup_policy_requires_capability_and_pii() {
+fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
     let catalog = load_catalog();
     let plan = ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,
@@ -285,8 +286,9 @@ fn client_name_lookup_policy_requires_capability_and_pii() {
     client
         .allowed_capabilities
         .push("client_name_lookup".into());
-    let missing_pii = evaluate_policy(&client, Some(&plan), &catalog);
-    assert_eq!(missing_pii.status, PolicyDecisionStatus::Blocked);
+    let pii_hidden = evaluate_policy(&client, Some(&plan), &catalog);
+    assert_eq!(pii_hidden.status, PolicyDecisionStatus::Allowed);
+    assert!(!pii_hidden.can_view_pii);
 
     client.can_view_pii = true;
     let allowed = evaluate_policy(&client, Some(&plan), &catalog);

@@ -7,7 +7,7 @@ use chat::assistant::{
     AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, ClarificationOption,
     ClarificationOutcome, ClarificationPayload, ClarificationResolver, ContextReference,
     ContextWindow, ResponseBuilder, SemanticRouter,
-    llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
+    llm::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage},
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use serde_json::json;
@@ -28,6 +28,7 @@ struct GoldenFakeLlm;
 impl LlmClient for GoldenFakeLlm {
     async fn structured_value(
         &self,
+        _purpose: LlmPurpose,
         _system: &str,
         user: &str,
         _schema: serde_json::Value,
@@ -56,7 +57,7 @@ impl LlmClient for GoldenFakeLlm {
         })
     }
 
-    async fn embed(&self, text: &str) -> Result<EmbeddingResponse> {
+    async fn embed(&self, _purpose: LlmPurpose, text: &str) -> Result<EmbeddingResponse> {
         Ok(EmbeddingResponse {
             vector: fake_embedding(text),
             usage: TokenUsage::default(),
@@ -110,6 +111,8 @@ fn empty_context() -> ContextWindow {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: None,
+        source_intent: None,
+        source_snippets: Vec::new(),
         client_scope: json!({}),
         warnings: Vec::new(),
     }
@@ -126,6 +129,8 @@ fn fake_response_type(intent: &AssistantIntent) -> String {
                 question: "Which report?".into(),
                 options: Vec::new(),
                 attempt: 1,
+                source_intent: None,
+                allow_free_text: true,
             })
             .response_type
         }
@@ -189,6 +194,8 @@ async fn offline_fake_resolver_selects_semantic_balance_option() {
             },
         ],
         attempt: 1,
+        source_intent: None,
+        allow_free_text: true,
     };
     let outcome = ClarificationResolver::resolve(
         "yang balance aja",

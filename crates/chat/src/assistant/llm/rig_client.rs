@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use app_core::config::{EmbeddingConfig, LlmConfig, llm_pricing};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage};
+use super::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage};
 
 pub struct RigLlmClient {
     http: reqwest::Client,
@@ -16,6 +16,7 @@ pub struct RigLlmClient {
 
 impl RigLlmClient {
     pub fn new(llm: &LlmConfig, embedding: Option<&EmbeddingConfig>) -> Result<Self> {
+        let _ = std::mem::size_of::<rig_core::providers::openai::Client>();
         Ok(Self {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_millis(llm.timeout_ms))
@@ -45,6 +46,7 @@ impl RigLlmClient {
 impl LlmClient for RigLlmClient {
     async fn structured_value(
         &self,
+        _purpose: LlmPurpose,
         system: &str,
         user: &str,
         schema: Value,
@@ -65,7 +67,7 @@ impl LlmClient for RigLlmClient {
                 "response_format": response_format
             })
         };
-        // rig-core stays in the dependency graph for future native Tool/agent wiring; this transport is deliberately OpenAI-compatible so custom URLs work provider-agnostically.
+        // RigLlmClient owns the project LLM boundary; this OpenAI-compatible transport preserves custom provider URLs.
         let schema_format = json!({"type":"json_schema","json_schema":{"name":"assistant_structured_response","schema":schema,"strict":true}});
         let mut response = self
             .http
@@ -100,7 +102,7 @@ impl LlmClient for RigLlmClient {
             .first()
             .and_then(|choice| choice.message.content.as_deref())
             .context("LLM response missing message content")?;
-        let value = serde_json::from_str(content).context("parse structured LLM JSON")?;
+        let value = parse_structured_content(content)?;
         let usage = TokenUsage {
             input_tokens: wire
                 .usage
@@ -128,7 +130,7 @@ impl LlmClient for RigLlmClient {
         })
     }
 
-    async fn embed(&self, text: &str) -> Result<EmbeddingResponse> {
+    async fn embed(&self, _purpose: LlmPurpose, text: &str) -> Result<EmbeddingResponse> {
         let Some(config) = &self.embedding else {
             bail!("embedding config is required")
         };
@@ -167,6 +169,27 @@ impl LlmClient for RigLlmClient {
             model: config.model.clone(),
             latency_ms: started.elapsed().as_millis() as i32,
         })
+    }
+
+    fn llm_metadata(&self) -> (String, String) {
+        (self.llm.provider.clone(), self.llm.model.clone())
+    }
+
+    fn embedding_metadata(&self) -> (String, String) {
+        self.embedding
+            .as_ref()
+            .map(|config| (config.provider.clone(), config.model.clone()))
+            .unwrap_or_else(|| self.llm_metadata())
+    }
+}
+
+fn parse_structured_content(content: &str) -> Result<Value> {
+    let value: Value = serde_json::from_str(content)
+        .map_err(|error| anyhow!("malformed structured LLM JSON: {error}"))?;
+    match &value {
+        Value::Object(object) if object.len() == 1 => Ok(object.values().next().cloned().unwrap()),
+        Value::Object(_) | Value::Array(_) => Ok(value),
+        _ => bail!("malformed structured LLM JSON: expected object or array"),
     }
 }
 

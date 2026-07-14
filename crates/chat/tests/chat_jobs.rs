@@ -154,7 +154,7 @@ async fn all_activity_request_returns_activity_list() {
 
     let job = create_job(&app, &key.raw, "Show customer savings activity this week").await;
     let final_job = wait_for_terminal(&app, &key.raw, &job).await;
-    assert_eq!(
+    assert_ne!(
         final_job["result_json"]["structured_response"]["response_type"],
         "error"
     );
@@ -177,7 +177,7 @@ async fn all_activity_request_returns_activity_list() {
     let content = assistant["content"].as_str().unwrap();
     assert!(!content.starts_with('{'), "{assistant}");
     assert_eq!(assistant["metadata_json"]["type"], "assistant_response");
-    assert_eq!(
+    assert_ne!(
         assistant["metadata_json"]["assistant_response"]["response_type"],
         "error"
     );

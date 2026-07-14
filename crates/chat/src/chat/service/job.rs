@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use app_core::auth::model::ClientContext;
 use app_core::config::{ChatFeatureConfig, EmbeddingConfig, LlmConfig};
+use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -10,11 +11,13 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::assistant::{
-    AssistantGraphRuntime, ContextBuilder, ContextWindowPolicy, JobMemoryRepository,
-    LlmTraceRepository, MarkdownRenderer, ResponseRenderer, SemanticRouter,
-    SessionMemoryRepository,
+    AssistantDomain, AssistantEntity, AssistantEntityType, AssistantGraphRuntime,
+    AssistantGraphTopology, AssistantIntentKind, AssistantLanguage, ContextBuilder,
+    ContextReference, ContextWindowPolicy, JobMemoryRepository, LlmTraceRepository,
+    MarkdownRenderer, Quantity, ResponseRenderer, RuntimeUserInput, SemanticRouter,
+    SessionMemoryRepository, TerminalState,
     llm::{
-        SharedLlmClient,
+        EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, SharedLlmClient, TokenUsage,
         rig_client::RigLlmClient,
         traced_client::{LlmTraceContext, TracedLlmClient},
     },
@@ -39,6 +42,7 @@ pub struct JobService {
     session_memory: SessionMemoryRepository,
     context_builder: ContextBuilder,
     knowledge: KnowledgeRepository,
+    runtime_knowledge_enabled: bool,
     fineract_pool: PgPool,
     catalog: Arc<KnowledgeCatalog>,
     llm: Option<SharedLlmClient>,
@@ -63,7 +67,11 @@ impl JobService {
         redis: Option<redis::Client>,
         _audit: AuditHandle,
     ) -> Self {
-        let llm = if llm_config.api_key.trim().is_empty() {
+        let test_llm_enabled =
+            llm_config.provider == "test" && llm_config.api_key == "__ai_report_test_llm__";
+        let llm = if test_llm_enabled {
+            Some(Arc::new(TestLlmClient) as SharedLlmClient)
+        } else if llm_config.api_key.trim().is_empty() {
             None
         } else {
             RigLlmClient::new(&llm_config, Some(&embedding_config))
@@ -89,6 +97,7 @@ impl JobService {
                 ),
             ),
             knowledge: KnowledgeRepository::new(app_pool.clone()),
+            runtime_knowledge_enabled: llm_config.provider != "test",
             fineract_pool,
             catalog,
             llm,
@@ -171,10 +180,18 @@ impl JobService {
         self.session_memory
             .get_or_create(created.session_id)
             .await?;
-        self.run_graph_skeleton(created.session_id, created.job_id, &client, &input.message)
+        let outcome = self
+            .run_graph_skeleton(
+                created.session_id,
+                created.job_id,
+                &client,
+                input.message.as_str().into(),
+            )
             .await?;
-        created.status = "waiting_for_user_input".into();
-        created.current_step = "complete_or_wait".into();
+        if let Some(outcome) = outcome {
+            created.status = outcome.status.into();
+            created.current_step = outcome.current_step.into();
+        }
         Ok(created)
     }
 
@@ -207,13 +224,27 @@ impl JobService {
 
         let Some(message) = self
             .jobs
-            .respond(input.job_id, client.api_key_id, input.message)
+            .respond(
+                input.job_id,
+                client.api_key_id,
+                input.source_message.clone(),
+                input.selected_option_id.clone(),
+            )
             .await?
         else {
             return Ok(None);
         };
-        self.run_graph_skeleton(message.session_id, input.job_id, &client, &message.content)
-            .await?;
+        self.run_graph_skeleton(
+            message.session_id,
+            input.job_id,
+            &client,
+            RuntimeUserInput {
+                message: input.message,
+                source_message: message.content.clone(),
+                selected_option_id: input.selected_option_id,
+            },
+        )
+        .await?;
         Ok(Some(message))
     }
 
@@ -222,8 +253,8 @@ impl JobService {
         session_id: Uuid,
         job_id: Uuid,
         client: &ClientContext,
-        message: &str,
-    ) -> Result<()> {
+        input: RuntimeUserInput,
+    ) -> Result<Option<JobRunOutcome>> {
         let context = self.context_builder.build(session_id, client).await?;
         let memory = match self.job_memory.get(job_id).await? {
             Some(memory) => memory,
@@ -239,7 +270,6 @@ impl JobService {
                     session_id: Some(session_id),
                     api_key_id: client.api_key_id,
                     graph_state: Some("route_intent".into()),
-                    purpose: "route_intent".into(),
                 }),
             )) as SharedLlmClient
         });
@@ -251,22 +281,25 @@ impl JobService {
             context,
             router.as_ref(),
             traced_llm.as_ref(),
-            Some(&self.knowledge),
+            self.runtime_knowledge_enabled.then_some(&self.knowledge),
             Some(&self.fineract_pool),
             Some(&self.catalog),
             Some(client),
-            message,
+            input,
         )
         .await;
+        AssistantGraphTopology::new().validate_sequence(&result.transitions)?;
         let memory = self
             .job_memory
             .save(&result.memory, expected_revision)
             .await?;
-        if let Some(pending) = result.pending_clarification.as_ref() {
-            self.session_memory
-                .set_pending_clarification(session_id, pending.as_ref())
-                .await?;
-        }
+        self.session_memory
+            .update_after_job(
+                session_id,
+                &memory,
+                result.pending_clarification.as_ref().map(|p| p.as_ref()),
+            )
+            .await?;
         self.job_memory
             .insert_checkpoint(
                 &memory,
@@ -277,6 +310,7 @@ impl JobService {
             )
             .await?;
         for transition in &result.transitions {
+            AssistantGraphTopology::new().validate_transition(transition)?;
             self.job_memory
                 .checkpoint_transition(
                     memory.job_id,
@@ -291,9 +325,12 @@ impl JobService {
         }
 
         let Some(response) = &memory.structured_response else {
-            return Ok(());
+            return Ok(None);
         };
-        let rendered = MarkdownRenderer.render(response);
+        let rendered = response
+            .rendered_markdown
+            .clone()
+            .unwrap_or_else(|| MarkdownRenderer.render(response));
         let result_json = json!({
             "structured_response": response,
             "warnings": response.warnings.clone(),
@@ -310,20 +347,46 @@ impl JobService {
                 json!({ "type": "assistant_response", "assistant_response": response }),
             )
             .await?;
-        let completed = memory.terminal_state == Some(crate::assistant::TerminalState::Completed);
-        if completed {
-            self.jobs
-                .complete_with_assistant_response(job_id, result_json.clone())
-                .await?;
-        } else {
-            self.jobs
-                .store_assistant_response_result(job_id, result_json.clone())
-                .await?;
-            self.jobs.wait_for_user_input(job_id).await?;
+        let terminal_state = memory
+            .terminal_state
+            .unwrap_or(TerminalState::FailedOperational);
+        let outcome = JobRunOutcome::from_terminal_state(terminal_state);
+        match terminal_state {
+            TerminalState::Completed => {
+                self.jobs
+                    .complete_with_assistant_response(job_id, result_json.clone())
+                    .await?;
+            }
+            TerminalState::WaitingForUserInput => {
+                self.jobs
+                    .store_assistant_response_result(job_id, result_json.clone())
+                    .await?;
+                self.jobs.wait_for_user_input(job_id).await?;
+            }
+            TerminalState::FailedOperational => {
+                self.jobs
+                    .store_assistant_response_result(job_id, result_json.clone())
+                    .await?;
+                self.jobs
+                    .fail(
+                        job_id,
+                        json!({
+                            "code": "assistant_failed",
+                            "message": "The assistant could not complete this request.",
+                        }),
+                    )
+                    .await?;
+            }
+            TerminalState::BlockedByPolicy
+            | TerminalState::Unsupported
+            | TerminalState::OutOfDomain
+            | TerminalState::ContextWindowExceeded => {
+                self.jobs.complete(job_id, result_json.clone()).await?;
+            }
         }
         self.emit_event(
             job_id,
-            if completed { "final" } else { "clarification" },
+            outcome.event_kind,
             Some("complete_or_wait"),
             json!({
                 "response_type": response.response_type,
@@ -332,7 +395,166 @@ impl JobService {
             }),
         )
         .await?;
-        Ok(())
+        Ok(Some(outcome))
+    }
+}
+
+struct JobRunOutcome {
+    status: &'static str,
+    current_step: &'static str,
+    event_kind: &'static str,
+}
+
+impl JobRunOutcome {
+    fn from_terminal_state(state: TerminalState) -> Self {
+        match state {
+            TerminalState::WaitingForUserInput => Self {
+                status: "waiting_for_user_input",
+                current_step: "taking_decision",
+                event_kind: "clarification",
+            },
+            TerminalState::FailedOperational => Self {
+                status: "failed",
+                current_step: "response",
+                event_kind: "error",
+            },
+            _ => Self {
+                status: "completed",
+                current_step: "response",
+                event_kind: "final",
+            },
+        }
+    }
+}
+
+struct TestLlmClient;
+
+#[async_trait]
+impl LlmClient for TestLlmClient {
+    async fn structured_value(
+        &self,
+        _purpose: LlmPurpose,
+        _system: &str,
+        user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        let message = serde_json::from_str::<serde_json::Value>(user)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("message")
+                    .and_then(|message| message.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| user.to_owned());
+        let lower = message.to_lowercase();
+        let (intent, domain) = if lower == "hi" || lower == "hello" {
+            (AssistantIntentKind::Greeting, AssistantDomain::Unknown)
+        } else if lower.contains("bisa apa") || lower.contains("help") {
+            (AssistantIntentKind::Help, AssistantDomain::Unknown)
+        } else if lower.contains("laptop") {
+            (AssistantIntentKind::OutOfDomain, AssistantDomain::Unknown)
+        } else if lower.contains("loan")
+            || lower.contains("charges")
+            || lower.contains("fees")
+            || lower.contains("tax")
+            || lower.contains("accounting")
+            || lower.contains("journal")
+            || lower.contains(" gl ")
+        {
+            (
+                AssistantIntentKind::UnsupportedInDomain,
+                AssistantDomain::Unknown,
+            )
+        } else if lower.contains("raw account") {
+            (AssistantIntentKind::UnsafeRequest, AssistantDomain::Client)
+        } else if lower.contains("balance") || lower.contains("yang") {
+            (
+                AssistantIntentKind::ClarificationReply,
+                AssistantDomain::Client,
+            )
+        } else if lower.contains("tony") || lower.contains("nama") {
+            (AssistantIntentKind::DataLookup, AssistantDomain::Client)
+        } else if lower.contains("office") || lower.contains("organization") {
+            (
+                AssistantIntentKind::ReportRequest,
+                AssistantDomain::Organization,
+            )
+        } else if lower.contains("client") {
+            (AssistantIntentKind::ReportRequest, AssistantDomain::Client)
+        } else {
+            (AssistantIntentKind::ReportRequest, AssistantDomain::Savings)
+        };
+        let mut entities = Vec::new();
+        if lower.contains("tony") {
+            entities.push(AssistantEntity {
+                entity_type: AssistantEntityType::PersonName,
+                value: "Tony".into(),
+                canonical: Some("Tony".into()),
+                confidence: Some(1.0),
+            });
+        }
+        if lower.contains("account count") || lower.contains("savings accounts") {
+            entities.push(AssistantEntity {
+                entity_type: AssistantEntityType::Metric,
+                value: "savings account count".into(),
+                canonical: Some("savings account count".into()),
+                confidence: Some(1.0),
+            });
+        } else if lower.contains("balance") {
+            entities.push(AssistantEntity {
+                entity_type: AssistantEntityType::Metric,
+                value: "savings balance".into(),
+                canonical: Some("savings balance".into()),
+                confidence: Some(1.0),
+            });
+        } else if lower.contains("deposit") {
+            entities.push(AssistantEntity {
+                entity_type: AssistantEntityType::Metric,
+                value: "deposit".into(),
+                canonical: Some("deposit".into()),
+                confidence: Some(1.0),
+            });
+        }
+        let quantity = lower
+            .split(|ch: char| !ch.is_ascii_digit())
+            .filter(|part| !part.is_empty())
+            .find_map(|part| part.parse::<i64>().ok())
+            .map(|value| Quantity::TopN { value });
+        Ok(LlmResponse {
+            value: json!({
+                "intent": intent,
+                "domain": domain,
+                "language": AssistantLanguage::En,
+                "entities": entities,
+                "constraints": { "quantity": quantity },
+                "context_reference": ContextReference::None,
+                "confidence": 0.9,
+                "reason": "test semantic router"
+            }),
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "test".into(),
+            model: "test".into(),
+            latency_ms: 0,
+        })
+    }
+
+    async fn embed(&self, _purpose: LlmPurpose, text: &str) -> Result<EmbeddingResponse> {
+        let text = text.to_lowercase();
+        Ok(EmbeddingResponse {
+            vector: vec![
+                text.matches("client").count() as f32 + text.matches("tony").count() as f32,
+                text.matches("saving").count() as f32,
+                text.matches("balance").count() as f32,
+                text.matches("deposit").count() as f32,
+            ],
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "test".into(),
+            model: "test".into(),
+            latency_ms: 0,
+        })
     }
 }
 

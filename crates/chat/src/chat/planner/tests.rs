@@ -86,7 +86,7 @@ fn blocks_policy_for_missing_capability() {
 }
 
 #[test]
-fn blocks_policy_when_query_output_declares_pii() {
+fn allows_policy_and_marks_pii_visibility_when_query_output_declares_pii() {
     let classification = ClassificationResult {
         capability: Some("savings_deposit_top_n".to_string()),
         ..matched_total_deposit()
@@ -99,7 +99,8 @@ fn blocks_policy_when_query_output_declares_pii() {
     let plan = build_execution_plan(&classification, &catalog);
     let decision = evaluate_policy(&client, plan.as_ref(), &catalog);
 
-    assert_eq!(decision.status, PolicyDecisionStatus::Blocked);
+    assert_eq!(decision.status, PolicyDecisionStatus::Allowed);
+    assert!(!decision.can_view_pii);
 }
 
 fn matched_total_deposit() -> ClassificationResult {

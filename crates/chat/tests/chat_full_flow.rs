@@ -209,14 +209,24 @@ async fn wildcard_key_option_id_response_executes_same_job() {
     if status1 == "completed" {
         let result = &after_turn1["result_json"];
         let cap = result["selected_capability"].as_str().unwrap_or("");
-        assert!(
-            cap == "client_top_n_by_savings_account_count" || cap.starts_with("client_"),
-            "unexpected completed capability {cap}: {after_turn1}"
+        assert_eq!(
+            cap, "client_top_n_by_savings_account_count",
+            "{after_turn1}"
         );
         assert!(
             result["structured_response"].is_object(),
             "missing structured response: {after_turn1}"
         );
+        assert_table_rows_at_most(&result["structured_response"], 10, &after_turn1);
+        let memory_summary: Value = sqlx::query_scalar(
+            "SELECT execution_summary_json FROM assistant_job_memory WHERE job_id = $1::uuid",
+        )
+        .bind(&job_id)
+        .fetch_one(&app.app_pool)
+        .await
+        .unwrap();
+        let limit = memory_summary["plan"]["params"]["limit"].as_i64();
+        assert_eq!(limit, Some(10), "missing preserved limit: {after_turn1}");
         assert_ne!(result["policy_blocked"].as_bool(), Some(true));
         assert_non_empty_office_scope_if_present(&after_turn1);
         return;
@@ -253,6 +263,19 @@ async fn wildcard_key_option_id_response_executes_same_job() {
         "option-id response failed: {}",
         resp.text().await.unwrap_or_default()
     );
+    let stored_response: (String, Value) = sqlx::query_as(
+        "SELECT content, metadata_json FROM chat_messages WHERE job_id = $1::uuid AND role = 'clarification' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&job_id)
+    .fetch_one(&app.app_pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_response.0, "Rank clients by total savings balance.");
+    assert_eq!(stored_response.1["selected_option_id"], CLIENT_BALANCE_CAP);
+    assert_eq!(
+        stored_response.1["source_message"],
+        "Rank clients by total savings balance."
+    );
 
     let after_turn2 = wait_until_not_running(&app, &key.raw, &job_id).await;
     assert_ne!(
@@ -274,6 +297,7 @@ async fn wildcard_key_option_id_response_executes_same_job() {
         result2["structured_response"]["response_type"].as_str(),
         Some("clarification")
     );
+    assert_table_rows_at_most(&result2["structured_response"], 10, &after_turn2);
     assert_not_not_allowed(result2);
     assert_non_empty_office_scope_if_present(&after_turn2);
 }
@@ -340,9 +364,10 @@ async fn domain_prompt_matrix_returns_expected_contracts() {
                 status => panic!("{prompt}: unexpected status {status}: {job}"),
             }
         } else {
+            assert_eq!(job["status"].as_str(), Some("completed"), "{prompt}: {job}");
             assert!(
                 response["response_type"].as_str() == Some("unsupported")
-                    || job["status"].as_str() == Some("unsupported"),
+                    || response["response_type"].as_str() == Some("out_of_domain"),
                 "{prompt}: {job}"
             );
             assert_no_sql_or_table_leak(&job);
@@ -471,6 +496,16 @@ fn assert_not_not_allowed(result: &Value) {
 fn assert_non_empty_office_scope_if_present(job: &Value) {
     assert_no_empty_office_ids(&job["state_json"], "state_json");
     assert_no_empty_office_ids(&job["result_json"], "result_json");
+}
+
+fn assert_table_rows_at_most(response: &Value, limit: usize, context: &Value) {
+    let table = &response["table"];
+    if !table.is_null() {
+        let rows = table["rows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing table rows: {context}"));
+        assert!(rows.len() <= limit, "too many table rows: {context}");
+    }
 }
 
 fn assert_no_empty_office_ids(value: &Value, label: &str) {

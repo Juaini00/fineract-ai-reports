@@ -9,7 +9,7 @@ use chat::assistant::{
     ClarificationOutcome, ClarificationPayload, ClarificationResolver, ContextMessage,
     ContextReference, ContextWarning, ContextWarningCode, ContextWindow, ResponseBuilder,
     SemanticRouter,
-    llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
+    llm::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage},
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use common::spawn_app;
@@ -21,6 +21,7 @@ struct ScenarioFakeLlm;
 impl LlmClient for ScenarioFakeLlm {
     async fn structured_value(
         &self,
+        _purpose: LlmPurpose,
         _system: &str,
         user: &str,
         _schema: serde_json::Value,
@@ -49,7 +50,7 @@ impl LlmClient for ScenarioFakeLlm {
         })
     }
 
-    async fn embed(&self, text: &str) -> Result<EmbeddingResponse> {
+    async fn embed(&self, _purpose: LlmPurpose, text: &str) -> Result<EmbeddingResponse> {
         Ok(EmbeddingResponse {
             vector: fake_embedding(text),
             usage: TokenUsage::default(),
@@ -139,6 +140,8 @@ async fn semantic_clarification_reply_selects_balance_by_meaning() {
             },
         ],
         attempt: 1,
+        source_intent: None,
+        allow_free_text: true,
     };
 
     let outcome = ClarificationResolver::resolve(
@@ -252,7 +255,7 @@ fn fake_embedding(text: &str) -> Vec<f32> {
 
 fn assert_response_contract(prompt: &str, intent: &AssistantIntent) {
     let response = match intent.intent {
-        AssistantIntentKind::Help => ResponseBuilder::unsupported(),
+        AssistantIntentKind::Help => ResponseBuilder::help(),
         AssistantIntentKind::OutOfDomain => ResponseBuilder::out_of_domain(),
         AssistantIntentKind::UnsafeRequest => {
             ResponseBuilder::policy_blocked("Sensitive data is blocked by policy.")
@@ -266,6 +269,8 @@ fn assert_response_contract(prompt: &str, intent: &AssistantIntent) {
                     description: None,
                 }],
                 attempt: 1,
+                source_intent: None,
+                allow_free_text: true,
             })
         }
         _ => ResponseBuilder::selected(format!("{:?}", intent.domain)),
@@ -293,6 +298,8 @@ fn empty_context() -> ContextWindow {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: None,
+        source_intent: None,
+        source_snippets: Vec::new(),
         client_scope: json!({}),
         warnings: Vec::new(),
     }

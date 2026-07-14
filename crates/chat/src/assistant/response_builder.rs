@@ -2,10 +2,13 @@ use serde_json::{Map, Value};
 
 use crate::assistant::{
     AssistantIntent, ClarificationPayload,
+    renderer::{MarkdownRenderer, ResponseRenderer},
     response::{
-        AssistantResponse, AssistantResponseType, ResponseAction, ResponseActionType,
-        ResponseOption, ResponseTable, ResponseWarning, TableColumn, TableColumnKind,
+        AssistantResponse, AssistantResponseType, EvidenceReference, ResponseAction,
+        ResponseActionType, ResponseOption, ResponseTable, ResponseWarning, TableColumn,
+        TableColumnKind,
     },
+    tool::ToolResult,
 };
 use crate::chat::planner::{ExecutionPlan, PolicyDecision};
 use crate::knowledge::model::{KnowledgeCatalog, QueryOutputField};
@@ -17,7 +20,7 @@ impl ResponseBuilder {
         _intent: &AssistantIntent,
         plan: &ExecutionPlan,
         policy: &PolicyDecision,
-        execution_result: &Value,
+        tool_result: &ToolResult,
         catalog: &KnowledgeCatalog,
     ) -> AssistantResponse {
         let fields = catalog
@@ -26,11 +29,7 @@ impl ResponseBuilder {
             .find(|query| query.id == plan.query_id)
             .map(|query| query.output_fields.as_slice())
             .unwrap_or(&[]);
-        let rows = execution_result
-            .get("rows")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let rows = tool_result.rows.clone();
         let columns = fields
             .iter()
             .map(|field| table_column(field, policy.can_view_pii))
@@ -49,17 +48,39 @@ impl ResponseBuilder {
             .into_iter()
             .collect();
 
-        AssistantResponse {
+        let row_count = rows.len();
+        let message = if plan.capability == "client_name_lookup" {
+            match row_count {
+                0 => "No matching client was found in your authorized office scope.".into(),
+                1 => "Found one matching client in your authorized office scope.".into(),
+                _ => format!(
+                    "Found {row_count} matching clients. Please use the table to disambiguate."
+                ),
+            }
+        } else {
+            format!("Found {row_count} row(s).")
+        };
+        finish(AssistantResponse {
             response_type: AssistantResponseType::Table,
             title: Some("Lookup results".into()),
-            message: format!("Found {} row(s).", rows.len()),
+            message,
             sections: Vec::new(),
             table: Some(ResponseTable { columns, rows }),
             cards: Vec::new(),
             options: Vec::new(),
             warnings,
             actions: Vec::new(),
-        }
+            evidence_refs: tool_result
+                .evidence_refs
+                .iter()
+                .map(|id| EvidenceReference {
+                    id: id.clone(),
+                    source_type: "retrieval_evidence".into(),
+                    label: None,
+                })
+                .collect(),
+            rendered_markdown: None,
+        })
     }
 
     pub fn clarification(payload: ClarificationPayload) -> AssistantResponse {
@@ -84,6 +105,8 @@ impl ResponseBuilder {
                 action_type: ResponseActionType::AskFollowUp,
                 label: "Clarify request".into(),
             }],
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -100,6 +123,8 @@ impl ResponseBuilder {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -115,6 +140,8 @@ impl ResponseBuilder {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -129,6 +156,8 @@ impl ResponseBuilder {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -147,6 +176,8 @@ impl ResponseBuilder {
                 action_type: ResponseActionType::StartNewSession,
                 label: "Start a new session".into(),
             }],
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -164,6 +195,8 @@ impl ResponseBuilder {
                 action_type: ResponseActionType::AskFollowUp,
                 label: "Provide the missing detail".into(),
             }],
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -181,6 +214,8 @@ impl ResponseBuilder {
                 action_type: ResponseActionType::AskFollowUp,
                 label: "Describe request".into(),
             }],
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -197,6 +232,8 @@ impl ResponseBuilder {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -211,6 +248,8 @@ impl ResponseBuilder {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -225,6 +264,8 @@ impl ResponseBuilder {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
 
@@ -242,8 +283,15 @@ impl ResponseBuilder {
                 action_type: ResponseActionType::AskFollowUp,
                 label: "Try again".into(),
             }],
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         }
     }
+}
+
+pub fn finish(mut response: AssistantResponse) -> AssistantResponse {
+    response.rendered_markdown = Some(MarkdownRenderer.render(&response));
+    response
 }
 
 fn filtered_row(row: Value, fields: &[QueryOutputField], can_view_pii: bool) -> Value {
@@ -305,7 +353,14 @@ mod tests {
                 office_ids: vec![1],
                 can_view_pii: false,
             },
-            &json!({ "rows": [{ "name": "Ada", "national_id": "SECRET" }] }),
+            &ToolResult {
+                tool_name: "approved_catalog_sql".into(),
+                ok: true,
+                rows: vec![json!({ "name": "Ada", "national_id": "SECRET" })],
+                summary: None,
+                error: None,
+                evidence_refs: vec!["ev1".into()],
+            },
             &catalog(),
         );
 
@@ -318,6 +373,7 @@ mod tests {
         );
         assert_eq!(table.rows, vec![json!({ "name": "Ada" })]);
         assert_eq!(response.warnings[0].code, "pii_hidden");
+        assert!(response.rendered_markdown.unwrap().contains("Ada"));
     }
 
     fn intent() -> AssistantIntent {
@@ -328,6 +384,7 @@ mod tests {
             entities: Vec::new(),
             constraints: AssistantConstraints::default(),
             context_reference: ContextReference::None,
+            source: None,
             confidence: 1.0,
             reason: "test".into(),
         }

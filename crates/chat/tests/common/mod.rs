@@ -244,6 +244,10 @@ impl Drop for TestApp {
 
 /// Spin up a fresh app DB, run migrations, boot axum on `127.0.0.1:0`.
 pub async fn spawn_app() -> TestApp {
+    spawn_app_with_llm_api_key("__ai_report_test_llm__").await
+}
+
+pub async fn spawn_app_with_llm_api_key(llm_api_key: &str) -> TestApp {
     let admin_db_url = std::env::var("TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://root:password@127.0.0.1:5432/postgres".into());
     let fineract_db_url = std::env::var("TEST_FINERACT_DATABASE_URL").unwrap_or_else(|_| {
@@ -307,7 +311,7 @@ pub async fn spawn_app() -> TestApp {
         },
         llm: LlmConfig {
             provider: "test".into(),
-            api_key: String::new(),
+            api_key: llm_api_key.into(),
             chat_completions_url: "https://example.invalid".into(),
             base_url: "https://example.invalid".into(),
             model: "test".into(),

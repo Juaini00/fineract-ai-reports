@@ -7,7 +7,7 @@ This file is the short source of truth for the current development state. Detail
 - Rust workspace has exactly three crates: `app`, `core`, and `chat`.
 - `app` is the binary entrypoint and composition root.
 - `core` owns shared foundation: config, tracing, database pools, API primitives, auth, extractors, response envelope, validation, and `ClientContext`.
-- `chat` owns chat/reporting routes, services, repositories, job pipeline, catalog use, retrieval, planner, policy guard, executor, formatter, and checkpoint/event handling.
+- `chat` owns chat/reporting routes, services, repositories, job pipeline, catalog use, retrieval, planner, policy guard, executor, structured assistant responses/rendering, and checkpoint/event handling.
 - Do not add `api`, `infra`, `runtime`, `knowledge`, `reporting`, or `ai_report_*` crates yet.
 
 ## Completed foundation
@@ -33,20 +33,21 @@ This file is the short source of truth for the current development state. Detail
 - Voyage embeddings run when configured.
 - Runtime vector capability search and lexical fallback are wired into chat job creation.
 - Broader non-capability retrieval context is appended for audit/future LLM use; it does not execute SQL.
-- Semantic assistant foundation is partially implemented. The runtime has structured assistant types, structured responses, some job/session memory, catalog-aware execution, policy guards, and regression coverage for recent chat bugs.
-- Semantic assistant migration is not complete: `petgraph` is not yet the graph control plane, `rig-core` is not yet the primary runtime agent/tool boundary, clarification still lacks clean source-intent snapshot preservation, context carry-over still uses tactical glue in places, and scenario coverage is not a full acceptance matrix.
-- Tactical deterministic/manual fallback paths remain migration debt and must be deleted or quarantined before the semantic assistant platform can be called complete.
+- Semantic assistant components are present in this working tree: graph runtime, semantic router boundary, source-intent clarification preservation, retrieval/evidence selection, guarded approved-catalog SQL tool execution, policy blocking, structured response authority, markdown rendering, and scenario/golden contract coverage are wired.
+- Deterministic/catalog-aware parameter extraction is partial hardening: quantity/limit, ISO date ranges, currency, domain hints, and a few metric hints are merged before retrieval/execution, with broader coverage and provenance tests still pending.
+- Primary runtime deterministic keyword/capability fallbacks are removed; no-router operation fails closed instead of silently routing by prompt text.
+- Legacy formatter-first paths are deleted/quarantined; `chat/formatter/labels.rs` remains only as a label utility if referenced.
 - LQR is available behind `LQR_ENABLED=false` and is not the default path yet.
 
 ## Reporting capability state
 
 - Savings capabilities are implemented for totals, top-N, monthly breakdown, monthly top-N, and balance summary.
-- Client domain has 7 approved MVP capabilities.
-- Organization domain has 8 approved MVP capabilities.
+- Client domain has 7 currently approved executable capabilities.
+- Organization domain has 8 currently approved executable capabilities.
 - Catalog after Phase 21 records 25 capabilities and 25 queries.
 - Group/center remains conditional.
 - Loan, accounting/GL, tax, custom datatables, and audit/users/operations remain deferred until domain promotion.
 
 ## Known documentation sync issue
 
-Some old long-form docs referenced older catalog snapshots such as 16/16, classifier-first runtime behavior, or overstated semantic assistant completion. Current docs should treat the assistant as partial foundation plus active full-brain migration until the target architecture plan passes its acceptance gates.
+Some old long-form docs referenced older catalog snapshots such as 16/16, classifier-first runtime behavior, or overstated semantic assistant completion. Current docs should treat the assistant as partial foundation plus active full-brain migration until the target architecture plan passes its acceptance gates. Deterministic extraction is partial hardening, not complete.

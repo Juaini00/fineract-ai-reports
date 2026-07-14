@@ -6,7 +6,7 @@ use serde_json::json;
 use super::{
     ContextWindow,
     clarification::{ClarificationOutcome, ClarificationPayload, OTHER_CLARIFICATION_OPTION_ID},
-    llm::{LlmClient, structured},
+    llm::{LlmClient, LlmPurpose, structured},
 };
 
 pub struct ClarificationResolver;
@@ -53,6 +53,7 @@ impl ClarificationResolver {
 
         let decision = structured::<LlmClarificationDecision>(
             llm,
+            LlmPurpose::ClarificationResolve,
             "Resolve a user's reply to a pending report clarification. Return only the JSON outcome. Prefer selected_option only when the reply clearly maps to one offered option.",
             &json!({
                 "reply": reply,
@@ -74,7 +75,10 @@ async fn resolve_by_embedding(
     if payload.options.is_empty() {
         return Ok(None);
     }
-    let reply_vector = llm.embed(reply).await?.vector;
+    let reply_vector = llm
+        .embed(LlmPurpose::ClarificationEmbedding, reply)
+        .await?
+        .vector;
     let mut scored = Vec::with_capacity(payload.options.len());
     for option in payload
         .options
@@ -85,7 +89,10 @@ async fn resolve_by_embedding(
             Some(description) => format!("{}\n{}", option.label, description),
             None => option.label.clone(),
         };
-        let option_vector = llm.embed(&text).await?.vector;
+        let option_vector = llm
+            .embed(LlmPurpose::ClarificationEmbedding, &text)
+            .await?
+            .vector;
         scored.push((cosine(&reply_vector, &option_vector), option.id.clone()));
     }
     scored.sort_by(|left, right| right.0.total_cmp(&left.0));
@@ -136,6 +143,7 @@ mod tests {
     impl LlmClient for FakeLlm {
         async fn structured_value(
             &self,
+            _purpose: LlmPurpose,
             _system: &str,
             _user: &str,
             _schema: serde_json::Value,
@@ -143,7 +151,7 @@ mod tests {
             unreachable!("exact others should not call LLM")
         }
 
-        async fn embed(&self, _text: &str) -> Result<EmbeddingResponse> {
+        async fn embed(&self, _purpose: LlmPurpose, _text: &str) -> Result<EmbeddingResponse> {
             unreachable!("exact others should not call embeddings")
         }
     }
@@ -160,6 +168,8 @@ mod tests {
                     description: None,
                 }],
                 attempt: 1,
+                source_intent: None,
+                allow_free_text: true,
             },
             &ContextWindow {
                 summary: None,
@@ -168,6 +178,8 @@ mod tests {
                 recent_messages: Vec::new(),
                 relevant_jobs: Vec::new(),
                 pending_clarification: None,
+                source_intent: None,
+                source_snippets: Vec::new(),
                 client_scope: serde_json::json!({}),
                 warnings: Vec::new(),
             },
@@ -197,6 +209,8 @@ mod tests {
                     description: None,
                 }],
                 attempt: 1,
+                source_intent: None,
+                allow_free_text: true,
             },
             &ContextWindow {
                 summary: None,
@@ -205,6 +219,8 @@ mod tests {
                 recent_messages: Vec::new(),
                 relevant_jobs: Vec::new(),
                 pending_clarification: None,
+                source_intent: None,
+                source_snippets: Vec::new(),
                 client_scope: serde_json::json!({}),
                 warnings: Vec::new(),
             },

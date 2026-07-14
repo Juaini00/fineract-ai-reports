@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::assistant::llm_trace_repo::{LlmTrace, LlmTraceRepository};
 
-use super::{EmbeddingResponse, LlmClient, LlmResponse};
+use super::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse};
 
 #[derive(Debug, Clone)]
 pub struct LlmTraceContext {
@@ -15,7 +15,6 @@ pub struct LlmTraceContext {
     pub session_id: Option<Uuid>,
     pub api_key_id: Uuid,
     pub graph_state: Option<String>,
-    pub purpose: String,
 }
 
 pub struct TracedLlmClient {
@@ -48,11 +47,15 @@ impl TracedLlmClient {
 impl LlmClient for TracedLlmClient {
     async fn structured_value(
         &self,
+        purpose: LlmPurpose,
         system: &str,
         user: &str,
         schema: Value,
     ) -> Result<LlmResponse<Value>> {
-        let result = self.inner.structured_value(system, user, schema).await;
+        let result = self
+            .inner
+            .structured_value(purpose, system, user, schema)
+            .await;
         if let Some(context) = &self.context {
             match &result {
                 Ok(response) => {
@@ -61,7 +64,7 @@ impl LlmClient for TracedLlmClient {
                         session_id: context.session_id,
                         api_key_id: context.api_key_id,
                         graph_state: context.graph_state.clone(),
-                        purpose: context.purpose.clone(),
+                        purpose: purpose.to_string(),
                         provider: response.provider.clone(),
                         model: response.model.clone(),
                         input_tokens: response.usage.input_tokens,
@@ -74,19 +77,20 @@ impl LlmClient for TracedLlmClient {
                     .await;
                 }
                 Err(error) => {
+                    let (provider, model) = self.inner.llm_metadata();
                     self.record(LlmTrace {
                         job_id: context.job_id,
                         session_id: context.session_id,
                         api_key_id: context.api_key_id,
                         graph_state: context.graph_state.clone(),
-                        purpose: context.purpose.clone(),
-                        provider: "unknown".into(),
-                        model: "unknown".into(),
+                        purpose: purpose.to_string(),
+                        provider,
+                        model,
                         input_tokens: 0,
                         output_tokens: 0,
                         cost_usd: None,
                         latency_ms: 0,
-                        status: "error".into(),
+                        status: classify_status(error),
                         error_kind: Some(error.to_string()),
                     })
                     .await;
@@ -96,8 +100,8 @@ impl LlmClient for TracedLlmClient {
         result
     }
 
-    async fn embed(&self, text: &str) -> Result<EmbeddingResponse> {
-        let result = self.inner.embed(text).await;
+    async fn embed(&self, purpose: LlmPurpose, text: &str) -> Result<EmbeddingResponse> {
+        let result = self.inner.embed(purpose, text).await;
         if let Some(context) = &self.context {
             match &result {
                 Ok(response) => {
@@ -106,7 +110,7 @@ impl LlmClient for TracedLlmClient {
                         session_id: context.session_id,
                         api_key_id: context.api_key_id,
                         graph_state: context.graph_state.clone(),
-                        purpose: format!("{}:embedding", context.purpose),
+                        purpose: purpose.to_string(),
                         provider: response.provider.clone(),
                         model: response.model.clone(),
                         input_tokens: response.usage.input_tokens,
@@ -119,19 +123,20 @@ impl LlmClient for TracedLlmClient {
                     .await;
                 }
                 Err(error) => {
+                    let (provider, model) = self.inner.embedding_metadata();
                     self.record(LlmTrace {
                         job_id: context.job_id,
                         session_id: context.session_id,
                         api_key_id: context.api_key_id,
                         graph_state: context.graph_state.clone(),
-                        purpose: format!("{}:embedding", context.purpose),
-                        provider: "unknown".into(),
-                        model: "unknown".into(),
+                        purpose: purpose.to_string(),
+                        provider,
+                        model,
                         input_tokens: 0,
                         output_tokens: 0,
                         cost_usd: None,
                         latency_ms: 0,
-                        status: "error".into(),
+                        status: classify_status(error),
                         error_kind: Some(error.to_string()),
                     })
                     .await;
@@ -139,5 +144,50 @@ impl LlmClient for TracedLlmClient {
             }
         }
         result
+    }
+
+    fn llm_metadata(&self) -> (String, String) {
+        self.inner.llm_metadata()
+    }
+
+    fn embedding_metadata(&self) -> (String, String) {
+        self.inner.embedding_metadata()
+    }
+
+    async fn record_malformed(&self, purpose: LlmPurpose, error: &str) {
+        let Some(context) = &self.context else {
+            return;
+        };
+        let (provider, model) = self.inner.llm_metadata();
+        self.record(LlmTrace {
+            job_id: context.job_id,
+            session_id: context.session_id,
+            api_key_id: context.api_key_id,
+            graph_state: context.graph_state.clone(),
+            purpose: purpose.to_string(),
+            provider,
+            model,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: None,
+            latency_ms: 0,
+            status: "malformed".into(),
+            error_kind: Some(error.into()),
+        })
+        .await;
+    }
+}
+
+fn classify_status(error: &anyhow::Error) -> String {
+    let message = error.to_string().to_lowercase();
+    if message.contains("timeout") || message.contains("timed out") {
+        "timeout".into()
+    } else if message.contains("malformed")
+        || message.contains("schema mismatch")
+        || message.contains("parse structured")
+    {
+        "malformed".into()
+    } else {
+        "error".into()
     }
 }

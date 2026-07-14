@@ -14,6 +14,8 @@ pub struct CreateChatJobInput {
 pub struct RespondToChatJobInput {
     pub client: ClientContext,
     pub job_id: Uuid,
+    pub source_message: String,
+    pub selected_option_id: Option<String>,
     pub message: String,
 }
 

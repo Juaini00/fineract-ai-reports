@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::intent::SourceIntentSnapshot;
+
 pub const OTHER_CLARIFICATION_OPTION_ID: &str = "others";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -35,10 +37,23 @@ pub struct ClarificationOption {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ClarificationPayload {
     pub question: String,
     #[serde(default)]
     pub options: Vec<ClarificationOption>,
     pub attempt: u32,
+    #[serde(default)]
+    pub source_intent: Option<SourceIntentSnapshot>,
+    #[serde(default)]
+    pub allow_free_text: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PendingClarification {
+    pub payload: ClarificationPayload,
+    #[serde(default)]
+    pub source_intent: Option<SourceIntentSnapshot>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }

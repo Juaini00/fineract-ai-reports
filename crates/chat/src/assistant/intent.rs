@@ -3,21 +3,30 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssistantIntent {
+    #[serde(default)]
     pub intent: AssistantIntentKind,
+    #[serde(default)]
     pub domain: AssistantDomain,
+    #[serde(default = "default_language")]
     pub language: AssistantLanguage,
     #[serde(default)]
     pub entities: Vec<AssistantEntity>,
     #[serde(default)]
     pub constraints: AssistantConstraints,
+    #[serde(default)]
     pub context_reference: ContextReference,
+    #[serde(default)]
+    pub source: Option<SourceIntentSnapshot>,
+    #[serde(default)]
     pub confidence: f32,
+    #[serde(default)]
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantIntentKind {
+    #[default]
     Greeting,
     Help,
     ReportRequest,
@@ -29,7 +38,7 @@ pub enum AssistantIntentKind {
     UnsupportedInDomain,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantDomain {
     Savings,
@@ -40,7 +49,12 @@ pub enum AssistantDomain {
     Accounting,
     Tax,
     Audit,
+    #[default]
     Unknown,
+}
+
+fn default_language() -> AssistantLanguage {
+    AssistantLanguage::En
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -52,10 +66,14 @@ pub enum AssistantLanguage {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssistantEntity {
     pub entity_type: AssistantEntityType,
     pub value: String,
+    #[serde(default)]
+    pub canonical: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -68,6 +86,7 @@ pub enum AssistantEntityType {
     Product,
     Metric,
     CapabilityHint,
+    AccountNumber,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -77,6 +96,10 @@ pub struct AssistantConstraints {
     pub quantity: Option<Quantity>,
     pub currency_code: Option<String>,
     pub product_ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub office_ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -88,11 +111,31 @@ pub enum Quantity {
     TopN { value: i64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextReference {
+    #[default]
     None,
     PreviousJob,
     PendingClarification,
     SessionTopic,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SourceIntentSnapshot {
+    pub prompt: String,
+    #[serde(default)]
+    pub normalized_prompt: Option<String>,
+    pub intent: AssistantIntentKind,
+    pub domain: AssistantDomain,
+    #[serde(default)]
+    pub entities: Vec<AssistantEntity>,
+    #[serde(default)]
+    pub constraints: AssistantConstraints,
+    #[serde(default)]
+    pub context_reference: ContextReference,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub reason: String,
 }

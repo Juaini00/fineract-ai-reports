@@ -5,14 +5,18 @@ use app_core::auth::model::ClientContext;
 use sqlx::PgPool;
 
 use crate::assistant::{
-    AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, AssistantResponse,
-    AssistantResponseType, ClarificationOption, ClarificationOutcome, ClarificationPayload,
-    ClarificationResolver, ContextReference, ContextWarningCode, ContextWindow, GraphState,
-    GraphTransition, JobMemory, OTHER_CLARIFICATION_OPTION_ID, Quantity, ResponseBuilder,
-    SemanticRouter, TerminalState,
+    AssistantConstraints, AssistantDomain, AssistantGraphTopology, AssistantIntent,
+    AssistantIntentKind, AssistantLanguage, AssistantResponse, AssistantResponseType,
+    ClarificationOption, ClarificationOutcome, ClarificationPayload, ClarificationResolver,
+    ContextReference, ContextWarningCode, ContextWindow, GraphState, GraphTransition, JobMemory,
+    OTHER_CLARIFICATION_OPTION_ID, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
+    TerminalState,
     evidence::{Evidence, EvidenceDecision, EvidenceEvaluator, RetrievalPlan},
+    extract_message_facts,
     llm::SharedLlmClient,
     response::{ResponseAction, ResponseActionType},
+    response_builder::finish,
+    retrieval::RetrievalEngine,
 };
 use crate::chat::{executor::execute_plan, planner::PolicyDecisionStatus};
 use crate::knowledge::index::repository::KnowledgeRepository;
@@ -23,6 +27,33 @@ pub struct GraphRuntimeResult {
     pub memory: JobMemory,
     pub transitions: Vec<GraphTransition>,
     pub pending_clarification: Option<Option<ClarificationPayload>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeUserInput {
+    pub message: String,
+    pub source_message: String,
+    pub selected_option_id: Option<String>,
+}
+
+impl From<&str> for RuntimeUserInput {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: None,
+        }
+    }
+}
+
+impl From<String> for RuntimeUserInput {
+    fn from(message: String) -> Self {
+        Self {
+            source_message: message.clone(),
+            message,
+            selected_option_id: None,
+        }
+    }
 }
 
 pub struct AssistantGraphRuntime;
@@ -65,7 +96,12 @@ impl AssistantGraphRuntime {
             options: Vec::new(),
             warnings: Vec::new(),
             actions: vec![ResponseAction { action_type: ResponseActionType::AskFollowUp, label: "Ask a follow-up".into() }],
+            evidence_refs: Vec::new(),
+            rendered_markdown: None,
         });
+        AssistantGraphTopology::new()
+            .validate_sequence(&transitions)
+            .expect("assistant runtime produced illegal graph transitions");
         GraphRuntimeResult {
             memory,
             transitions,
@@ -82,8 +118,10 @@ impl AssistantGraphRuntime {
         fineract_pool: Option<&PgPool>,
         catalog: Option<&Arc<KnowledgeCatalog>>,
         client: Option<&ClientContext>,
-        message: &str,
+        input: impl Into<RuntimeUserInput>,
     ) -> GraphRuntimeResult {
+        let input = input.into();
+        let message = input.message.as_str();
         if context
             .warnings
             .iter()
@@ -113,13 +151,30 @@ impl AssistantGraphRuntime {
             );
         }
         if let Some(payload) = &context.pending_clarification
-            && let Some(outcome) = ClarificationResolver::resolve_exact(message, payload)
+            && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
         {
-            memory.intent = Some(pending_clarification_intent(&context));
+            memory.intent = Some(intent_from_source(payload, &context));
+            record_source_extraction_metadata(&mut memory, payload);
             match outcome {
                 ClarificationOutcome::SelectedOption { option_id, .. } => {
                     memory.selected_capability = Some(option_id.clone());
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "selected_option", "option_id": option_id });
+                    memory.source_intent = payload
+                        .source_intent
+                        .as_ref()
+                        .map(serde_json::to_value)
+                        .transpose()
+                        .ok()
+                        .flatten();
+                    memory.retrieval_evidence = clarification_audit(
+                        if input.selected_option_id.is_some() {
+                            "explicit_option_id"
+                        } else {
+                            "exact_label"
+                        },
+                        &option_id,
+                        &input,
+                        payload,
+                    );
                     return execute_selected_capability(
                         memory,
                         context.recent_messages.len(),
@@ -132,8 +187,7 @@ impl AssistantGraphRuntime {
                     .await;
                 }
                 ClarificationOutcome::FreeFormOther { .. } => {
-                    memory.retrieval_evidence =
-                        json!({ "clarification_outcome": "free_form_other" });
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                     return graph_result(
                         memory,
                         TerminalState::WaitingForUserInput,
@@ -147,81 +201,80 @@ impl AssistantGraphRuntime {
                         ),
                     );
                 }
+                ClarificationOutcome::Unresolved { .. } => {
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    return graph_result(
+                        memory,
+                        TerminalState::WaitingForUserInput,
+                        "clarification_unresolved",
+                        ResponseBuilder::clarification(payload.clone()),
+                        context.recent_messages.len(),
+                        None,
+                        clarification_transitions(
+                            TerminalState::WaitingForUserInput,
+                            "clarification_unresolved",
+                        ),
+                    );
+                }
                 _ => {}
             }
         }
-        let Some(router) = router else {
-            let intent = fallback_intent(message);
-            if intent.intent == AssistantIntentKind::UnsupportedInDomain {
-                memory.intent = Some(intent);
-                return graph_result(
-                    memory,
-                    TerminalState::Unsupported,
-                    "unsupported_in_domain",
-                    ResponseBuilder::unsupported(),
-                    context.recent_messages.len(),
-                    None,
-                    simple_intent_transitions(TerminalState::Unsupported, "unsupported_in_domain"),
-                );
-            }
-            if let Some(capability_id) = fallback_capability_hint(message, &context) {
-                memory.intent = Some(intent);
-                memory.selected_capability = Some(capability_id.clone());
-                return execute_selected_capability(
-                    memory,
-                    context.recent_messages.len(),
-                    capability_id,
-                    catalog,
-                    client,
-                    fineract_pool,
-                    Some(None),
-                )
-                .await;
-            }
-            let plan = RetrievalPlan::new(
-                message,
-                &intent,
-                allow_all_capabilities(&context),
-                allowed_capabilities(&context),
-            );
-            let evidence = Vec::new();
-            let decision = EvidenceDecision::Clarify;
-            let payload = clarification_payload(&plan, &evidence);
-            memory.intent = Some(intent);
-            memory.retrieval_evidence = json!({
-                "plan": plan,
-                "evidence": evidence,
-                "decision": decision,
-            });
+        if let Some((intent_kind, response)) = deterministic_simple_response(message) {
+            memory.intent = Some(deterministic_intent(intent_kind.clone(), message));
             return graph_result(
                 memory,
-                TerminalState::WaitingForUserInput,
-                "semantic_router_unavailable_fallback",
-                ResponseBuilder::clarification(payload.clone()),
+                TerminalState::Completed,
+                match intent_kind {
+                    AssistantIntentKind::Greeting => "greeting",
+                    AssistantIntentKind::Help => "help",
+                    _ => "simple_intent",
+                },
+                response,
                 context.recent_messages.len(),
-                Some(Some(payload)),
-                clarification_transitions(
-                    TerminalState::WaitingForUserInput,
-                    "semantic_router_unavailable_fallback",
+                None,
+                simple_intent_transitions(TerminalState::Completed, "simple_intent"),
+            );
+        }
+        let Some(router) = router else {
+            return graph_result(
+                memory,
+                TerminalState::FailedOperational,
+                "semantic_router_unavailable",
+                ResponseBuilder::error(),
+                context.recent_messages.len(),
+                None,
+                simple_intent_transitions(
+                    TerminalState::FailedOperational,
+                    "semantic_router_unavailable",
                 ),
             );
         };
         let route = router.route(message, &context).await;
         let mut pending_clarification = None;
         let (terminal, reason, response) = match route {
-            Ok(intent) => {
+            Ok(mut intent) => {
+                merge_deterministic_extraction(&mut memory, &mut intent, &input.source_message);
                 if intent.intent == AssistantIntentKind::ClarificationReply
                     && let (Some(payload), Some(llm)) = (&context.pending_clarification, llm)
                 {
-                    match ClarificationResolver::resolve(message, payload, &context, llm.as_ref())
-                        .await
+                    let resolve_text = input
+                        .selected_option_id
+                        .as_deref()
+                        .unwrap_or(&input.source_message);
+                    match ClarificationResolver::resolve(
+                        resolve_text,
+                        payload,
+                        &context,
+                        llm.as_ref(),
+                    )
+                    .await
                     {
                         Ok(ClarificationOutcome::SelectedOption { option_id, .. })
                             if option_id == OTHER_CLARIFICATION_OPTION_ID =>
                         {
-                            memory.intent = Some(intent);
-                            memory.retrieval_evidence =
-                                json!({ "clarification_outcome": "free_form_other" });
+                            memory.intent = Some(intent_from_source(payload, &context));
+                            record_source_extraction_metadata(&mut memory, payload);
+                            memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
                                 memory,
@@ -237,9 +290,18 @@ impl AssistantGraphRuntime {
                             );
                         }
                         Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
-                            memory.intent = Some(intent);
+                            memory.intent = Some(intent_from_source(payload, &context));
+                            record_source_extraction_metadata(&mut memory, payload);
                             memory.selected_capability = Some(option_id.clone());
-                            memory.retrieval_evidence = json!({ "clarification_outcome": "selected_option", "option_id": option_id });
+                            memory.source_intent = payload
+                                .source_intent
+                                .as_ref()
+                                .map(serde_json::to_value)
+                                .transpose()
+                                .ok()
+                                .flatten();
+                            memory.retrieval_evidence =
+                                clarification_audit("semantic", &option_id, &input, payload);
                             pending_clarification = Some(None);
                             return execute_selected_capability(
                                 memory,
@@ -253,9 +315,9 @@ impl AssistantGraphRuntime {
                             .await;
                         }
                         Ok(ClarificationOutcome::FreeFormOther { .. }) => {
-                            memory.intent = Some(intent);
-                            memory.retrieval_evidence =
-                                json!({ "clarification_outcome": "free_form_other" });
+                            memory.intent = Some(intent_from_source(payload, &context));
+                            record_source_extraction_metadata(&mut memory, payload);
+                            memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
                                 memory,
@@ -362,30 +424,15 @@ impl AssistantGraphRuntime {
                     }
                     _ => {}
                 }
-                if let Some(capability_id) = fallback_capability_hint(message, &context) {
-                    memory.selected_capability = Some(capability_id.clone());
-                    return execute_selected_capability(
-                        memory,
-                        context.recent_messages.len(),
-                        capability_id,
-                        catalog,
-                        client,
-                        fineract_pool,
-                        Some(None),
-                    )
-                    .await;
-                }
-                let evidence = retrieve_evidence(&plan, llm, knowledge).await;
+                let evidence = RetrievalEngine::retrieve(&plan, llm, knowledge, catalog).await;
                 let (evidence, warning) = match evidence {
                     Ok(evidence) => (evidence, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 };
                 let decision = EvidenceEvaluator::default().evaluate(&plan, &evidence);
-                memory.retrieval_evidence = json!({
-                    "plan": plan,
-                    "evidence": evidence,
-                    "decision": decision,
-                });
+                memory.retrieval_plan = json!(plan);
+                memory.retrieval_evidence = json!(evidence);
+                memory.evidence_decision = json!(decision);
                 if let Some(message) = warning {
                     memory.warnings = json!([{ "message": message }]);
                 }
@@ -404,7 +451,14 @@ impl AssistantGraphRuntime {
                         .await;
                     }
                     EvidenceDecision::Clarify => {
-                        let payload = clarification_payload(&plan, &evidence);
+                        let payload = clarification_payload(
+                            &plan,
+                            &evidence,
+                            memory
+                                .intent
+                                .as_ref()
+                                .map(|intent| source_intent_snapshot(intent, message)),
+                        );
                         pending_clarification = Some(Some(payload.clone()));
                         (
                             TerminalState::WaitingForUserInput,
@@ -421,6 +475,11 @@ impl AssistantGraphRuntime {
                         TerminalState::OutOfDomain,
                         "out_of_domain",
                         ResponseBuilder::out_of_domain(),
+                    ),
+                    EvidenceDecision::BlockedByPolicy => (
+                        TerminalState::BlockedByPolicy,
+                        "unsafe_request",
+                        ResponseBuilder::policy_blocked("This request is blocked by policy."),
                     ),
                 }
             }
@@ -440,52 +499,56 @@ impl AssistantGraphRuntime {
             "recent_message_count": context.recent_messages.len(),
         });
         memory.structured_response = Some(response);
+        let transitions = vec![
+            GraphTransition {
+                from: GraphState::ReceiveMessage,
+                to: Some(GraphState::BuildContextWindow),
+                terminal: None,
+                reason: "message_received".into(),
+            },
+            GraphTransition {
+                from: GraphState::BuildContextWindow,
+                to: Some(GraphState::RouteIntent),
+                terminal: None,
+                reason: "context_built".into(),
+            },
+            GraphTransition {
+                from: GraphState::RouteIntent,
+                to: Some(GraphState::PlanRetrieval),
+                terminal: None,
+                reason: "intent_routed".into(),
+            },
+            GraphTransition {
+                from: GraphState::PlanRetrieval,
+                to: Some(GraphState::RetrieveKnowledge),
+                terminal: None,
+                reason: "retrieval_planned".into(),
+            },
+            GraphTransition {
+                from: GraphState::RetrieveKnowledge,
+                to: Some(GraphState::EvaluateEvidence),
+                terminal: None,
+                reason: "knowledge_retrieved".into(),
+            },
+            GraphTransition {
+                from: GraphState::EvaluateEvidence,
+                to: Some(GraphState::CompleteOrWait),
+                terminal: None,
+                reason: "evidence_evaluated".into(),
+            },
+            GraphTransition {
+                from: GraphState::CompleteOrWait,
+                to: None,
+                terminal: Some(terminal),
+                reason: reason.into(),
+            },
+        ];
+        AssistantGraphTopology::new()
+            .validate_sequence(&transitions)
+            .expect("assistant runtime produced illegal graph transitions");
         GraphRuntimeResult {
             memory,
-            transitions: vec![
-                GraphTransition {
-                    from: GraphState::ReceiveMessage,
-                    to: Some(GraphState::BuildContextWindow),
-                    terminal: None,
-                    reason: "message_received".into(),
-                },
-                GraphTransition {
-                    from: GraphState::BuildContextWindow,
-                    to: Some(GraphState::RouteIntent),
-                    terminal: None,
-                    reason: "context_built".into(),
-                },
-                GraphTransition {
-                    from: GraphState::RouteIntent,
-                    to: Some(GraphState::PlanRetrieval),
-                    terminal: None,
-                    reason: "intent_routed".into(),
-                },
-                GraphTransition {
-                    from: GraphState::PlanRetrieval,
-                    to: Some(GraphState::RetrieveKnowledge),
-                    terminal: None,
-                    reason: "retrieval_planned".into(),
-                },
-                GraphTransition {
-                    from: GraphState::RetrieveKnowledge,
-                    to: Some(GraphState::EvaluateEvidence),
-                    terminal: None,
-                    reason: "knowledge_retrieved".into(),
-                },
-                GraphTransition {
-                    from: GraphState::EvaluateEvidence,
-                    to: Some(GraphState::CompleteOrWait),
-                    terminal: None,
-                    reason: "evidence_evaluated".into(),
-                },
-                GraphTransition {
-                    from: GraphState::CompleteOrWait,
-                    to: None,
-                    terminal: Some(terminal),
-                    reason: reason.into(),
-                },
-            ],
+            transitions,
             pending_clarification,
         }
     }
@@ -508,6 +571,7 @@ fn pending_clarification_intent(context: &ContextWindow) -> AssistantIntent {
             ..Default::default()
         },
         context_reference: ContextReference::PendingClarification,
+        source: None,
         confidence: 1.0,
         reason: "exact pending clarification option".into(),
     }
@@ -534,74 +598,35 @@ fn first_standalone_limit(content: &str) -> Option<i64> {
         })
 }
 
-fn fallback_intent(message: &str) -> AssistantIntent {
-    let lower = message.to_lowercase();
-    let (domain, intent) = if lower.contains("loan") {
-        (
-            AssistantDomain::Loan,
-            AssistantIntentKind::UnsupportedInDomain,
-        )
-    } else if lower.contains("charge") || lower.contains("fee") {
-        (
-            AssistantDomain::Savings,
-            AssistantIntentKind::UnsupportedInDomain,
-        )
-    } else if lower.contains("tax") {
-        (
-            AssistantDomain::Tax,
-            AssistantIntentKind::UnsupportedInDomain,
-        )
-    } else if lower.contains("accounting")
-        || lower.contains("general ledger")
-        || lower.contains("journal")
-        || lower.contains("gl")
-    {
-        (
-            AssistantDomain::Accounting,
-            AssistantIntentKind::UnsupportedInDomain,
-        )
-    } else if lower.contains("client") || lower.contains("customer") || lower.contains("member") {
-        (AssistantDomain::Client, AssistantIntentKind::ReportRequest)
-    } else if lower.contains("office") || lower.contains("organization") || lower.contains("branch")
-    {
-        (
-            AssistantDomain::Organization,
-            AssistantIntentKind::ReportRequest,
-        )
-    } else {
-        (AssistantDomain::Savings, AssistantIntentKind::ReportRequest)
-    };
-    AssistantIntent {
-        intent,
-        domain,
-        language: AssistantLanguage::En,
-        entities: Vec::new(),
-        constraints: Default::default(),
-        context_reference: ContextReference::None,
-        confidence: 0.5,
-        reason: "semantic_router_unavailable_fallback".into(),
+fn merge_deterministic_extraction(
+    memory: &mut JobMemory,
+    intent: &mut AssistantIntent,
+    message: &str,
+) {
+    let extraction = extract_message_facts(message);
+    let conflicts = extraction.conflicts_with(intent);
+    if !conflicts.is_empty() {
+        memory.current_user_message_metadata["deterministic_extraction_conflicts"] =
+            serde_json::to_value(conflicts).unwrap_or_else(|_| json!([]));
+    }
+    extraction.merge_into(intent);
+    record_extraction_metadata(memory, &extraction);
+}
+
+fn record_source_extraction_metadata(memory: &mut JobMemory, payload: &ClarificationPayload) {
+    if let Some(source) = &payload.source_intent {
+        let extraction = extract_message_facts(&source.prompt);
+        record_extraction_metadata(memory, &extraction);
     }
 }
 
-fn fallback_capability_hint(message: &str, context: &ContextWindow) -> Option<String> {
-    let lower = message.to_lowercase();
-    let capability_id = if lower.contains("top client")
-        && lower.contains("savings account")
-        && lower.contains("count")
-    {
-        "client_top_n_by_savings_account_count"
-    } else {
-        return None;
-    };
-
-    if allow_all_capabilities(context)
-        || allowed_capabilities(context)
-            .iter()
-            .any(|allowed| allowed == capability_id)
-    {
-        Some(capability_id.into())
-    } else {
-        None
+fn record_extraction_metadata(
+    memory: &mut JobMemory,
+    extraction: &crate::assistant::DeterministicExtraction,
+) {
+    if !extraction.is_empty() {
+        memory.current_user_message_metadata["deterministic_extraction"] =
+            serde_json::to_value(extraction).unwrap_or_else(|_| json!({}));
     }
 }
 
@@ -636,16 +661,44 @@ async fn execute_selected_capability(
             execution_transitions(TerminalState::WaitingForUserInput, "missing_intent"),
         );
     };
-    let plan = match crate::assistant::plan_selected_capability(catalog, &capability_id, &intent) {
+    let deterministic_extraction = memory
+        .current_user_message_metadata
+        .get("deterministic_extraction")
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<crate::assistant::DeterministicExtraction>(value).ok()
+        });
+    let plan = match crate::assistant::plan_selected_capability_verified(
+        catalog,
+        &capability_id,
+        &intent,
+        deterministic_extraction.as_ref(),
+    ) {
         Ok(plan) => plan,
         Err(error) => {
+            let evidence =
+                serde_json::from_value::<Vec<Evidence>>(memory.retrieval_evidence.clone())
+                    .unwrap_or_default();
+            let payload = clarification_payload(
+                &RetrievalPlan::new(intent.reason.clone(), &intent, true, Vec::new()),
+                &evidence,
+                Some(source_intent_snapshot(&intent, &intent.reason)),
+            );
             return graph_result(
                 memory,
                 TerminalState::WaitingForUserInput,
                 "missing_execution_parameters",
-                ResponseBuilder::missing_parameter(&error.to_string()),
+                if evidence.is_empty() {
+                    ResponseBuilder::missing_parameter(&error.to_string())
+                } else {
+                    ResponseBuilder::clarification(payload.clone())
+                },
                 recent_message_count,
-                pending_clarification.clone(),
+                if evidence.is_empty() {
+                    pending_clarification.clone()
+                } else {
+                    Some(Some(payload))
+                },
                 execution_transitions(
                     TerminalState::WaitingForUserInput,
                     "missing_execution_parameters",
@@ -653,7 +706,10 @@ async fn execute_selected_capability(
             );
         }
     };
-    memory.selected_tool = Some(plan.query_id.clone());
+    let evidence_refs = evidence_refs(&memory.retrieval_evidence);
+    let tool_request = crate::assistant::tool_request_from_plan(&plan, evidence_refs);
+    memory.selected_tool = Some(tool_request.tool_name.clone());
+    memory.tool_params = json!(tool_request);
     let policy = crate::assistant::guard_selected_capability(client, catalog, &plan);
     memory.policy_decision = json!(policy);
     if policy.status != PolicyDecisionStatus::Allowed {
@@ -680,8 +736,10 @@ async fn execute_selected_capability(
     };
     match execute_plan(pool, catalog, &plan, &policy).await {
         Ok(result) => {
+            let tool_result =
+                crate::assistant::tool_result_from_execution(&tool_request, result.clone());
             let response =
-                ResponseBuilder::from_tool_result(&intent, &plan, &policy, &result, catalog);
+                ResponseBuilder::from_tool_result(&intent, &plan, &policy, &tool_result, catalog);
             let mut result_state = graph_result(
                 memory,
                 TerminalState::Completed,
@@ -691,8 +749,7 @@ async fn execute_selected_capability(
                 pending_clarification.clone(),
                 execution_transitions(TerminalState::Completed, "execution_completed"),
             );
-            result_state.memory.execution_summary =
-                json!({ "plan": plan, "policy": policy, "result": result });
+            result_state.memory.execution_summary = json!({ "plan": plan, "policy": policy, "tool_request": tool_request, "tool_result": tool_result, "result": result });
             result_state
         }
         Err(error) => {
@@ -726,7 +783,10 @@ fn graph_result(
         "recent_message_count": recent_message_count,
         "reason": reason,
     });
-    memory.structured_response = Some(response);
+    memory.structured_response = Some(finish(response));
+    AssistantGraphTopology::new()
+        .validate_sequence(&transitions)
+        .expect("assistant runtime produced illegal graph transitions");
     GraphRuntimeResult {
         memory,
         transitions,
@@ -734,25 +794,153 @@ fn graph_result(
     }
 }
 
-async fn retrieve_evidence(
-    plan: &RetrievalPlan,
-    llm: Option<&SharedLlmClient>,
-    knowledge: Option<&KnowledgeRepository>,
-) -> anyhow::Result<Vec<Evidence>> {
-    let (Some(llm), Some(knowledge)) = (llm, knowledge) else {
-        return Ok(Vec::new());
-    };
-    let embedding = llm.embed(&plan.query_text).await?.vector;
-    let capabilities = knowledge
-        .search_capabilities(
-            embedding.clone(),
-            plan.allow_all_capabilities,
-            &plan.allowed_capabilities,
-            5,
-        )
-        .await?;
-    let _context = knowledge.search_context(embedding, 5).await?;
-    Ok(capabilities.into_iter().map(Into::into).collect())
+fn deterministic_simple_response(
+    message: &str,
+) -> Option<(AssistantIntentKind, AssistantResponse)> {
+    let normalized = message
+        .trim()
+        .trim_matches(|c: char| c.is_ascii_punctuation())
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "hi" | "hello" | "hey" => {
+            Some((AssistantIntentKind::Greeting, ResponseBuilder::greeting()))
+        }
+        "help" | "bisa apa" => Some((AssistantIntentKind::Help, ResponseBuilder::help())),
+        _ => None,
+    }
+}
+
+fn deterministic_intent(intent: AssistantIntentKind, message: &str) -> AssistantIntent {
+    AssistantIntent {
+        intent,
+        domain: AssistantDomain::Unknown,
+        language: AssistantLanguage::En,
+        entities: Vec::new(),
+        constraints: AssistantConstraints::default(),
+        context_reference: ContextReference::None,
+        source: None,
+        confidence: 1.0,
+        reason: format!("deterministic simple intent: {message}"),
+    }
+}
+
+fn evidence_refs(evidence: &serde_json::Value) -> Vec<String> {
+    evidence
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get("capability_id")
+                .or_else(|| item.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn resolve_pending_clarification(
+    input: &RuntimeUserInput,
+    payload: &ClarificationPayload,
+    memory: &JobMemory,
+    context: &ContextWindow,
+) -> Option<ClarificationOutcome> {
+    input
+        .selected_option_id
+        .as_deref()
+        .map(|id| {
+            if id.eq_ignore_ascii_case(OTHER_CLARIFICATION_OPTION_ID) {
+                ClarificationOutcome::FreeFormOther {
+                    text: String::new(),
+                    confidence: 1.0,
+                }
+            } else if clarification_candidate_allowed(id, payload, memory, context) {
+                ClarificationOutcome::SelectedOption {
+                    option_id: id.to_string(),
+                    confidence: 1.0,
+                }
+            } else {
+                ClarificationOutcome::Unresolved {
+                    reason: "selected option is not available".into(),
+                }
+            }
+        })
+        .or_else(|| ClarificationResolver::resolve_exact(&input.source_message, payload))
+}
+
+fn clarification_candidate_allowed(
+    id: &str,
+    payload: &ClarificationPayload,
+    _memory: &JobMemory,
+    context: &ContextWindow,
+) -> bool {
+    let is_candidate = payload.options.iter().any(|option| option.id == id);
+    if !is_candidate {
+        return false;
+    }
+    let has_scope = context.client_scope.get("allow_all_capabilities").is_some()
+        || context.client_scope.get("capabilities").is_some();
+    if !has_scope {
+        return true;
+    }
+    allow_all_capabilities(context)
+        || allowed_capabilities(context)
+            .iter()
+            .any(|capability| capability == id)
+}
+
+fn source_intent_snapshot(intent: &AssistantIntent, prompt: &str) -> SourceIntentSnapshot {
+    SourceIntentSnapshot {
+        prompt: prompt.into(),
+        normalized_prompt: Some(prompt.trim().to_lowercase()),
+        intent: intent.intent.clone(),
+        domain: intent.domain.clone(),
+        entities: intent.entities.clone(),
+        constraints: intent.constraints.clone(),
+        context_reference: intent.context_reference.clone(),
+        confidence: intent.confidence,
+        reason: intent.reason.clone(),
+    }
+}
+
+fn intent_from_source(payload: &ClarificationPayload, context: &ContextWindow) -> AssistantIntent {
+    if let Some(source) = &payload.source_intent {
+        let mut intent = AssistantIntent {
+            intent: source.intent.clone(),
+            domain: source.domain.clone(),
+            language: AssistantLanguage::En,
+            entities: source.entities.clone(),
+            constraints: source.constraints.clone(),
+            context_reference: ContextReference::PendingClarification,
+            source: Some(source.clone()),
+            confidence: source.confidence,
+            reason: format!(
+                "clarification resolved from source intent: {}",
+                source.reason
+            ),
+        };
+        if matches!(intent.constraints.quantity, None | Some(Quantity::Default)) {
+            intent.constraints.quantity = pending_clarification_quantity(context);
+        }
+        let extraction = extract_message_facts(&source.prompt);
+        extraction.merge_into(&mut intent);
+        return intent;
+    }
+    pending_clarification_intent(context)
+}
+
+fn clarification_audit(
+    source: &str,
+    option_id: &str,
+    input: &RuntimeUserInput,
+    payload: &ClarificationPayload,
+) -> serde_json::Value {
+    json!({
+        "clarification_outcome": "selected_option",
+        "option_id": option_id,
+        "source_message": input.source_message,
+        "source": source,
+        "source_intent": payload.source_intent,
+    })
 }
 
 fn allowed_capabilities(context: &ContextWindow) -> Vec<String> {
@@ -874,7 +1062,11 @@ fn execution_transitions(terminal: TerminalState, reason: &str) -> Vec<GraphTran
     ]
 }
 
-fn clarification_payload(plan: &RetrievalPlan, evidence: &[Evidence]) -> ClarificationPayload {
+fn clarification_payload(
+    plan: &RetrievalPlan,
+    evidence: &[Evidence],
+    source_intent: Option<SourceIntentSnapshot>,
+) -> ClarificationPayload {
     let mut options: Vec<ClarificationOption> = evidence
         .iter()
         .take(3)
@@ -901,6 +1093,8 @@ fn clarification_payload(plan: &RetrievalPlan, evidence: &[Evidence]) -> Clarifi
         question: "Which report should I use?".into(),
         options,
         attempt: 1,
+        source_intent,
+        allow_free_text: true,
     }
 }
 
@@ -1022,16 +1216,58 @@ mod tests {
         knowledge::model::KnowledgeCatalog,
     };
 
+    fn empty_memory() -> JobMemory {
+        JobMemory {
+            job_id: Uuid::nil(),
+            graph_state: "receive_message".into(),
+            terminal_state: None,
+            current_user_message_metadata: json!({}),
+            intent: None,
+            source_intent: None,
+            retrieval_plan: json!({}),
+            retrieval_evidence: json!({}),
+            evidence_decision: json!({}),
+            selected_capability: None,
+            selected_tool: None,
+            tool_params: json!({}),
+            policy_decision: json!({}),
+            execution_summary: json!({}),
+            structured_response: None,
+            warnings: json!([]),
+            revision: 0,
+        }
+    }
+
+    fn empty_context() -> ContextWindow {
+        ContextWindow {
+            summary: None,
+            active_domain: None,
+            selected_entities: json!({}),
+            recent_messages: Vec::new(),
+            relevant_jobs: Vec::new(),
+            pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
+            client_scope: json!({}),
+            warnings: Vec::new(),
+        }
+    }
+
     #[test]
     fn traverses_three_state_skeleton() {
         let memory = JobMemory {
             job_id: Uuid::nil(),
             graph_state: "receive_message".into(),
             terminal_state: None,
+            current_user_message_metadata: json!({}),
             intent: None,
+            source_intent: None,
+            retrieval_plan: json!({}),
             retrieval_evidence: json!({}),
+            evidence_decision: json!({}),
             selected_capability: None,
             selected_tool: None,
+            tool_params: json!({}),
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
@@ -1047,6 +1283,8 @@ mod tests {
                 recent_messages: Vec::new(),
                 relevant_jobs: Vec::new(),
                 pending_clarification: None,
+                source_intent: None,
+                source_snippets: Vec::new(),
                 client_scope: json!({}),
                 warnings: Vec::new(),
             },
@@ -1072,6 +1310,8 @@ mod tests {
             }],
             relevant_jobs: Vec::new(),
             pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
             client_scope: json!({}),
             warnings: Vec::new(),
         });
@@ -1082,12 +1322,183 @@ mod tests {
         );
     }
 
+    #[test]
+    fn preserves_limit_when_source_intent_quantity_defaults() {
+        let context = ContextWindow {
+            summary: None,
+            active_domain: Some("client".into()),
+            selected_entities: json!({}),
+            recent_messages: vec![crate::assistant::ContextMessage {
+                role: "user".into(),
+                content: "show 10 clients with the most savings accounts".into(),
+                created_at: None,
+            }],
+            relevant_jobs: Vec::new(),
+            pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
+            client_scope: json!({}),
+            warnings: Vec::new(),
+        };
+        let payload = ClarificationPayload {
+            question: "Which report?".into(),
+            options: Vec::new(),
+            attempt: 1,
+            source_intent: Some(SourceIntentSnapshot {
+                prompt: "show 10 clients with the most savings accounts".into(),
+                normalized_prompt: None,
+                intent: AssistantIntentKind::ReportRequest,
+                domain: AssistantDomain::Client,
+                entities: Vec::new(),
+                constraints: crate::assistant::AssistantConstraints {
+                    quantity: Some(Quantity::Default),
+                    ..Default::default()
+                },
+                context_reference: ContextReference::None,
+                confidence: 1.0,
+                reason: "test".into(),
+            }),
+            allow_free_text: false,
+        };
+
+        let intent = intent_from_source(&payload, &context);
+
+        assert_eq!(
+            intent.constraints.quantity,
+            Some(Quantity::TopN { value: 10 })
+        );
+    }
+
+    #[test]
+    fn preserves_limit_from_direct_report_intent() {
+        let mut memory = empty_memory();
+        let mut intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain: AssistantDomain::Client,
+            language: AssistantLanguage::En,
+            entities: Vec::new(),
+            constraints: Default::default(),
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 1.0,
+            reason: "test".into(),
+        };
+
+        merge_deterministic_extraction(
+            &mut memory,
+            &mut intent,
+            "show 10 clients with the most savings accounts",
+        );
+        let plan = RetrievalPlan::new(
+            "show 10 clients with the most savings accounts",
+            &intent,
+            true,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            intent.constraints.quantity,
+            Some(Quantity::TopN { value: 10 })
+        );
+        assert_eq!(
+            plan.constraints["quantity"],
+            json!({ "mode": "top_n", "value": 10 })
+        );
+        assert_eq!(
+            intent.constraints.metric.as_deref(),
+            Some("savings_account_count")
+        );
+        assert!(
+            intent
+                .entities
+                .iter()
+                .any(|entity| entity.entity_type == crate::assistant::AssistantEntityType::Metric)
+        );
+        assert!(memory.current_user_message_metadata["deterministic_extraction"].is_object());
+    }
+
+    #[test]
+    fn preserves_explicit_quantity_from_direct_report_intent() {
+        let mut memory = empty_memory();
+        let mut intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain: AssistantDomain::Client,
+            language: AssistantLanguage::En,
+            entities: Vec::new(),
+            constraints: crate::assistant::AssistantConstraints {
+                quantity: Some(Quantity::Limit { value: 5 }),
+                ..Default::default()
+            },
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 1.0,
+            reason: "test".into(),
+        };
+
+        merge_deterministic_extraction(
+            &mut memory,
+            &mut intent,
+            "show 10 clients with the most savings accounts",
+        );
+
+        assert_eq!(
+            intent.constraints.quantity,
+            Some(Quantity::TopN { value: 10 })
+        );
+    }
+
+    #[test]
+    fn records_deterministic_conflicts_before_merge() {
+        let mut memory = empty_memory();
+        let mut intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain: AssistantDomain::Client,
+            language: AssistantLanguage::En,
+            entities: Vec::new(),
+            constraints: crate::assistant::AssistantConstraints {
+                quantity: Some(Quantity::Limit { value: 20 }),
+                currency_code: Some("USD".into()),
+                ..Default::default()
+            },
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 1.0,
+            reason: "test".into(),
+        };
+
+        merge_deterministic_extraction(&mut memory, &mut intent, "show 10 clients in IDR");
+
+        assert_eq!(
+            intent.constraints.quantity,
+            Some(Quantity::Limit { value: 10 })
+        );
+        assert_eq!(intent.constraints.currency_code.as_deref(), Some("IDR"));
+        assert_eq!(
+            memory.current_user_message_metadata["deterministic_extraction_conflicts"],
+            json!([
+                {
+                    "field": "limit",
+                    "llm_value": { "mode": "limit", "value": 20 },
+                    "trusted_value": { "mode": "limit", "value": 10 },
+                    "reason": "deterministic_extraction_preferred"
+                },
+                {
+                    "field": "currency_code",
+                    "llm_value": "USD",
+                    "trusted_value": "IDR",
+                    "reason": "deterministic_extraction_preferred"
+                }
+            ])
+        );
+    }
+
     struct FakeLlm;
 
     #[async_trait]
     impl LlmClient for FakeLlm {
         async fn structured_value(
             &self,
+            _purpose: crate::assistant::llm::LlmPurpose,
             _system: &str,
             _user: &str,
             _schema: serde_json::Value,
@@ -1111,7 +1522,11 @@ mod tests {
             })
         }
 
-        async fn embed(&self, _text: &str) -> Result<EmbeddingResponse> {
+        async fn embed(
+            &self,
+            _purpose: crate::assistant::llm::LlmPurpose,
+            _text: &str,
+        ) -> Result<EmbeddingResponse> {
             Ok(EmbeddingResponse {
                 vector: vec![1.0, 0.0],
                 usage: TokenUsage::default(),
@@ -1124,15 +1539,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_retrieval_evidence_without_repository_clarifies() {
+    async fn route_retrieval_evidence_without_repository_is_unsupported_without_catalog_evidence() {
         let memory = JobMemory {
             job_id: Uuid::nil(),
             graph_state: "receive_message".into(),
             terminal_state: None,
+            current_user_message_metadata: json!({}),
             intent: None,
-            retrieval_evidence: json!({}),
+            source_intent: None,
+            retrieval_plan: json!({}),
+            retrieval_evidence: json!([{ "capability_id": "client_top_n_by_savings_balance" }]),
+            evidence_decision: json!({}),
             selected_capability: None,
             selected_tool: None,
+            tool_params: json!({}),
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
@@ -1146,6 +1566,8 @@ mod tests {
             recent_messages: Vec::new(),
             relevant_jobs: Vec::new(),
             pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
             client_scope: json!({ "capabilities": ["savings_deposit_total"] }),
             warnings: Vec::new(),
         };
@@ -1180,22 +1602,27 @@ mod tests {
 
         assert_eq!(
             result.memory.terminal_state,
-            Some(TerminalState::WaitingForUserInput)
+            Some(TerminalState::Unsupported)
         );
         assert_eq!(result.transitions.len(), 7);
         assert_eq!(result.memory.graph_state, "complete_or_wait");
     }
 
     #[tokio::test]
-    async fn semantic_router_unavailable_uses_actionable_clarification() {
+    async fn semantic_router_unavailable_fails_closed() {
         let memory = JobMemory {
             job_id: Uuid::nil(),
             graph_state: "receive_message".into(),
             terminal_state: None,
+            current_user_message_metadata: json!({}),
             intent: None,
+            source_intent: None,
+            retrieval_plan: json!({}),
             retrieval_evidence: json!({}),
+            evidence_decision: json!({}),
             selected_capability: None,
             selected_tool: None,
+            tool_params: json!({}),
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
@@ -1209,6 +1636,8 @@ mod tests {
             recent_messages: Vec::new(),
             relevant_jobs: Vec::new(),
             pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
             client_scope: json!({}),
             warnings: Vec::new(),
         };
@@ -1228,22 +1657,34 @@ mod tests {
 
         assert_eq!(
             result.memory.terminal_state,
-            Some(TerminalState::WaitingForUserInput)
+            Some(TerminalState::FailedOperational)
         );
-        assert_eq!(
-            result
-                .pending_clarification
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map(|payload| payload
-                    .options
-                    .iter()
-                    .any(|option| option.id == "client_top_n_by_savings_account_count")),
-            Some(true)
-        );
+        assert_eq!(result.pending_clarification, None);
         assert_eq!(
             result.memory.structured_response.unwrap().response_type,
-            AssistantResponseType::Clarification
+            AssistantResponseType::Error
+        );
+    }
+
+    #[tokio::test]
+    async fn greeting_completes_without_router() {
+        let result = AssistantGraphRuntime::run_with_router(
+            empty_memory(),
+            empty_context(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "Hi",
+        )
+        .await;
+
+        assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
+        assert_eq!(
+            result.memory.structured_response.unwrap().title.as_deref(),
+            Some("Hello")
         );
     }
 
@@ -1253,10 +1694,136 @@ mod tests {
             job_id: Uuid::nil(),
             graph_state: "receive_message".into(),
             terminal_state: None,
+            current_user_message_metadata: json!({}),
             intent: None,
-            retrieval_evidence: json!({}),
+            source_intent: None,
+            retrieval_plan: json!({}),
+            retrieval_evidence: json!([{ "capability_id": "client_top_n_by_savings_balance" }]),
+            evidence_decision: json!({}),
             selected_capability: None,
             selected_tool: None,
+            tool_params: json!({}),
+            policy_decision: json!({}),
+            execution_summary: json!({}),
+            structured_response: None,
+            warnings: json!([]),
+            revision: 0,
+        };
+        let context = ContextWindow {
+            summary: None,
+            active_domain: Some("client".into()),
+            selected_entities: json!({}),
+            recent_messages: Vec::new(),
+            relevant_jobs: Vec::new(),
+            pending_clarification: Some(ClarificationPayload {
+                question: "Which report?".into(),
+                options: vec![
+                    ClarificationOption {
+                        id: "client_top_n_by_deposit_volume".into(),
+                        label: "Top clients by deposit volume".into(),
+                        description: None,
+                    },
+                    ClarificationOption {
+                        id: "client_top_n_by_savings_balance".into(),
+                        label: "Top clients by savings balance".into(),
+                        description: None,
+                    },
+                ],
+                attempt: 1,
+                source_intent: Some(SourceIntentSnapshot {
+                    prompt: "show 10 clients in USD".into(),
+                    normalized_prompt: None,
+                    intent: AssistantIntentKind::ReportRequest,
+                    domain: AssistantDomain::Client,
+                    entities: vec![crate::assistant::AssistantEntity {
+                        entity_type: crate::assistant::AssistantEntityType::Currency,
+                        value: "USD".into(),
+                        canonical: Some("USD".into()),
+                        confidence: Some(1.0),
+                    }],
+                    constraints: crate::assistant::AssistantConstraints {
+                        quantity: Some(Quantity::TopN { value: 10 }),
+                        currency_code: Some("USD".into()),
+                        ..Default::default()
+                    },
+                    context_reference: ContextReference::None,
+                    confidence: 0.9,
+                    reason: "test".into(),
+                }),
+                allow_free_text: true,
+            }),
+            source_intent: None,
+            source_snippets: Vec::new(),
+            client_scope: json!({}),
+            warnings: Vec::new(),
+        };
+
+        let result = AssistantGraphRuntime::run_with_router(
+            memory,
+            context,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            RuntimeUserInput {
+                message: "client_top_n_by_savings_balance".into(),
+                source_message: "please use the balance option".into(),
+                selected_option_id: Some("client_top_n_by_savings_balance".into()),
+            },
+        )
+        .await;
+
+        assert_eq!(
+            result.memory.selected_capability.as_deref(),
+            Some("client_top_n_by_savings_balance")
+        );
+        assert_eq!(result.pending_clarification, Some(None));
+        assert_eq!(
+            result.memory.intent.as_ref().unwrap().constraints.quantity,
+            Some(Quantity::TopN { value: 10 })
+        );
+        assert_eq!(
+            result
+                .memory
+                .intent
+                .as_ref()
+                .unwrap()
+                .constraints
+                .currency_code
+                .as_deref(),
+            Some("USD")
+        );
+        assert_eq!(
+            result.memory.retrieval_evidence["source_message"],
+            "please use the balance option"
+        );
+        assert_eq!(
+            result.memory.retrieval_evidence["source"],
+            "explicit_option_id"
+        );
+        assert_ne!(
+            result.memory.structured_response.unwrap().response_type,
+            AssistantResponseType::Clarification
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_pending_option_id_is_rejected_before_router() {
+        let memory = JobMemory {
+            job_id: Uuid::nil(),
+            graph_state: "receive_message".into(),
+            terminal_state: None,
+            current_user_message_metadata: json!({}),
+            intent: None,
+            source_intent: None,
+            retrieval_plan: json!({}),
+            retrieval_evidence: json!([{ "capability_id": "client_top_n_by_savings_balance" }]),
+            evidence_decision: json!({}),
+            selected_capability: None,
+            selected_tool: None,
+            tool_params: json!({}),
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
@@ -1272,13 +1839,17 @@ mod tests {
             pending_clarification: Some(ClarificationPayload {
                 question: "Which report?".into(),
                 options: vec![ClarificationOption {
-                    id: "client_top_n_by_savings_balance".into(),
-                    label: "Top clients by savings balance".into(),
+                    id: "client_top_n_by_deposit_volume".into(),
+                    label: "Top clients by deposit volume".into(),
                     description: None,
                 }],
                 attempt: 1,
+                source_intent: None,
+                allow_free_text: true,
             }),
-            client_scope: json!({}),
+            source_intent: None,
+            source_snippets: Vec::new(),
+            client_scope: json!({ "allow_all_capabilities": true }),
             warnings: Vec::new(),
         };
 
@@ -1291,24 +1862,29 @@ mod tests {
             None,
             None,
             None,
-            "client_top_n_by_savings_balance",
+            RuntimeUserInput {
+                message: "client_summary".into(),
+                source_message: "client summary".into(),
+                selected_option_id: Some("client_summary".into()),
+            },
         )
         .await;
 
+        assert_eq!(result.memory.selected_capability, None);
         assert_eq!(
-            result.memory.selected_capability.as_deref(),
-            Some("client_top_n_by_savings_balance")
+            result.memory.terminal_state,
+            Some(TerminalState::WaitingForUserInput)
         );
-        assert_eq!(result.pending_clarification, Some(None));
-        assert_ne!(
-            result.memory.structured_response.unwrap().response_type,
-            AssistantResponseType::Clarification
+        assert_eq!(result.memory.graph_state, "complete_or_wait");
+        assert_eq!(
+            result.memory.retrieval_evidence["clarification_outcome"],
+            "unresolved"
         );
     }
 
     #[test]
     fn clarification_payload_always_includes_others_option() {
-        let payload = clarification_payload(&test_plan(), &[]);
+        let payload = clarification_payload(&test_plan(), &[], None);
         assert!(payload.options.iter().any(|option| {
             option.id == OTHER_CLARIFICATION_OPTION_ID && option.label == "Others"
         }));
@@ -1316,7 +1892,7 @@ mod tests {
 
     #[test]
     fn clarification_payload_empty_evidence_uses_real_capabilities() {
-        let payload = clarification_payload(&test_plan(), &[]);
+        let payload = clarification_payload(&test_plan(), &[], None);
 
         assert!(
             payload
@@ -1332,61 +1908,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn fallback_unsupported_domains_do_not_clarify_as_savings() {
-        for (message, domain) in [
-            ("show loan portfolio report", AssistantDomain::Loan),
-            ("show savings charges and fees", AssistantDomain::Savings),
-            ("show tax report", AssistantDomain::Tax),
-        ] {
-            let result = AssistantGraphRuntime::run_with_router(
-                JobMemory {
-                    job_id: Uuid::nil(),
-                    graph_state: "receive_message".into(),
-                    terminal_state: None,
-                    intent: None,
-                    retrieval_evidence: json!({}),
-                    selected_capability: None,
-                    selected_tool: None,
-                    policy_decision: json!({}),
-                    execution_summary: json!({}),
-                    structured_response: None,
-                    warnings: json!([]),
-                    revision: 0,
-                },
-                ContextWindow {
-                    summary: None,
-                    active_domain: None,
-                    selected_entities: json!({}),
-                    recent_messages: Vec::new(),
-                    relevant_jobs: Vec::new(),
-                    pending_clarification: None,
-                    client_scope: json!({}),
-                    warnings: Vec::new(),
-                },
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                message,
-            )
-            .await;
-
-            assert_eq!(
-                result.memory.terminal_state,
-                Some(TerminalState::Unsupported)
-            );
-            assert_eq!(result.memory.intent.as_ref().unwrap().domain, domain);
-            assert_eq!(result.pending_clarification, None);
-            assert_eq!(
-                result.memory.structured_response.unwrap().response_type,
-                AssistantResponseType::Unsupported
-            );
-        }
-    }
-
     fn test_plan() -> RetrievalPlan {
         RetrievalPlan::new(
             "show savings",
@@ -1397,6 +1918,7 @@ mod tests {
                 entities: Vec::new(),
                 constraints: Default::default(),
                 context_reference: ContextReference::None,
+                source: None,
                 confidence: 0.9,
                 reason: "test".into(),
             },
@@ -1414,6 +1936,8 @@ mod tests {
             recent_messages: Vec::new(),
             relevant_jobs: Vec::new(),
             pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
             client_scope: json!({ "allow_all_capabilities": true, "capabilities": [] }),
             warnings: Vec::new(),
         };

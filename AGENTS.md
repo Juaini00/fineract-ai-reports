@@ -46,7 +46,7 @@ Knowledge stays as YAML under `knowledge/`, SQL under `queries/`, schema changes
 - Clarification continues the same job via `POST /chat/jobs/{job_id}/responses`. Never spawn a new job for clarification.
 - Office scope enforced inside approved SQL via bound `office_ids` parameter — never post-filter in Rust.
 - API keys: raw key returned once, DB stores `key_hash` + `key_prefix` only. `POST /auth/api-keys` gated by `AUTH_BOOTSTRAP_ADMIN_TOKEN`.
-- MVP language: English only. No Indonesian classifier / clarification / template text.
+- Product language policy: English only until multilingual extraction, classification, and templates are implemented and tested. No Indonesian classifier / clarification / template text yet.
 - Schema changes only via `migrations/*.sql`. App startup must never create/alter tables. `APP_DATABASE_MIGRATE_ON_STARTUP=true` is local/dev only.
 
 ## Multi-agent workflow

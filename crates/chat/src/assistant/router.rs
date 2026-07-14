@@ -40,7 +40,7 @@ impl SemanticRouter {
         }
         let message_vector = self
             .llm
-            .embed(message)
+            .embed(llm::LlmPurpose::RouteEmbedding, message)
             .await
             .context("embed route message")?
             .vector;
@@ -48,7 +48,7 @@ impl SemanticRouter {
         for candidate in &self.candidates {
             let candidate_vector = self
                 .llm
-                .embed(&candidate.candidate_text)
+                .embed(llm::LlmPurpose::RouteEmbedding, &candidate.candidate_text)
                 .await
                 .with_context(|| format!("embed route candidate {}", candidate.id))?
                 .vector;
@@ -80,9 +80,14 @@ impl SemanticRouter {
             ]
         })
         .to_string();
-        let response = llm::structured::<AssistantIntent>(self.llm.as_ref(), ROUTER_SYSTEM, &user)
-            .await
-            .context("route intent with structured LLM")?;
+        let response = llm::structured::<AssistantIntent>(
+            self.llm.as_ref(),
+            llm::LlmPurpose::RouteIntent,
+            ROUTER_SYSTEM,
+            &user,
+        )
+        .await
+        .context("route intent with structured LLM")?;
         Ok(response.value)
     }
 }
@@ -138,6 +143,7 @@ mod tests {
     impl LlmClient for FakeLlm {
         async fn structured_value(
             &self,
+            _purpose: crate::assistant::llm::LlmPurpose,
             _system: &str,
             user: &str,
             _schema: serde_json::Value,
@@ -170,7 +176,11 @@ mod tests {
             })
         }
 
-        async fn embed(&self, text: &str) -> Result<EmbeddingResponse> {
+        async fn embed(
+            &self,
+            _purpose: crate::assistant::llm::LlmPurpose,
+            text: &str,
+        ) -> Result<EmbeddingResponse> {
             Ok(EmbeddingResponse {
                 vector: fake_embedding(text),
                 usage: TokenUsage::default(),
@@ -215,6 +225,8 @@ mod tests {
             recent_messages: Vec::new(),
             relevant_jobs: Vec::new(),
             pending_clarification: None,
+            source_intent: None,
+            source_snippets: Vec::new(),
             client_scope: json!({}),
             warnings: Vec::new(),
         };
