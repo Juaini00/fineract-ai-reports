@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -30,12 +30,22 @@ impl ContextBuilder {
         }
     }
 
-    pub async fn build(&self, session_id: Uuid, client: &ClientContext) -> Result<ContextWindow> {
-        let memory = self.sessions.get_or_create(session_id).await?;
-        let recent = self
-            .messages
-            .list_recent_for_session(session_id, self.policy.max_recent_messages as i64)
+    pub async fn build(
+        &self,
+        session_id: Uuid,
+        client: &PrincipalContext,
+    ) -> Result<ContextWindow> {
+        let memory = self
+            .sessions
+            .get_or_create(session_id, client.user_id)
             .await?;
+        let mut recent = self
+            .messages
+            .list_for_user(session_id, client.user_id, false)
+            .await?
+            .unwrap_or_default();
+        let keep_from = recent.len().saturating_sub(self.policy.max_recent_messages);
+        recent.drain(..keep_from);
         let mut messages: Vec<ContextMessage> = recent
             .into_iter()
             .map(|message| ContextMessage {
@@ -48,7 +58,11 @@ impl ContextBuilder {
             serde_json::from_value(memory.relevant_jobs.clone()).unwrap_or_default();
         relevant_jobs.extend(
             self.sessions
-                .recent_completed_job_summaries(session_id, self.policy.max_relevant_jobs as i64)
+                .recent_completed_job_summaries(
+                    session_id,
+                    client.user_id,
+                    self.policy.max_relevant_jobs as i64,
+                )
                 .await?,
         );
         relevant_jobs.truncate(self.policy.max_relevant_jobs);
@@ -60,11 +74,11 @@ impl ContextBuilder {
             .transpose()?
             .or(memory.pending_clarification_source_intent.clone());
         let client_scope = json!({
-            "api_key_id": client.api_key_id,
-            "office_ids": client.allowed_office_ids,
-            "capabilities": client.allowed_capabilities,
-            "allow_all_offices": client.allow_all_offices,
-            "allow_all_capabilities": client.allow_all_capabilities,
+            "user_id": client.user_id,
+            "role": client.role,
+            "legacy_api_key_id": client.legacy_api_key_id,
+            "office_ids": client.office_ids,
+            "capabilities": client.capability_ids,
             "can_view_pii": client.can_view_pii,
             "active_domain": memory.active_domain.clone(),
             "selected_entities": memory.entities.clone(),

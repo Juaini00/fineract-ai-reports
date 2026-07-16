@@ -7,7 +7,8 @@ use uuid::Uuid;
 pub struct LlmTrace {
     pub job_id: Option<Uuid>,
     pub session_id: Option<Uuid>,
-    pub api_key_id: Uuid,
+    pub user_id: Uuid,
+    pub legacy_api_key_id: Option<Uuid>,
     pub graph_state: Option<String>,
     pub purpose: String,
     pub provider: String,
@@ -25,7 +26,8 @@ pub struct LlmTraceRecord {
     pub id: Uuid,
     pub job_id: Option<Uuid>,
     pub session_id: Option<Uuid>,
-    pub api_key_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub legacy_api_key_id: Option<Uuid>,
     pub graph_state: Option<String>,
     pub purpose: String,
     pub provider: String,
@@ -54,16 +56,17 @@ impl LlmTraceRepository {
         sqlx::query(
             r#"
             INSERT INTO assistant_llm_traces (
-                id, job_id, session_id, api_key_id, graph_state, purpose, provider, model,
+                id, job_id, session_id, user_id, api_key_id, graph_state, purpose, provider, model,
                 input_tokens, output_tokens, total_tokens, cost_usd, latency_ms, status, error_kind
             )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
             "#,
         )
         .bind(Uuid::new_v4())
         .bind(trace.job_id)
         .bind(trace.session_id)
-        .bind(trace.api_key_id)
+        .bind(trace.user_id)
+        .bind(trace.legacy_api_key_id)
         .bind(&trace.graph_state)
         .bind(&trace.purpose)
         .bind(&trace.provider)
@@ -92,7 +95,8 @@ impl LlmTraceRepository {
     ) -> Result<Vec<LlmTraceRecord>> {
         Ok(sqlx::query_as::<_, LlmTraceRecord>(
             r#"
-            SELECT id, job_id, session_id, api_key_id, graph_state, purpose, provider, model,
+            SELECT id, job_id, session_id, user_id, api_key_id AS legacy_api_key_id,
+                graph_state, purpose, provider, model,
                 input_tokens, output_tokens, total_tokens, cost_usd, latency_ms, status, error_kind
             FROM assistant_llm_traces
             WHERE job_id = $1

@@ -37,7 +37,8 @@ async fn main() -> anyhow::Result<()> {
         Some(LlmTraceContext {
             job_id: None,
             session_id: None,
-            api_key_id: API_KEY_ID,
+            user_id: API_KEY_ID,
+            legacy_api_key_id: None,
             graph_state: None,
         }),
     ));

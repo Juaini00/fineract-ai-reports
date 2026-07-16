@@ -11,6 +11,12 @@ query_id: client.top_n_by_savings_balance
 metrics:
   - savings.balance_total
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: client
+  grouping: none
+  output: ranking
+  pii: client_identity
 examples:
   - Top 10 clients by savings balance.
   - Which clients hold the highest savings balances?

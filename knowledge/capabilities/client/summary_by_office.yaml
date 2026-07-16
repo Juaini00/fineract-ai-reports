@@ -11,6 +11,12 @@ query_id: client.summary_by_office
 metrics:
   - client.lifecycle_count
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: office
+  grouping: office
+  output: ranking
+  pii: none
 examples:
   - Show client breakdown per office.
   - How many active clients does each office have?

@@ -20,21 +20,21 @@ struct TestShape {
     ok: bool,
 }
 
-async fn insert_job(app: &common::TestApp, api_key_id: Uuid) -> (Uuid, Uuid) {
+async fn insert_job(app: &common::TestApp, user_id: Uuid) -> (Uuid, Uuid) {
     let session_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO chat_sessions (id, api_key_id, status) VALUES ($1,$2,'active')")
+    sqlx::query("INSERT INTO chat_sessions (id, user_id, status) VALUES ($1,$2,'active')")
         .bind(session_id)
-        .bind(api_key_id)
+        .bind(user_id)
         .execute(&app.app_pool)
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO chat_jobs (id, session_id, api_key_id, status, current_step, message, expires_at) VALUES ($1,$2,$3,'running','route_intent','test', now() + interval '1 hour')",
+        "INSERT INTO chat_jobs (id, session_id, user_id, status, current_step, message, expires_at) VALUES ($1,$2,$3,'running','route_intent','test', now() + interval '1 hour')",
     )
     .bind(job_id)
     .bind(session_id)
-    .bind(api_key_id)
+    .bind(user_id)
     .execute(&app.app_pool)
     .await
     .unwrap();
@@ -44,7 +44,7 @@ async fn insert_job(app: &common::TestApp, api_key_id: Uuid) -> (Uuid, Uuid) {
 fn traced(
     fake: Arc<FakeLlmClient>,
     repo: LlmTraceRepository,
-    api_key_id: Uuid,
+    user_id: Uuid,
     session_id: Uuid,
     job_id: Uuid,
 ) -> TracedLlmClient {
@@ -54,7 +54,8 @@ fn traced(
         Some(LlmTraceContext {
             job_id: Some(job_id),
             session_id: Some(session_id),
-            api_key_id,
+            user_id,
+            legacy_api_key_id: None,
             graph_state: Some("test".into()),
         }),
     )
@@ -63,8 +64,8 @@ fn traced(
 #[tokio::test]
 async fn traced_client_records_structured_embed_errors_and_costs() {
     let app = spawn_app().await;
-    let key = app.provision_wildcard_api_key(false).await;
-    let (session_id, job_id) = insert_job(&app, key.id).await;
+    let user_id = app.admin_user_id().await;
+    let (session_id, job_id) = insert_job(&app, user_id).await;
     let repo = LlmTraceRepository::new(app.app_pool.clone());
 
     let fake = Arc::new(FakeLlmClient::new("openai", "gpt-4o-mini"));
@@ -73,7 +74,7 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
     fake.push_structured_error("malformed structured LLM JSON: nope");
     fake.push_structured_error("request timeout");
     fake.push_embedding_error("provider exploded");
-    let client = traced(fake, repo.clone(), key.id, session_id, job_id);
+    let client = traced(fake, repo.clone(), user_id, session_id, job_id);
 
     client
         .structured_value(LlmPurpose::RouteIntent, "system", "user", json!({}))
@@ -109,6 +110,8 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
 
     let traces = repo.list_for_job(job_id).await.unwrap();
     assert_eq!(traces.len(), 5);
+    assert!(traces.iter().all(|trace| trace.user_id == Some(user_id)));
+    assert!(traces.iter().all(|trace| trace.legacy_api_key_id.is_none()));
     assert_eq!(
         repo.list_for_job_filtered(job_id, Some("route_intent"), Some("ok"))
             .await
@@ -152,7 +155,7 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
 
     let missing = Arc::new(FakeLlmClient::new("missing", "missing"));
     missing.push_structured(json!({"ok": true}));
-    let client = traced(missing, repo.clone(), key.id, session_id, job_id);
+    let client = traced(missing, repo.clone(), user_id, session_id, job_id);
     client
         .structured_value(LlmPurpose::Test, "system", "user", json!({}))
         .await
@@ -165,7 +168,7 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
 
     let bad_shape = Arc::new(FakeLlmClient::new("openai", "gpt-4o-mini"));
     bad_shape.push_structured(json!({"not_ok": true}));
-    let client = traced(bad_shape, repo.clone(), key.id, session_id, job_id);
+    let client = traced(bad_shape, repo.clone(), user_id, session_id, job_id);
     assert!(
         structured::<TestShape>(&client, LlmPurpose::Test, "system", "user")
             .await

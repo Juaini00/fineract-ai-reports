@@ -8,11 +8,16 @@ use uuid::Uuid;
 
 use crate::{auth::model::IssuedRefreshToken, config::AuthConfig};
 
+const ACCESS_TOKEN_ISSUER: &str = "ai-report";
+const ACCESS_TOKEN_AUDIENCE: &str = "ai-report-api";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessTokenClaims {
     pub sub: Uuid,
     pub sid: Uuid,
     pub role: String,
+    pub iss: String,
+    pub aud: String,
     pub exp: i64,
     pub iat: i64,
 }
@@ -45,6 +50,8 @@ impl TokenService {
             sub: user_id,
             sid: session_id,
             role: role.to_string(),
+            iss: ACCESS_TOKEN_ISSUER.to_string(),
+            aud: ACCESS_TOKEN_AUDIENCE.to_string(),
             iat: now.timestamp(),
             exp: (now + Duration::seconds(expires_in)).timestamp(),
         };
@@ -70,10 +77,14 @@ impl TokenService {
     }
 
     pub fn verify_access_token(&self, token: &str) -> Result<AccessTokenClaims> {
+        let mut validation = Validation::default();
+        validation.leeway = 0;
+        validation.set_issuer(&[ACCESS_TOKEN_ISSUER]);
+        validation.set_audience(&[ACCESS_TOKEN_AUDIENCE]);
         Ok(decode::<AccessTokenClaims>(
             token,
             &DecodingKey::from_secret(self.config.jwt_access_secret.as_bytes()),
-            &Validation::default(),
+            &validation,
         )?
         .claims)
     }
@@ -91,7 +102,12 @@ mod tests {
 
     use crate::config::AuthConfig;
 
-    use super::{TokenService, hash_token};
+    use chrono::Utc;
+    use jsonwebtoken::{EncodingKey, Header, encode};
+
+    use super::{
+        ACCESS_TOKEN_AUDIENCE, ACCESS_TOKEN_ISSUER, AccessTokenClaims, TokenService, hash_token,
+    };
 
     fn config() -> AuthConfig {
         AuthConfig {
@@ -127,7 +143,52 @@ mod tests {
         assert_eq!(claims.sub, user_id);
         assert_eq!(claims.sid, session_id);
         assert_eq!(claims.role, "admin");
+        assert_eq!(claims.iss, ACCESS_TOKEN_ISSUER);
+        assert_eq!(claims.aud, ACCESS_TOKEN_AUDIENCE);
         assert_eq!(issued.expires_in, 900);
+    }
+
+    fn encoded_claims(iss: &str, aud: &str, exp: i64) -> String {
+        encode(
+            &Header::default(),
+            &AccessTokenClaims {
+                sub: Uuid::new_v4(),
+                sid: Uuid::new_v4(),
+                role: "admin".to_string(),
+                iss: iss.to_string(),
+                aud: aud.to_string(),
+                exp,
+                iat: Utc::now().timestamp(),
+            },
+            &EncodingKey::from_secret(config().jwt_access_secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn access_token_rejects_wrong_issuer_audience_and_expiry() {
+        let service = TokenService::new(config());
+        let now = Utc::now().timestamp();
+
+        assert!(
+            service
+                .verify_access_token(&encoded_claims("wrong", ACCESS_TOKEN_AUDIENCE, now + 60))
+                .is_err()
+        );
+        assert!(
+            service
+                .verify_access_token(&encoded_claims(ACCESS_TOKEN_ISSUER, "wrong", now + 60))
+                .is_err()
+        );
+        assert!(
+            service
+                .verify_access_token(&encoded_claims(
+                    ACCESS_TOKEN_ISSUER,
+                    ACCESS_TOKEN_AUDIENCE,
+                    now - 1,
+                ))
+                .is_err()
+        );
     }
 
     #[test]

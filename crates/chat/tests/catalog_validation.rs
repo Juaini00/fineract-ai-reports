@@ -3,7 +3,7 @@
 //! same validator startup uses. This is the fastest guardrail against any
 //! YAML/SQL drift and doesn't need Postgres or Fineract.
 
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use chat::chat::planner::{
     AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
     RetrievalPlan, evaluate_policy,
@@ -283,9 +283,7 @@ fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
     let missing_capability = evaluate_policy(&client, Some(&plan), &catalog);
     assert_eq!(missing_capability.status, PolicyDecisionStatus::Blocked);
 
-    client
-        .allowed_capabilities
-        .push("client_name_lookup".into());
+    client.capability_ids.push("client_name_lookup".into());
     let pii_hidden = evaluate_policy(&client, Some(&plan), &catalog);
     assert_eq!(pii_hidden.status, PolicyDecisionStatus::Allowed);
     assert!(!pii_hidden.can_view_pii);
@@ -307,19 +305,14 @@ fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
     catalog
 }
 
-fn client(can_view_pii: bool) -> ClientContext {
-    ClientContext {
-        api_key_id: Uuid::new_v4(),
-        user_id: None,
-        name: "scenario-test".into(),
-        owner: "integration-tests".into(),
-        key_prefix: "air_test".into(),
-        allowed_office_ids: vec![1, 2, 3],
-        allowed_capabilities: vec!["savings_deposit_top_n".into()],
-        allow_all_offices: false,
-        allow_all_capabilities: false,
+fn client(can_view_pii: bool) -> PrincipalContext {
+    PrincipalContext {
+        user_id: Uuid::new_v4(),
+        role: "admin".into(),
+        office_ids: vec![1, 2, 3],
+        capability_ids: vec!["savings_deposit_top_n".into()],
         can_view_pii,
-        expires_at: None,
+        legacy_api_key_id: None,
     }
 }
 

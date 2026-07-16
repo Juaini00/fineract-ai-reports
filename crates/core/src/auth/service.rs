@@ -7,13 +7,13 @@ use crate::{
     auth::{
         api_key,
         model::{
-            ClientContext, CreateApiKeyInput, CreatedApiKey, LoginInput, LoginResult,
-            NewApiKeyRecord, NewRefreshTokenRecord, NewSessionRecord, NewUserRecord, RefreshResult,
-            UserProfile, UserRecord,
+            AuthenticatedUserRecord, ClientContext, CreateApiKeyInput, CreatedApiKey, LoginInput,
+            LoginResult, NewApiKeyRecord, NewRefreshTokenRecord, NewSessionRecord, NewUserRecord,
+            RefreshResult, UserProfile, UserRecord,
         },
         password,
         repository::{ApiKeyRepository, SessionRepository, UserRepository},
-        token::{self, AccessTokenClaims, TokenService},
+        token::{self, TokenService},
     },
     config::AuthConfig,
 };
@@ -239,8 +239,18 @@ impl AuthService {
             .map(user_profile))
     }
 
-    pub fn verify_access_token(&self, token: &str) -> Result<AccessTokenClaims> {
-        self.token_service.verify_access_token(token)
+    pub async fn authenticate_access_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<AuthenticatedUserRecord>> {
+        let claims = match self.token_service.verify_access_token(token) {
+            Ok(claims) => claims,
+            Err(_) => return Ok(None),
+        };
+
+        self.session_repository
+            .find_authenticated_user(claims.sub, claims.sid)
+            .await
     }
 
     async fn refresh_token_revoked_in_redis(&self, token_hash: &str) -> bool {

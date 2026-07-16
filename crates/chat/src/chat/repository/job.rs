@@ -23,27 +23,27 @@ impl JobRepository {
     /// first if the caller did not pass one.
     pub async fn create(
         &self,
-        api_key_id: Uuid,
+        user_id: Uuid,
         session_id: Option<Uuid>,
         message: String,
         client_context_json: serde_json::Value,
         classification_json: serde_json::Value,
         execution_plan_json: serde_json::Value,
         policy_decision_json: serde_json::Value,
-    ) -> Result<CreatedChatJob> {
+    ) -> Result<Option<CreatedChatJob>> {
         let session_id = match session_id {
             Some(session_id) => {
                 if self
                     .sessions
-                    .get_for_client(session_id, api_key_id)
+                    .get_for_user(session_id, user_id, false)
                     .await?
                     .is_none()
                 {
-                    bail!("chat session not found for client");
+                    return Ok(None);
                 }
                 session_id
             }
-            None => self.sessions.create(api_key_id, None).await?.id,
+            None => self.sessions.create(user_id, None).await?.id,
         };
 
         let user_message_id = Uuid::new_v4();
@@ -63,6 +63,7 @@ impl JobRepository {
             INSERT INTO chat_jobs (
                 id,
                 session_id,
+                user_id,
                 api_key_id,
                 status,
                 current_step,
@@ -70,12 +71,12 @@ impl JobRepository {
                 state_json,
                 expires_at
             )
-            VALUES ($1, $2, $3, 'queued', 'queued', $4, $5, $6)
+            VALUES ($1, $2, $3, NULL, 'queued', 'queued', $4, $5, $6)
             "#,
         )
         .bind(job_id)
         .bind(session_id)
-        .bind(api_key_id)
+        .bind(user_id)
         .bind(&message)
         .bind(state_json)
         .bind(expires_at)
@@ -116,21 +117,27 @@ impl JobRepository {
 
         tx.commit().await?;
 
-        Ok(CreatedChatJob {
+        Ok(Some(CreatedChatJob {
             session_id,
             job_id,
             user_message_id,
             status: "queued".to_string(),
             current_step: "queued".to_string(),
-        })
+        }))
     }
 
-    pub async fn get_for_client(&self, job_id: Uuid, api_key_id: Uuid) -> Result<Option<ChatJob>> {
+    pub async fn get_for_user(
+        &self,
+        job_id: Uuid,
+        user_id: Uuid,
+        include_legacy: bool,
+    ) -> Result<Option<ChatJob>> {
         let row = sqlx::query_as::<_, ChatJobRow>(
             r#"
             SELECT
                 id,
                 session_id,
+                user_id,
                 api_key_id,
                 user_message_id,
                 status,
@@ -149,23 +156,29 @@ impl JobRepository {
                 cancelled_at
             FROM chat_jobs
             WHERE id = $1
-              AND api_key_id = $2
+              AND (user_id = $2 OR ($3 AND user_id IS NULL))
             "#,
         )
         .bind(job_id)
-        .bind(api_key_id)
+        .bind(user_id)
+        .bind(include_legacy)
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(row.map(Into::into))
     }
 
-    pub async fn list_audit_events_for_client(
+    pub async fn list_audit_events_for_user(
         &self,
         job_id: Uuid,
-        api_key_id: Uuid,
+        user_id: Uuid,
+        include_legacy: bool,
     ) -> Result<Option<Vec<ChatJobAuditEvent>>> {
-        if self.get_for_client(job_id, api_key_id).await?.is_none() {
+        if self
+            .get_for_user(job_id, user_id, include_legacy)
+            .await?
+            .is_none()
+        {
             return Ok(None);
         }
 
@@ -175,6 +188,7 @@ impl JobRepository {
                 id,
                 job_id,
                 session_id,
+                user_id,
                 api_key_id,
                 event_type,
                 stage,
@@ -221,7 +235,7 @@ impl JobRepository {
     pub async fn update_plan_state(
         &self,
         job_id: Uuid,
-        api_key_id: Uuid,
+        user_id: Uuid,
         expected_revision: i64,
         classification_json: serde_json::Value,
         execution_plan_json: serde_json::Value,
@@ -240,13 +254,13 @@ impl JobRepository {
                 state_revision = state_revision + 1,
                 updated_at = now()
             WHERE id = $2
-              AND api_key_id = $3
+              AND user_id = $3
               AND state_revision = $4
             "#,
         )
         .bind(state)
         .bind(job_id)
-        .bind(api_key_id)
+        .bind(user_id)
         .bind(expected_revision)
         .execute(&self.pool)
         .await?;
@@ -262,7 +276,7 @@ impl JobRepository {
     pub async fn respond(
         &self,
         job_id: Uuid,
-        api_key_id: Uuid,
+        user_id: Uuid,
         source_message: String,
         selected_option_id: Option<String>,
     ) -> Result<Option<ChatMessage>> {
@@ -273,13 +287,13 @@ impl JobRepository {
             SELECT session_id, current_step
             FROM chat_jobs
             WHERE id = $1
-              AND api_key_id = $2
+              AND user_id = $2
               AND status = 'waiting_for_user_input'
             FOR UPDATE
             "#,
         )
         .bind(job_id)
-        .bind(api_key_id)
+        .bind(user_id)
         .fetch_optional(&mut *tx)
         .await?
         else {
@@ -535,7 +549,8 @@ struct JobResponseTargetRow {
 struct ChatJobRow {
     id: Uuid,
     session_id: Uuid,
-    api_key_id: Uuid,
+    user_id: Option<Uuid>,
+    api_key_id: Option<Uuid>,
     user_message_id: Option<Uuid>,
     status: String,
     current_step: String,
@@ -558,6 +573,7 @@ struct ChatJobAuditEventRow {
     id: Uuid,
     job_id: Uuid,
     session_id: Option<Uuid>,
+    user_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     event_type: String,
     stage: String,
@@ -579,6 +595,7 @@ impl From<ChatJobAuditEventRow> for ChatJobAuditEvent {
             id: row.id,
             job_id: row.job_id,
             session_id: row.session_id,
+            user_id: row.user_id,
             api_key_id: row.api_key_id,
             event_type: row.event_type,
             stage: row.stage,
@@ -601,6 +618,7 @@ impl From<ChatJobRow> for ChatJob {
         Self {
             id: row.id,
             session_id: row.session_id,
+            user_id: row.user_id,
             api_key_id: row.api_key_id,
             user_message_id: row.user_message_id,
             status: row.status,

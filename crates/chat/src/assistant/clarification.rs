@@ -47,6 +47,8 @@ pub struct ClarificationPayload {
     pub source_intent: Option<SourceIntentSnapshot>,
     #[serde(default)]
     pub allow_free_text: bool,
+    #[serde(default)]
+    pub is_missing_execution_parameters: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -13,7 +13,8 @@ use super::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse};
 pub struct LlmTraceContext {
     pub job_id: Option<Uuid>,
     pub session_id: Option<Uuid>,
-    pub api_key_id: Uuid,
+    pub user_id: Uuid,
+    pub legacy_api_key_id: Option<Uuid>,
     pub graph_state: Option<String>,
 }
 
@@ -62,7 +63,8 @@ impl LlmClient for TracedLlmClient {
                     self.record(LlmTrace {
                         job_id: context.job_id,
                         session_id: context.session_id,
-                        api_key_id: context.api_key_id,
+                        user_id: context.user_id,
+                        legacy_api_key_id: context.legacy_api_key_id,
                         graph_state: context.graph_state.clone(),
                         purpose: purpose.to_string(),
                         provider: response.provider.clone(),
@@ -81,7 +83,8 @@ impl LlmClient for TracedLlmClient {
                     self.record(LlmTrace {
                         job_id: context.job_id,
                         session_id: context.session_id,
-                        api_key_id: context.api_key_id,
+                        user_id: context.user_id,
+                        legacy_api_key_id: context.legacy_api_key_id,
                         graph_state: context.graph_state.clone(),
                         purpose: purpose.to_string(),
                         provider,
@@ -108,7 +111,8 @@ impl LlmClient for TracedLlmClient {
                     self.record(LlmTrace {
                         job_id: context.job_id,
                         session_id: context.session_id,
-                        api_key_id: context.api_key_id,
+                        user_id: context.user_id,
+                        legacy_api_key_id: context.legacy_api_key_id,
                         graph_state: context.graph_state.clone(),
                         purpose: purpose.to_string(),
                         provider: response.provider.clone(),
@@ -127,7 +131,8 @@ impl LlmClient for TracedLlmClient {
                     self.record(LlmTrace {
                         job_id: context.job_id,
                         session_id: context.session_id,
-                        api_key_id: context.api_key_id,
+                        user_id: context.user_id,
+                        legacy_api_key_id: context.legacy_api_key_id,
                         graph_state: context.graph_state.clone(),
                         purpose: purpose.to_string(),
                         provider,
@@ -162,7 +167,8 @@ impl LlmClient for TracedLlmClient {
         self.record(LlmTrace {
             job_id: context.job_id,
             session_id: context.session_id,
-            api_key_id: context.api_key_id,
+            user_id: context.user_id,
+            legacy_api_key_id: context.legacy_api_key_id,
             graph_state: context.graph_state.clone(),
             purpose: purpose.to_string(),
             provider,

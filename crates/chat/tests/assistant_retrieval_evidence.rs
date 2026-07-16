@@ -1,8 +1,10 @@
 use chat::{
     assistant::{
         AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, ContextReference,
-        Evidence, EvidenceDecision, EvidenceEvaluator, RetrievalEngine, RetrievalPlan,
+        Evidence, EvidenceDecision, EvidenceEvaluator, RequestGrouping, RequestOperation,
+        RequestOutput, RequestPii, RequestShape, RequestSubject, RetrievalEngine, RetrievalPlan,
     },
+    knowledge::catalog::loader::KnowledgeLoader,
     knowledge::model::{CapabilityKnowledge, ClassificationPolicy, KnowledgeCatalog},
 };
 use serde_json::json;
@@ -11,6 +13,7 @@ fn intent(kind: AssistantIntentKind, domain: AssistantDomain) -> AssistantIntent
     AssistantIntent {
         intent: kind,
         domain,
+        request_shape: Default::default(),
         language: AssistantLanguage::En,
         entities: vec![],
         constraints: Default::default(),
@@ -34,7 +37,7 @@ fn evidence(id: &str, score: f32) -> Evidence {
 
 #[test]
 fn evidence_decisions_cover_phase8_states() {
-    let eval = EvidenceEvaluator::default();
+    let eval = EvidenceEvaluator;
     let plan = RetrievalPlan::new(
         "savings",
         &intent(AssistantIntentKind::ReportRequest, AssistantDomain::Savings),
@@ -49,7 +52,9 @@ fn evidence_decisions_cover_phase8_states() {
     );
     assert_eq!(
         eval.evaluate(&plan, &[evidence("cap", 0.3)]),
-        EvidenceDecision::Clarify
+        EvidenceDecision::Select {
+            capability_id: "cap".into()
+        }
     );
     assert_eq!(
         eval.evaluate(&plan, &[]),
@@ -95,10 +100,11 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
         metrics: vec![],
         capabilities: vec![CapabilityKnowledge {
             id: "savings_deposit_total".into(),
-            status: "approved".into(),
+            status: "approved_mvp".into(),
             domain: "savings".into(),
             query_id: "q".into(),
             output_mode: "single".into(),
+            request_shape: RequestShape::default(),
             display_name: Some("Savings deposit total".into()),
             description: Some("deposit total".into()),
             data_areas: vec![],
@@ -129,4 +135,62 @@ fn primary_runtime_does_not_use_legacy_prompt_shape_helpers() {
     let runtime = include_str!("../src/assistant/runtime/mod.rs");
     assert!(!runtime.contains("capability_matches_prompt_shape"));
     assert!(!runtime.contains("domain_terms"));
+}
+
+#[tokio::test]
+async fn structural_gate_rejects_random_clients_and_narrows_office_savings() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = std::sync::Arc::new(
+        KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
+            .load()
+            .unwrap(),
+    );
+    let mut random = intent(AssistantIntentKind::ReportRequest, AssistantDomain::Client);
+    random.request_shape = RequestShape {
+        operation: RequestOperation::RandomSample,
+        subject: RequestSubject::Client,
+        grouping: RequestGrouping::None,
+        output: RequestOutput::List,
+        pii: RequestPii::ClientIdentity,
+    };
+    for prompt in [
+        "coba berikan saya 5 client sembarang pada tahun ini",
+        "give me 5 random clients this year",
+    ] {
+        let plan = RetrievalPlan::new(prompt, &random, true, vec![]);
+        assert!(
+            RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    let mut office = intent(
+        AssistantIntentKind::ReportRequest,
+        AssistantDomain::Organization,
+    );
+    office.request_shape = RequestShape {
+        operation: RequestOperation::Rank,
+        subject: RequestSubject::Office,
+        grouping: RequestGrouping::Office,
+        output: RequestOutput::Ranking,
+        pii: RequestPii::None,
+    };
+    office.constraints.metric = Some("savings balance".into());
+    let evidence = RetrievalEngine::retrieve(
+        &RetrievalPlan::new("office savings summary top 5 in IDR", &office, true, vec![]),
+        None,
+        None,
+        Some(&catalog),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        evidence
+            .iter()
+            .map(|item| item.capability_id.as_str())
+            .collect::<Vec<_>>(),
+        ["organization_office_savings_summary"]
+    );
 }

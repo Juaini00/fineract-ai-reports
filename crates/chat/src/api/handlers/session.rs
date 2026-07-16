@@ -17,18 +17,15 @@ use crate::api::ChatAppState;
 use crate::api::dto::session::CreateChatSessionRequest;
 use crate::chat::model::CreateChatSessionInput;
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id))]
 pub async fn list(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
 ) -> Result<Response, ApiError> {
-    let user_id = client
-        .user_id
-        .ok_or_else(|| ApiError::unauthorized("API key is not assigned to a user"))?;
     let sessions = state
         .chat
         .sessions
-        .list_for_user(user_id)
+        .list(client)
         .await
         .map_err(ApiError::internal)?;
 
@@ -37,7 +34,7 @@ pub async fn list(
     Ok(response::success(StatusCode::OK, sessions).into_response())
 }
 
-#[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
+#[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
@@ -58,7 +55,7 @@ pub async fn create(
     Ok(response::success(StatusCode::CREATED, session).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, session_id = %session_id))]
 pub async fn get(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
@@ -79,18 +76,21 @@ pub async fn get(
     Ok(response::success(StatusCode::OK, session).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, session_id = %session_id))]
 pub async fn list_messages(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(session_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let messages = state
+    let Some(messages) = state
         .chat
         .messages
         .list_for_session(client, session_id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found("chat session not found"));
+    };
 
     info!(
         message_count = messages.len(),

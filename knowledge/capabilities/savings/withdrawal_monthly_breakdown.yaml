@@ -12,6 +12,12 @@ metrics:
   - savings.withdrawal_amount
   - savings.withdrawal_count
 output_mode: monthly_breakdown
+request_shape:
+  operation: trend
+  subject: savings_transaction
+  grouping: month
+  output: time_series
+  pii: none
 examples:
   - Monthly withdrawal totals from January to September 2026.
   - Show savings withdrawals per month for this year.

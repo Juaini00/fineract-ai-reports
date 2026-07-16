@@ -14,11 +14,11 @@ impl SessionMemoryRepository {
         Self { pool }
     }
 
-    pub async fn get_or_create(&self, session_id: Uuid) -> Result<SessionMemory> {
+    pub async fn get_or_create(&self, session_id: Uuid, user_id: Uuid) -> Result<SessionMemory> {
         let row = sqlx::query_as::<_, SessionMemoryRow>(
             r#"
             INSERT INTO assistant_session_memory (session_id)
-            VALUES ($1)
+            SELECT id FROM chat_sessions WHERE id = $1 AND user_id = $2
             ON CONFLICT (session_id) DO UPDATE SET updated_at = assistant_session_memory.updated_at
             RETURNING session_id, summary, active_domain, pending_clarification_json,
                 pending_clarification_source_intent_json, entities_json, relevant_jobs_json,
@@ -26,6 +26,7 @@ impl SessionMemoryRepository {
             "#,
         )
         .bind(session_id)
+        .bind(user_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.into())
@@ -121,6 +122,7 @@ impl SessionMemoryRepository {
     pub async fn recent_completed_job_summaries(
         &self,
         session_id: Uuid,
+        user_id: Uuid,
         limit: i64,
     ) -> Result<Vec<RelevantJobSummary>> {
         let rows = sqlx::query_as::<_, CompletedJobMemoryRow>(
@@ -129,12 +131,13 @@ impl SessionMemoryRepository {
                    m.selected_capability, m.execution_summary_json, j.created_at
             FROM assistant_job_memory m
             JOIN chat_jobs j ON j.id = m.job_id
-            WHERE j.session_id = $1 AND m.terminal_state = 'completed'
+            WHERE j.session_id = $1 AND j.user_id = $2 AND m.terminal_state = 'completed'
             ORDER BY j.created_at DESC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
         .bind(session_id)
+        .bind(user_id)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -144,10 +147,11 @@ impl SessionMemoryRepository {
     pub async fn update_after_job(
         &self,
         session_id: Uuid,
+        user_id: Uuid,
         job: &super::JobMemory,
         pending: Option<Option<&ClarificationPayload>>,
     ) -> Result<SessionMemory> {
-        let mut memory = self.get_or_create(session_id).await?;
+        let mut memory = self.get_or_create(session_id, user_id).await?;
         memory.active_domain = job
             .intent
             .as_ref()

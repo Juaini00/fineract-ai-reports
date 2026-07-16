@@ -11,6 +11,12 @@ query_id: savings.withdrawal_top_n
 metrics:
   - savings.withdrawal_amount
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: savings_transaction
+  grouping: none
+  output: ranking
+  pii: conditional_client_identity
 examples:
   - Who made the largest withdrawal today?
   - Show the largest withdrawals this month.

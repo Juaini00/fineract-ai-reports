@@ -11,6 +11,12 @@ query_id: client.name_lookup
 metrics:
   - client.name_lookup
 output_mode: list
+request_shape:
+  operation: lookup
+  subject: client
+  grouping: none
+  output: lookup
+  pii: client_identity
 examples:
   - ada gak nama Tony di client kita?
   - Find client named Tony.

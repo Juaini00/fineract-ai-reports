@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use chrono::NaiveDate;
 use serde_json::json;
 
@@ -21,7 +21,7 @@ pub struct LayerTrace {
 
 pub struct LqrInputs<'a> {
     pub message: &'a str,
-    pub client: &'a ClientContext,
+    pub client: &'a PrincipalContext,
     pub llm: &'a LlmPlannerClient,
     pub embedding_client: &'a VoyageEmbeddingClient,
     pub repository: &'a KnowledgeRepository,
@@ -142,7 +142,7 @@ pub async fn run_layered_retrieval(inputs: LqrInputs<'_>) -> Result<LqrResult> {
         .llm
         .plan_layered_retrieval(
             inputs.message,
-            &json!({ "allowed_capabilities": inputs.client.allowed_capabilities }),
+            &json!({ "allowed_capabilities": inputs.client.capability_ids }),
         )
         .await?;
 
@@ -158,7 +158,7 @@ pub async fn run_layered_retrieval(inputs: LqrInputs<'_>) -> Result<LqrResult> {
         )
         .await?;
     let all_ranked = ranked_domains(&domain_hits);
-    let reachable = reachable_domains(inputs.catalog, &inputs.client.allowed_capabilities);
+    let reachable = reachable_domains(inputs.catalog, &inputs.client.capability_ids);
     let ranked_domains: Vec<(String, String, f32)> = if reachable.is_empty() {
         all_ranked.clone()
     } else {
@@ -201,7 +201,7 @@ pub async fn run_layered_retrieval(inputs: LqrInputs<'_>) -> Result<LqrResult> {
                 .embed_query(&plan.capability)
                 .await?,
             &split_terms(&plan.keyword),
-            Some(&inputs.client.allowed_capabilities),
+            Some(&inputs.client.capability_ids),
             &metadata,
             6,
         )

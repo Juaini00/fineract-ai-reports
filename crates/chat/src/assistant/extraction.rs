@@ -1,3 +1,4 @@
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,25 @@ pub struct DeterministicExtraction {
     pub entities: Vec<AssistantEntity>,
     #[serde(default)]
     pub candidates: Vec<PayloadCandidate>,
+    #[serde(default)]
+    pub temporal_provenance: Option<TemporalProvenance>,
+    #[serde(default)]
+    pub temporal_error: Option<TemporalValidationError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TemporalProvenance {
+    pub rule: String,
+    pub phrase_span: [usize; 2],
+    #[schemars(with = "String")]
+    pub reference_instant: DateTime<Utc>,
+    pub timezone: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TemporalValidationError {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -65,9 +85,14 @@ impl DeterministicExtraction {
             && self.domain.is_none()
             && self.entities.is_empty()
             && self.candidates.is_empty()
+            && self.temporal_error.is_none()
     }
 
     pub fn merge_into(&self, intent: &mut AssistantIntent) {
+        self.merge_into_legacy_non_authoritative(intent);
+    }
+
+    pub fn merge_into_legacy_non_authoritative(&self, intent: &mut AssistantIntent) {
         if let Some(quantity) = &self.constraints.quantity {
             match (&intent.constraints.quantity, quantity) {
                 (None | Some(Quantity::Default), _) => {
@@ -204,12 +229,28 @@ fn conflict(
 }
 
 pub fn extract_message_facts(message: &str) -> DeterministicExtraction {
+    extract_message_facts_at(message, Utc::now(), 366)
+}
+
+pub fn extract_message_facts_at(
+    message: &str,
+    reference_instant: DateTime<Utc>,
+    max_range_days: i64,
+) -> DeterministicExtraction {
     let lower = message.to_lowercase();
     let words = words(&lower);
     let mut extraction = DeterministicExtraction::default();
 
     extraction.constraints.quantity = extract_quantity(&lower, &words);
-    extract_dates(&words, &mut extraction.constraints);
+    match resolve_temporal(message, reference_instant, max_range_days) {
+        Ok(Some(resolved)) => {
+            extraction.constraints.from_date = Some(resolved.from.to_string());
+            extraction.constraints.to_date = Some(resolved.to.to_string());
+            extraction.temporal_provenance = Some(resolved.provenance);
+        }
+        Ok(None) => {}
+        Err(error) => extraction.temporal_error = Some(error),
+    }
     extraction.constraints.currency_code = extract_currency(message);
     extraction.domain = extract_domain(&lower);
     if let Some(metric) = extract_metric(&lower) {
@@ -233,6 +274,266 @@ pub fn extract_message_facts(message: &str) -> DeterministicExtraction {
     record_candidates(&mut extraction);
 
     extraction
+}
+
+struct ResolvedTemporal {
+    from: NaiveDate,
+    to: NaiveDate,
+    provenance: TemporalProvenance,
+}
+
+fn resolve_temporal(
+    message: &str,
+    reference_instant: DateTime<Utc>,
+    max_range_days: i64,
+) -> Result<Option<ResolvedTemporal>, TemporalValidationError> {
+    let lower = message.to_ascii_lowercase();
+    let tokens = tokens_with_spans(&lower);
+    let jakarta = FixedOffset::east_opt(7 * 3600).expect("valid Jakarta offset");
+    let today = reference_instant.with_timezone(&jakarta).date_naive();
+    let invalid = |code: &str, message: &str| TemporalValidationError {
+        code: code.into(),
+        message: message.into(),
+    };
+    let finish = |from: NaiveDate, to: NaiveDate, rule: &str, span: [usize; 2]| {
+        if from > to {
+            return Err(invalid(
+                "temporal_range_reversed",
+                "The start date must not be after the end date.",
+            ));
+        }
+        let days = (to - from).num_days() + 1;
+        if max_range_days <= 0 || days > max_range_days {
+            return Err(invalid(
+                "temporal_range_too_large",
+                "The date range exceeds the capability limit.",
+            ));
+        }
+        Ok(Some(ResolvedTemporal {
+            from,
+            to,
+            provenance: TemporalProvenance {
+                rule: rule.into(),
+                phrase_span: span,
+                reference_instant,
+                timezone: "Asia/Jakarta".into(),
+            },
+        }))
+    };
+
+    for window in tokens.windows(4) {
+        if matches!(
+            (window[0].0, window[2].0),
+            ("from", "to") | ("dari", "sampai")
+        ) {
+            let from = parse_date(window[1].0)?;
+            let to = parse_date(window[3].0)?;
+            return finish(
+                from,
+                to,
+                "inclusive_explicit_range",
+                [window[0].1, window[3].2],
+            );
+        }
+    }
+
+    let relative: &[(&[&str], &str)] = &[
+        (&["today"], "today"),
+        (&["hari", "ini"], "today"),
+        (&["yesterday"], "yesterday"),
+        (&["kemarin"], "yesterday"),
+        (&["this", "week"], "this_week"),
+        (&["minggu", "ini"], "this_week"),
+        (&["last", "week"], "last_week"),
+        (&["minggu", "lalu"], "last_week"),
+        (&["this", "month"], "this_month"),
+        (&["bulan", "ini"], "this_month"),
+        (&["last", "month"], "last_month"),
+        (&["bulan", "lalu"], "last_month"),
+        (&["this", "quarter"], "this_quarter"),
+        (&["kuartal", "ini"], "this_quarter"),
+        (&["last", "quarter"], "last_quarter"),
+        (&["kuartal", "lalu"], "last_quarter"),
+        (&["this", "year"], "this_year"),
+        (&["tahun", "ini"], "this_year"),
+        (&["last", "year"], "last_year"),
+        (&["tahun", "lalu"], "last_year"),
+    ];
+    for (phrase, rule) in relative {
+        if let Some(window) = tokens.windows(phrase.len()).find(|window| {
+            window
+                .iter()
+                .map(|token| token.0)
+                .eq(phrase.iter().copied())
+        }) {
+            let (from, to) = relative_range(today, rule);
+            return finish(from, to, rule, [window[0].1, window[window.len() - 1].2]);
+        }
+    }
+    for window in tokens.windows(3) {
+        let english = window[0].0 == "last" && window[2].0 == "days";
+        let indonesian = window[0].0.parse::<i64>().is_ok()
+            && window[1].0 == "hari"
+            && window[2].0 == "terakhir";
+        let value = if english {
+            window[1].0
+        } else if indonesian {
+            window[0].0
+        } else {
+            continue;
+        };
+        let days = value.parse::<i64>().map_err(|_| {
+            invalid(
+                "temporal_invalid_count",
+                "The day count must be a positive integer.",
+            )
+        })?;
+        if days <= 0 || days > max_range_days {
+            return Err(invalid(
+                "temporal_invalid_count",
+                "The day count must be positive and within the capability limit.",
+            ));
+        }
+        return finish(
+            today - Duration::days(days - 1),
+            today,
+            "last_n_days_inclusive",
+            [window[0].1, window[2].2],
+        );
+    }
+
+    let date_tokens = tokens
+        .iter()
+        .filter(|token| looks_like_iso_date(token.0))
+        .collect::<Vec<_>>();
+    if date_tokens.len() == 1 {
+        let date = parse_date(date_tokens[0].0)?;
+        return finish(
+            date,
+            date,
+            "iso_single_date",
+            [date_tokens[0].1, date_tokens[0].2],
+        );
+    }
+    if date_tokens.len() > 1 {
+        return Err(invalid(
+            "temporal_ambiguous",
+            "Use an inclusive 'from DATE to DATE' or 'dari DATE sampai DATE' range.",
+        ));
+    }
+    if tokens.iter().any(|token| {
+        token.0.matches('-').count() == 2
+            && token.0.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
+    }) {
+        return Err(invalid(
+            "temporal_invalid_date",
+            "Use a valid Gregorian date in YYYY-MM-DD format.",
+        ));
+    }
+    if tokens.iter().any(|token| {
+        matches!(
+            token.0,
+            "today"
+                | "yesterday"
+                | "week"
+                | "month"
+                | "quarter"
+                | "year"
+                | "kemarin"
+                | "tahun"
+                | "hari"
+                | "minggu"
+                | "bulan"
+                | "kuartal"
+        )
+    }) {
+        return Err(invalid(
+            "temporal_ambiguous",
+            "The date expression is ambiguous or unsupported.",
+        ));
+    }
+    Ok(None)
+}
+
+fn relative_range(today: NaiveDate, rule: &str) -> (NaiveDate, NaiveDate) {
+    let month_start = |date: NaiveDate| date.with_day(1).expect("day one exists");
+    let next_month = |date: NaiveDate| {
+        if date.month() == 12 {
+            NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
+        } else {
+            NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1).unwrap()
+        }
+    };
+    let year = |value: i32| NaiveDate::from_ymd_opt(value, 1, 1).expect("valid year");
+    match rule {
+        "today" => (today, today),
+        "yesterday" => (today - Duration::days(1), today - Duration::days(1)),
+        "this_week" | "last_week" => {
+            let start = today
+                - Duration::days(today.weekday().num_days_from_monday() as i64)
+                - if rule == "last_week" {
+                    Duration::days(7)
+                } else {
+                    Duration::zero()
+                };
+            (start, start + Duration::days(6))
+        }
+        "this_month" => (month_start(today), next_month(today) - Duration::days(1)),
+        "last_month" => {
+            let end = month_start(today) - Duration::days(1);
+            (month_start(end), end)
+        }
+        "this_quarter" | "last_quarter" => {
+            let mut quarter = (today.month0() / 3) as i32;
+            let mut year_value = today.year();
+            if rule == "last_quarter" {
+                quarter -= 1;
+                if quarter < 0 {
+                    quarter = 3;
+                    year_value -= 1;
+                }
+            }
+            let start = NaiveDate::from_ymd_opt(year_value, quarter as u32 * 3 + 1, 1).unwrap();
+            let next = if quarter == 3 {
+                year(year_value + 1)
+            } else {
+                NaiveDate::from_ymd_opt(year_value, (quarter as u32 + 1) * 3 + 1, 1).unwrap()
+            };
+            (start, next - Duration::days(1))
+        }
+        "this_year" => (
+            year(today.year()),
+            year(today.year() + 1) - Duration::days(1),
+        ),
+        "last_year" => (
+            year(today.year() - 1),
+            year(today.year()) - Duration::days(1),
+        ),
+        _ => unreachable!(),
+    }
+}
+
+fn tokens_with_spans(message: &str) -> Vec<(&str, usize, usize)> {
+    let mut result = Vec::new();
+    let mut start = None;
+    for (index, ch) in message
+        .char_indices()
+        .chain(std::iter::once((message.len(), ' ')))
+    {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            start.get_or_insert(index);
+        } else if let Some(begin) = start.take() {
+            result.push((&message[begin..index], begin, index));
+        }
+    }
+    result
+}
+
+fn parse_date(value: &str) -> Result<NaiveDate, TemporalValidationError> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| TemporalValidationError {
+        code: "temporal_invalid_date".into(),
+        message: "Use a valid Gregorian date in YYYY-MM-DD format.".into(),
+    })
 }
 
 fn record_candidates(extraction: &mut DeterministicExtraction) {
@@ -307,6 +608,9 @@ fn extract_quantity(message: &str, words: &[&str]) -> Option<Quantity> {
             continue;
         }
         let near = words[idx.saturating_sub(2)..usize::min(words.len(), idx + 3)].join(" ");
+        if near.contains("days") || near.contains("hari") {
+            continue;
+        }
         return Some(
             if near.contains("top")
                 || message.contains(" most ")
@@ -322,40 +626,7 @@ fn extract_quantity(message: &str, words: &[&str]) -> Option<Quantity> {
     None
 }
 
-fn extract_dates(words: &[&str], constraints: &mut AssistantConstraints) {
-    let dates = words
-        .iter()
-        .copied()
-        .filter(|word| is_iso_date(word))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if let Some(from_idx) = words.iter().position(|word| *word == "from")
-        && let Some(date) = words
-            .iter()
-            .skip(from_idx + 1)
-            .copied()
-            .find(|word| is_iso_date(word))
-    {
-        constraints.from_date = Some(date.into());
-    }
-    if let Some(to_idx) = words.iter().position(|word| *word == "to")
-        && let Some(date) = words
-            .iter()
-            .skip(to_idx + 1)
-            .copied()
-            .find(|word| is_iso_date(word))
-    {
-        constraints.to_date = Some(date.into());
-    }
-    if constraints.from_date.is_none() {
-        constraints.from_date = dates.first().cloned();
-    }
-    if constraints.to_date.is_none() {
-        constraints.to_date = dates.get(1).cloned();
-    }
-}
-
-fn is_iso_date(word: &str) -> bool {
+fn looks_like_iso_date(word: &str) -> bool {
     let bytes = word.as_bytes();
     bytes.len() == 10
         && bytes[4] == b'-'
@@ -459,6 +730,7 @@ mod tests {
         let mut intent = AssistantIntent {
             intent: Default::default(),
             domain: AssistantDomain::Unknown,
+            request_shape: Default::default(),
             language: crate::assistant::AssistantLanguage::En,
             entities: Vec::new(),
             constraints: Default::default(),
@@ -497,5 +769,76 @@ mod tests {
         assert!(extraction.candidates.iter().any(|candidate| {
             candidate.field == PayloadField::PersonName && candidate.trust == PayloadTrust::Trusted
         }));
+    }
+
+    fn reference(value: &str) -> DateTime<Utc> {
+        value.parse().unwrap()
+    }
+
+    #[test]
+    fn temporal_uses_jakarta_date_and_exact_period_boundaries() {
+        let instant = reference("2026-01-01T17:30:00Z");
+        let today = extract_message_facts_at("show deposits today", instant, 366);
+        assert_eq!(today.constraints.from_date.as_deref(), Some("2026-01-02"));
+        assert_eq!(today.constraints.to_date.as_deref(), Some("2026-01-02"));
+        assert_eq!(today.temporal_provenance.unwrap().timezone, "Asia/Jakarta");
+
+        let year = extract_message_facts_at("laporan tahun ini", instant, 366);
+        assert_eq!(year.constraints.from_date.as_deref(), Some("2026-01-01"));
+        assert_eq!(year.constraints.to_date.as_deref(), Some("2026-12-31"));
+
+        let week = extract_message_facts_at("last week", reference("2026-03-11T12:00:00Z"), 366);
+        assert_eq!(week.constraints.from_date.as_deref(), Some("2026-03-02"));
+        assert_eq!(week.constraints.to_date.as_deref(), Some("2026-03-08"));
+    }
+
+    #[test]
+    fn temporal_validates_dates_ranges_and_counts() {
+        let instant = reference("2026-03-11T12:00:00Z");
+        let leap = extract_message_facts_at("2024-02-29", instant, 366);
+        assert_eq!(leap.constraints.from_date, leap.constraints.to_date);
+        assert!(
+            extract_message_facts_at("2026-02-29", instant, 366)
+                .temporal_error
+                .is_some()
+        );
+        assert!(
+            extract_message_facts_at("from 2026-03-02 to 2026-03-01", instant, 366)
+                .temporal_error
+                .is_some()
+        );
+        assert!(
+            extract_message_facts_at("last 0 days", instant, 366)
+                .temporal_error
+                .is_some()
+        );
+
+        let range = extract_message_facts_at("dari 2026-03-01 sampai 2026-03-03", instant, 366);
+        assert_eq!(range.constraints.from_date.as_deref(), Some("2026-03-01"));
+        assert_eq!(range.constraints.to_date.as_deref(), Some("2026-03-03"));
+        let days = extract_message_facts_at("last 3 days", instant, 366);
+        assert_eq!(days.constraints.from_date.as_deref(), Some("2026-03-09"));
+        assert_eq!(days.constraints.to_date.as_deref(), Some("2026-03-11"));
+        assert!(days.constraints.quantity.is_none());
+    }
+
+    #[test]
+    fn temporal_reuses_the_same_job_reference_after_clarification() {
+        let job_reference = reference("2026-12-31T18:00:00Z");
+        let initial = extract_message_facts_at("today", job_reference, 366);
+        let clarification = extract_message_facts_at("hari ini", job_reference, 366);
+
+        assert_eq!(
+            initial.constraints.from_date,
+            clarification.constraints.from_date
+        );
+        assert_eq!(
+            initial.constraints.to_date,
+            clarification.constraints.to_date
+        );
+        assert_eq!(
+            clarification.temporal_provenance.unwrap().reference_instant,
+            job_reference
+        );
     }
 }

@@ -1,22 +1,30 @@
 use serde_json::json;
 use std::sync::Arc;
 
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
+use app_core::config::CanonicalGatewayMode;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use uuid::Uuid;
 
+use crate::assistant::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::{
     AssistantConstraints, AssistantDomain, AssistantGraphTopology, AssistantIntent,
     AssistantIntentKind, AssistantLanguage, AssistantResponse, AssistantResponseType,
-    ClarificationOption, ClarificationOutcome, ClarificationPayload, ClarificationResolver,
-    ContextReference, ContextWarningCode, ContextWindow, GraphState, GraphTransition, JobMemory,
-    OTHER_CLARIFICATION_OPTION_ID, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
-    TerminalState,
+    CanonicalStateRepository, ClarificationOption, ClarificationOutcome, ClarificationPayload,
+    ClarificationResolver, ContextReference, ContextWarningCode, ContextWindow,
+    DeterministicExtraction, ExtractionProvenance, FactSourceKind, GraphState, GraphTransition,
+    JobMemory, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
+    PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
+    TerminalState, deterministic_observations,
     evidence::{Evidence, EvidenceDecision, EvidenceEvaluator, RetrievalPlan},
-    extract_message_facts,
+    executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
+    merge_observations, original_request_observations,
     response::{ResponseAction, ResponseActionType},
     response_builder::finish,
     retrieval::RetrievalEngine,
+    stable_uuid,
 };
 use crate::chat::{executor::execute_plan, planner::PolicyDecisionStatus};
 use crate::knowledge::index::repository::KnowledgeRepository;
@@ -34,6 +42,19 @@ pub struct RuntimeUserInput {
     pub message: String,
     pub source_message: String,
     pub selected_option_id: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct CanonicalRuntimeContext {
+    pub mode: CanonicalGatewayMode,
+    pub repository: CanonicalStateRepository,
+    pub catalog_version: Option<Uuid>,
+    pub message_id: Uuid,
+    pub observed_at: DateTime<Utc>,
+    pub reference_instant: DateTime<Utc>,
+    pub timezone: String,
+    pub revision: i64,
+    pub initial: bool,
 }
 
 impl From<&str> for RuntimeUserInput {
@@ -117,7 +138,8 @@ impl AssistantGraphRuntime {
         knowledge: Option<&KnowledgeRepository>,
         fineract_pool: Option<&PgPool>,
         catalog: Option<&Arc<KnowledgeCatalog>>,
-        client: Option<&ClientContext>,
+        client: Option<&PrincipalContext>,
+        canonical: Option<&CanonicalRuntimeContext>,
         input: impl Into<RuntimeUserInput>,
     ) -> GraphRuntimeResult {
         let input = input.into();
@@ -153,8 +175,8 @@ impl AssistantGraphRuntime {
         if let Some(payload) = &context.pending_clarification
             && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
         {
-            memory.intent = Some(intent_from_source(payload, &context));
-            record_source_extraction_metadata(&mut memory, payload);
+            memory.intent = Some(intent_from_source(payload, &context, canonical));
+            record_source_extraction_metadata(&mut memory, payload, canonical);
             match outcome {
                 ClarificationOutcome::SelectedOption { option_id, .. } => {
                     memory.selected_capability = Some(option_id.clone());
@@ -182,6 +204,7 @@ impl AssistantGraphRuntime {
                         catalog,
                         client,
                         fineract_pool,
+                        canonical,
                         Some(None),
                     )
                     .await;
@@ -219,6 +242,36 @@ impl AssistantGraphRuntime {
                 _ => {}
             }
         }
+        if let Some(payload) = &context.pending_clarification
+            && payload.is_missing_execution_parameters
+            && input.selected_option_id.is_none()
+            && is_parameter_reply(&input.source_message)
+            && let Some(capability_id) = continuation_capability(payload)
+        {
+            let mut intent = intent_from_source(payload, &context, canonical);
+            merge_deterministic_extraction_at(
+                &mut memory,
+                &mut intent,
+                &input.source_message,
+                canonical,
+            );
+            memory.intent = Some(intent);
+            record_source_extraction_metadata(&mut memory, payload, canonical);
+            memory.selected_capability = Some(capability_id.clone());
+            memory.retrieval_evidence =
+                clarification_audit("missing_parameters", &capability_id, &input, payload);
+            return execute_selected_capability(
+                memory,
+                context.recent_messages.len(),
+                capability_id,
+                catalog,
+                client,
+                fineract_pool,
+                canonical,
+                Some(None),
+            )
+            .await;
+        }
         if let Some((intent_kind, response)) = deterministic_simple_response(message) {
             memory.intent = Some(deterministic_intent(intent_kind.clone(), message));
             return graph_result(
@@ -253,7 +306,12 @@ impl AssistantGraphRuntime {
         let mut pending_clarification = None;
         let (terminal, reason, response) = match route {
             Ok(mut intent) => {
-                merge_deterministic_extraction(&mut memory, &mut intent, &input.source_message);
+                merge_deterministic_extraction_at(
+                    &mut memory,
+                    &mut intent,
+                    &input.source_message,
+                    canonical,
+                );
                 if intent.intent == AssistantIntentKind::ClarificationReply
                     && let (Some(payload), Some(llm)) = (&context.pending_clarification, llm)
                 {
@@ -272,8 +330,8 @@ impl AssistantGraphRuntime {
                         Ok(ClarificationOutcome::SelectedOption { option_id, .. })
                             if option_id == OTHER_CLARIFICATION_OPTION_ID =>
                         {
-                            memory.intent = Some(intent_from_source(payload, &context));
-                            record_source_extraction_metadata(&mut memory, payload);
+                            memory.intent = Some(intent_from_source(payload, &context, canonical));
+                            record_source_extraction_metadata(&mut memory, payload, canonical);
                             memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
@@ -290,8 +348,8 @@ impl AssistantGraphRuntime {
                             );
                         }
                         Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
-                            memory.intent = Some(intent_from_source(payload, &context));
-                            record_source_extraction_metadata(&mut memory, payload);
+                            memory.intent = Some(intent_from_source(payload, &context, canonical));
+                            record_source_extraction_metadata(&mut memory, payload, canonical);
                             memory.selected_capability = Some(option_id.clone());
                             memory.source_intent = payload
                                 .source_intent
@@ -310,13 +368,14 @@ impl AssistantGraphRuntime {
                                 catalog,
                                 client,
                                 fineract_pool,
+                                canonical,
                                 pending_clarification,
                             )
                             .await;
                         }
                         Ok(ClarificationOutcome::FreeFormOther { .. }) => {
-                            memory.intent = Some(intent_from_source(payload, &context));
-                            record_source_extraction_metadata(&mut memory, payload);
+                            memory.intent = Some(intent_from_source(payload, &context, canonical));
+                            record_source_extraction_metadata(&mut memory, payload, canonical);
                             memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
@@ -429,7 +488,7 @@ impl AssistantGraphRuntime {
                     Ok(evidence) => (evidence, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 };
-                let decision = EvidenceEvaluator::default().evaluate(&plan, &evidence);
+                let decision = EvidenceEvaluator.evaluate(&plan, &evidence);
                 memory.retrieval_plan = json!(plan);
                 memory.retrieval_evidence = json!(evidence);
                 memory.evidence_decision = json!(decision);
@@ -446,6 +505,7 @@ impl AssistantGraphRuntime {
                             catalog,
                             client,
                             fineract_pool,
+                            canonical,
                             None,
                         )
                         .await;
@@ -564,6 +624,7 @@ fn pending_clarification_intent(context: &ContextWindow) -> AssistantIntent {
             Some("organization") => AssistantDomain::Organization,
             _ => AssistantDomain::Unknown,
         },
+        request_shape: Default::default(),
         language: AssistantLanguage::En,
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
@@ -598,6 +659,11 @@ fn first_standalone_limit(content: &str) -> Option<i64> {
         })
 }
 
+fn is_parameter_reply(message: &str) -> bool {
+    message.split_whitespace().count() <= 6
+}
+
+#[cfg(test)]
 fn merge_deterministic_extraction(
     memory: &mut JobMemory,
     intent: &mut AssistantIntent,
@@ -613,11 +679,40 @@ fn merge_deterministic_extraction(
     record_extraction_metadata(memory, &extraction);
 }
 
-fn record_source_extraction_metadata(memory: &mut JobMemory, payload: &ClarificationPayload) {
+fn merge_deterministic_extraction_at(
+    memory: &mut JobMemory,
+    intent: &mut AssistantIntent,
+    message: &str,
+    canonical: Option<&CanonicalRuntimeContext>,
+) {
+    let extraction = extract_for_context(message, canonical);
+    let conflicts = extraction.conflicts_with(intent);
+    if !conflicts.is_empty() {
+        memory.current_user_message_metadata["deterministic_extraction_conflicts"] =
+            serde_json::to_value(conflicts).unwrap_or_else(|_| json!([]));
+    }
+    extraction.merge_into(intent);
+    record_extraction_metadata(memory, &extraction);
+}
+
+fn record_source_extraction_metadata(
+    memory: &mut JobMemory,
+    payload: &ClarificationPayload,
+    canonical: Option<&CanonicalRuntimeContext>,
+) {
     if let Some(source) = &payload.source_intent {
-        let extraction = extract_message_facts(&source.prompt);
+        let extraction = extract_for_context(&source.prompt, canonical);
         record_extraction_metadata(memory, &extraction);
     }
+}
+
+fn extract_for_context(
+    message: &str,
+    canonical: Option<&CanonicalRuntimeContext>,
+) -> DeterministicExtraction {
+    canonical
+        .map(|context| extract_message_facts_at(message, context.reference_instant, 366))
+        .unwrap_or_else(|| extract_message_facts(message))
 }
 
 fn record_extraction_metadata(
@@ -635,8 +730,9 @@ async fn execute_selected_capability(
     recent_message_count: usize,
     capability_id: String,
     catalog: Option<&Arc<KnowledgeCatalog>>,
-    client: Option<&ClientContext>,
+    client: Option<&PrincipalContext>,
     fineract_pool: Option<&PgPool>,
+    canonical: Option<&CanonicalRuntimeContext>,
     pending_clarification: Option<Option<ClarificationPayload>>,
 ) -> GraphRuntimeResult {
     let (Some(catalog), Some(client)) = (catalog, client) else {
@@ -650,7 +746,10 @@ async fn execute_selected_capability(
             execution_transitions(TerminalState::Completed, "capability_selected"),
         );
     };
-    let Some(intent) = memory.intent.clone() else {
+    let intent = memory.intent.clone();
+    if intent.is_none()
+        && canonical.is_none_or(|context| context.mode != CanonicalGatewayMode::Authoritative)
+    {
         return graph_result(
             memory,
             TerminalState::WaitingForUserInput,
@@ -660,48 +759,111 @@ async fn execute_selected_capability(
             pending_clarification.clone(),
             execution_transitions(TerminalState::WaitingForUserInput, "missing_intent"),
         );
-    };
-    let deterministic_extraction = memory
+    }
+    if let Some(error) = memory
         .current_user_message_metadata
         .get("deterministic_extraction")
         .cloned()
-        .and_then(|value| {
-            serde_json::from_value::<crate::assistant::DeterministicExtraction>(value).ok()
-        });
-    let plan = match crate::assistant::plan_selected_capability_verified(
-        catalog,
-        &capability_id,
-        &intent,
-        deterministic_extraction.as_ref(),
-    ) {
-        Ok(plan) => plan,
+        .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok())
+        .and_then(|extraction| extraction.temporal_error)
+    {
+        let payload = ClarificationPayload {
+            question: error.message.clone(),
+            options: vec![ClarificationOption {
+                id: capability_id.clone(),
+                label: capability_id.clone(),
+                description: Some("Retry this report after providing a valid date range.".into()),
+            }],
+            attempt: 1,
+            source_intent: intent
+                .as_ref()
+                .map(|intent| source_intent_snapshot(intent, &intent.reason)),
+            allow_free_text: true,
+            is_missing_execution_parameters: true,
+        };
+        return graph_result(
+            memory,
+            TerminalState::WaitingForUserInput,
+            &error.code,
+            ResponseBuilder::clarification(payload.clone()),
+            recent_message_count,
+            Some(Some(payload)),
+            execution_transitions(TerminalState::WaitingForUserInput, "invalid_temporal_input"),
+        );
+    }
+    let authoritative =
+        canonical.filter(|context| context.mode == CanonicalGatewayMode::Authoritative);
+    let authoritative_plan = match authoritative {
+        Some(context) => {
+            authoritative_plan(context, &mut memory, catalog, client, &capability_id).await
+        }
+        None => Ok(None),
+    };
+    let (plan, execution_client) = match authoritative_plan {
+        Ok(Some((plan, principal))) => (plan, principal),
+        Ok(None) => {
+            let intent = intent.as_ref().expect("legacy path checked intent");
+            let deterministic_extraction = memory
+                .current_user_message_metadata
+                .get("deterministic_extraction")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok());
+            match crate::assistant::plan_selected_capability_verified(
+                catalog,
+                &capability_id,
+                intent,
+                deterministic_extraction.as_ref(),
+            ) {
+                Ok(plan) => (plan, client.clone()),
+                Err(error) => {
+                    let payload = ClarificationPayload {
+                        question: error.to_string(),
+                        options: vec![
+                            ClarificationOption {
+                                id: capability_id.clone(),
+                                label: capability_id.clone(),
+                                description: None,
+                            },
+                            ClarificationOption {
+                                id: OTHER_CLARIFICATION_OPTION_ID.into(),
+                                label: "Others".into(),
+                                description: Some(
+                                    "Let me describe what I need in my own words.".into(),
+                                ),
+                            },
+                        ],
+                        attempt: 1,
+                        source_intent: Some(source_intent_snapshot(intent, &intent.reason)),
+                        allow_free_text: true,
+                        is_missing_execution_parameters: true,
+                    };
+                    return graph_result(
+                        memory,
+                        TerminalState::WaitingForUserInput,
+                        "missing_execution_parameters",
+                        ResponseBuilder::clarification(payload.clone()),
+                        recent_message_count,
+                        Some(Some(payload)),
+                        execution_transitions(
+                            TerminalState::WaitingForUserInput,
+                            "missing_execution_parameters",
+                        ),
+                    );
+                }
+            }
+        }
         Err(error) => {
-            let evidence =
-                serde_json::from_value::<Vec<Evidence>>(memory.retrieval_evidence.clone())
-                    .unwrap_or_default();
-            let payload = clarification_payload(
-                &RetrievalPlan::new(intent.reason.clone(), &intent, true, Vec::new()),
-                &evidence,
-                Some(source_intent_snapshot(&intent, &intent.reason)),
-            );
+            memory.warnings = json!([{ "message": error.to_string() }]);
             return graph_result(
                 memory,
-                TerminalState::WaitingForUserInput,
-                "missing_execution_parameters",
-                if evidence.is_empty() {
-                    ResponseBuilder::missing_parameter(&error.to_string())
-                } else {
-                    ResponseBuilder::clarification(payload.clone())
-                },
+                TerminalState::FailedOperational,
+                "canonical_snapshot_invalid",
+                ResponseBuilder::error(),
                 recent_message_count,
-                if evidence.is_empty() {
-                    pending_clarification.clone()
-                } else {
-                    Some(Some(payload))
-                },
+                pending_clarification,
                 execution_transitions(
-                    TerminalState::WaitingForUserInput,
-                    "missing_execution_parameters",
+                    TerminalState::FailedOperational,
+                    "canonical_snapshot_invalid",
                 ),
             );
         }
@@ -710,7 +872,7 @@ async fn execute_selected_capability(
     let tool_request = crate::assistant::tool_request_from_plan(&plan, evidence_refs);
     memory.selected_tool = Some(tool_request.tool_name.clone());
     memory.tool_params = json!(tool_request);
-    let policy = crate::assistant::guard_selected_capability(client, catalog, &plan);
+    let policy = crate::assistant::guard_selected_capability(&execution_client, catalog, &plan);
     memory.policy_decision = json!(policy);
     if policy.status != PolicyDecisionStatus::Allowed {
         return graph_result(
@@ -738,8 +900,13 @@ async fn execute_selected_capability(
         Ok(result) => {
             let tool_result =
                 crate::assistant::tool_result_from_execution(&tool_request, result.clone());
-            let response =
-                ResponseBuilder::from_tool_result(&intent, &plan, &policy, &tool_result, catalog);
+            let response = ResponseBuilder::from_tool_result(
+                intent.as_ref().expect("successful execution has intent"),
+                &plan,
+                &policy,
+                &tool_result,
+                catalog,
+            );
             let mut result_state = graph_result(
                 memory,
                 TerminalState::Completed,
@@ -764,6 +931,191 @@ async fn execute_selected_capability(
                 execution_transitions(TerminalState::FailedOperational, "execution_failed"),
             )
         }
+    }
+}
+
+async fn authoritative_plan(
+    context: &CanonicalRuntimeContext,
+    memory: &mut JobMemory,
+    catalog: &KnowledgeCatalog,
+    current_client: &PrincipalContext,
+    capability_id: &str,
+) -> anyhow::Result<Option<(crate::chat::planner::ExecutionPlan, PrincipalContext)>> {
+    let catalog_version = context
+        .catalog_version
+        .ok_or_else(|| anyhow::anyhow!("missing canonical catalog version"))?;
+    if let Some(snapshot_id) = memory.planner_snapshot_id {
+        let loaded = context
+            .repository
+            .get_planner_snapshot(snapshot_id, memory.job_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing planner snapshot"))?;
+        anyhow::ensure!(
+            loaded.capability_catalog_version == catalog_version,
+            "mismatched planner snapshot catalog"
+        );
+        if loaded.revision == context.revision {
+            let plan = plan_from_snapshot(catalog, &loaded)?;
+            let principal = principal_from_snapshot(loaded.principal_projection);
+            return Ok(Some((plan, principal)));
+        }
+        anyhow::ensure!(
+            loaded.revision < context.revision,
+            "mismatched planner snapshot revision"
+        );
+    }
+    let extraction = memory
+        .current_user_message_metadata
+        .get("deterministic_extraction")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok())
+        .unwrap_or_default();
+    let source_id = context.message_id.to_string();
+    let effective = if context.initial {
+        let intent = memory
+            .intent
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing accepted initial parse"))?;
+        let mut original = OriginalIntent {
+            id: stable_uuid(memory.job_id, 1),
+            job_id: memory.job_id,
+            schema_version: 1,
+            raw_message_id: context.message_id,
+            locale: intent.language.clone(),
+            action: intent.intent.clone(),
+            entities: intent.entities.clone(),
+            metrics: intent.constraints.metric.clone().into_iter().collect(),
+            groupings: vec![format!("{:?}", intent.request_shape.grouping).to_lowercase()],
+            output: Some(format!("{:?}", intent.request_shape.output).to_lowercase()),
+            parameters: Default::default(),
+            pii_request: false,
+            extraction_provenance: vec![ExtractionProvenance {
+                extractor: "semantic_router".into(),
+                version: "canonical_v1".into(),
+                source_identifiers: vec![source_id.clone()],
+                source_spans: Vec::new(),
+                rule: None,
+                reference_instant: None,
+                timezone: None,
+            }],
+            created_at: context.reference_instant,
+        };
+        if let Some(provenance) = &extraction.temporal_provenance {
+            original.extraction_provenance.push(ExtractionProvenance {
+                extractor: "deterministic_temporal_resolver".into(),
+                version: "v1".into(),
+                source_identifiers: vec![source_id.clone()],
+                source_spans: vec![provenance.phrase_span],
+                rule: Some(provenance.rule.clone()),
+                reference_instant: Some(provenance.reference_instant),
+                timezone: Some(provenance.timezone.clone()),
+            });
+        }
+        let observations = original_request_observations(
+            memory.job_id,
+            &source_id,
+            intent,
+            &extraction,
+            context.observed_at,
+        );
+        let mut effective = merge_observations(
+            memory.job_id,
+            context.revision,
+            &observations,
+            &executable_constraint_contracts(),
+        )?;
+        effective.id = stable_uuid(memory.job_id, context.revision as u128 + 2);
+        effective.created_at = context.observed_at;
+        context
+            .repository
+            .insert_initial_state(&original, &observations, &effective)
+            .await?
+            .2
+    } else {
+        let first_sequence = context
+            .repository
+            .list_observations(memory.job_id)
+            .await?
+            .len() as i64
+            + 1;
+        let observations = deterministic_observations(
+            memory.job_id,
+            &source_id,
+            first_sequence,
+            FactSourceKind::Clarification,
+            &extraction,
+            context.observed_at,
+        );
+        context
+            .repository
+            .append_observations(memory.job_id, &observations)
+            .await?;
+        context
+            .repository
+            .derive_and_insert_effective(
+                memory.job_id,
+                context.revision,
+                &executable_constraint_contracts(),
+            )
+            .await?
+    };
+    let original = context
+        .repository
+        .get_original_intent(memory.job_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing canonical original intent"))?;
+    let snapshot = PlannerInputSnapshot {
+        id: stable_uuid(memory.job_id, context.revision as u128 + 100),
+        job_id: memory.job_id,
+        revision: context.revision,
+        original_intent_id: original.id,
+        effective_constraints_id: effective.id,
+        capability_catalog_version: catalog_version,
+        principal_projection: PrincipalProjection {
+            user_id: current_client.user_id,
+            role: current_client.role.clone(),
+            capability_ids: current_client.capability_ids.clone(),
+            office_ids: current_client.office_ids.clone(),
+            can_view_pii: current_client.can_view_pii,
+            legacy_api_key_id: current_client.legacy_api_key_id,
+        },
+        reference_instant: context.reference_instant,
+        timezone: context.timezone.clone(),
+        selected_capability_id: capability_id.to_owned(),
+        normalized_parameters: normalize_effective_parameters(catalog, capability_id, &effective)?,
+        created_at: context.observed_at,
+    };
+    let snapshot_id = context
+        .repository
+        .insert_planner_snapshot(&snapshot)
+        .await?
+        .id;
+    memory.planner_snapshot_id = Some(snapshot_id);
+    let loaded = context
+        .repository
+        .get_planner_snapshot(snapshot_id, memory.job_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing planner snapshot"))?;
+    anyhow::ensure!(
+        loaded.job_id == memory.job_id
+            && loaded.original_intent_id == original.id
+            && loaded.effective_constraints_id == effective.id
+            && loaded.capability_catalog_version == catalog_version,
+        "mismatched planner snapshot"
+    );
+    let plan = plan_from_snapshot(catalog, &loaded)?;
+    let principal = principal_from_snapshot(loaded.principal_projection);
+    Ok(Some((plan, principal)))
+}
+
+fn principal_from_snapshot(projection: PrincipalProjection) -> PrincipalContext {
+    PrincipalContext {
+        user_id: projection.user_id,
+        role: projection.role,
+        capability_ids: projection.capability_ids,
+        office_ids: projection.office_ids,
+        can_view_pii: projection.can_view_pii,
+        legacy_api_key_id: projection.legacy_api_key_id,
     }
 }
 
@@ -814,6 +1166,7 @@ fn deterministic_intent(intent: AssistantIntentKind, message: &str) -> Assistant
     AssistantIntent {
         intent,
         domain: AssistantDomain::Unknown,
+        request_shape: Default::default(),
         language: AssistantLanguage::En,
         entities: Vec::new(),
         constraints: AssistantConstraints::default(),
@@ -888,12 +1241,25 @@ fn clarification_candidate_allowed(
             .any(|capability| capability == id)
 }
 
+fn continuation_capability(payload: &ClarificationPayload) -> Option<String> {
+    if !payload.is_missing_execution_parameters {
+        return None;
+    }
+    let mut options = payload
+        .options
+        .iter()
+        .filter(|option| option.id != OTHER_CLARIFICATION_OPTION_ID);
+    let option = options.next()?;
+    options.next().is_none().then(|| option.id.clone())
+}
+
 fn source_intent_snapshot(intent: &AssistantIntent, prompt: &str) -> SourceIntentSnapshot {
     SourceIntentSnapshot {
         prompt: prompt.into(),
         normalized_prompt: Some(prompt.trim().to_lowercase()),
         intent: intent.intent.clone(),
         domain: intent.domain.clone(),
+        request_shape: intent.request_shape.clone(),
         entities: intent.entities.clone(),
         constraints: intent.constraints.clone(),
         context_reference: intent.context_reference.clone(),
@@ -902,11 +1268,16 @@ fn source_intent_snapshot(intent: &AssistantIntent, prompt: &str) -> SourceInten
     }
 }
 
-fn intent_from_source(payload: &ClarificationPayload, context: &ContextWindow) -> AssistantIntent {
+fn intent_from_source(
+    payload: &ClarificationPayload,
+    context: &ContextWindow,
+    canonical: Option<&CanonicalRuntimeContext>,
+) -> AssistantIntent {
     if let Some(source) = &payload.source_intent {
         let mut intent = AssistantIntent {
             intent: source.intent.clone(),
             domain: source.domain.clone(),
+            request_shape: source.request_shape.clone(),
             language: AssistantLanguage::En,
             entities: source.entities.clone(),
             constraints: source.constraints.clone(),
@@ -921,7 +1292,7 @@ fn intent_from_source(payload: &ClarificationPayload, context: &ContextWindow) -
         if matches!(intent.constraints.quantity, None | Some(Quantity::Default)) {
             intent.constraints.quantity = pending_clarification_quantity(context);
         }
-        let extraction = extract_message_facts(&source.prompt);
+        let extraction = extract_for_context(&source.prompt, canonical);
         extraction.merge_into(&mut intent);
         return intent;
     }
@@ -1095,6 +1466,7 @@ fn clarification_payload(
         attempt: 1,
         source_intent,
         allow_free_text: true,
+        is_missing_execution_parameters: false,
     }
 }
 
@@ -1233,6 +1605,7 @@ mod tests {
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
+            planner_snapshot_id: None,
             warnings: json!([]),
             revision: 0,
         }
@@ -1271,6 +1644,7 @@ mod tests {
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
+            planner_snapshot_id: None,
             warnings: json!([]),
             revision: 0,
         };
@@ -1349,6 +1723,7 @@ mod tests {
                 normalized_prompt: None,
                 intent: AssistantIntentKind::ReportRequest,
                 domain: AssistantDomain::Client,
+                request_shape: Default::default(),
                 entities: Vec::new(),
                 constraints: crate::assistant::AssistantConstraints {
                     quantity: Some(Quantity::Default),
@@ -1359,9 +1734,10 @@ mod tests {
                 reason: "test".into(),
             }),
             allow_free_text: false,
+            is_missing_execution_parameters: false,
         };
 
-        let intent = intent_from_source(&payload, &context);
+        let intent = intent_from_source(&payload, &context, None);
 
         assert_eq!(
             intent.constraints.quantity,
@@ -1375,6 +1751,7 @@ mod tests {
         let mut intent = AssistantIntent {
             intent: AssistantIntentKind::ReportRequest,
             domain: AssistantDomain::Client,
+            request_shape: Default::default(),
             language: AssistantLanguage::En,
             entities: Vec::new(),
             constraints: Default::default(),
@@ -1423,6 +1800,7 @@ mod tests {
         let mut intent = AssistantIntent {
             intent: AssistantIntentKind::ReportRequest,
             domain: AssistantDomain::Client,
+            request_shape: Default::default(),
             language: AssistantLanguage::En,
             entities: Vec::new(),
             constraints: crate::assistant::AssistantConstraints {
@@ -1453,6 +1831,7 @@ mod tests {
         let mut intent = AssistantIntent {
             intent: AssistantIntentKind::ReportRequest,
             domain: AssistantDomain::Client,
+            request_shape: Default::default(),
             language: AssistantLanguage::En,
             entities: Vec::new(),
             constraints: crate::assistant::AssistantConstraints {
@@ -1556,6 +1935,7 @@ mod tests {
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
+            planner_snapshot_id: None,
             warnings: json!([]),
             revision: 0,
         };
@@ -1596,6 +1976,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             "show savings",
         )
         .await;
@@ -1626,6 +2007,7 @@ mod tests {
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
+            planner_snapshot_id: None,
             warnings: json!([]),
             revision: 0,
         };
@@ -1645,6 +2027,7 @@ mod tests {
         let result = AssistantGraphRuntime::run_with_router(
             memory,
             context,
+            None,
             None,
             None,
             None,
@@ -1671,6 +2054,7 @@ mod tests {
         let result = AssistantGraphRuntime::run_with_router(
             empty_memory(),
             empty_context(),
+            None,
             None,
             None,
             None,
@@ -1706,6 +2090,7 @@ mod tests {
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
+            planner_snapshot_id: None,
             warnings: json!([]),
             revision: 0,
         };
@@ -1735,6 +2120,7 @@ mod tests {
                     normalized_prompt: None,
                     intent: AssistantIntentKind::ReportRequest,
                     domain: AssistantDomain::Client,
+                    request_shape: Default::default(),
                     entities: vec![crate::assistant::AssistantEntity {
                         entity_type: crate::assistant::AssistantEntityType::Currency,
                         value: "USD".into(),
@@ -1751,6 +2137,7 @@ mod tests {
                     reason: "test".into(),
                 }),
                 allow_free_text: true,
+                is_missing_execution_parameters: false,
             }),
             source_intent: None,
             source_snippets: Vec::new(),
@@ -1761,6 +2148,7 @@ mod tests {
         let result = AssistantGraphRuntime::run_with_router(
             memory,
             context,
+            None,
             None,
             None,
             None,
@@ -1827,6 +2215,7 @@ mod tests {
             policy_decision: json!({}),
             execution_summary: json!({}),
             structured_response: None,
+            planner_snapshot_id: None,
             warnings: json!([]),
             revision: 0,
         };
@@ -1846,6 +2235,7 @@ mod tests {
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
+                is_missing_execution_parameters: false,
             }),
             source_intent: None,
             source_snippets: Vec::new(),
@@ -1856,6 +2246,7 @@ mod tests {
         let result = AssistantGraphRuntime::run_with_router(
             memory,
             context,
+            None,
             None,
             None,
             None,
@@ -1914,6 +2305,7 @@ mod tests {
             &AssistantIntent {
                 intent: AssistantIntentKind::ReportRequest,
                 domain: AssistantDomain::Savings,
+                request_shape: Default::default(),
                 language: AssistantLanguage::En,
                 entities: Vec::new(),
                 constraints: Default::default(),

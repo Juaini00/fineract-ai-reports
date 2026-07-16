@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use chat::assistant::{
     AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, ClarificationOption,
     ClarificationOutcome, ClarificationPayload, ClarificationResolver, ContextMessage,
-    ContextReference, ContextWarning, ContextWarningCode, ContextWindow, ResponseBuilder,
+    ContextReference, ContextWarning, ContextWarningCode, ContextWindow, RequestGrouping,
+    RequestOperation, RequestOutput, RequestPii, RequestShape, RequestSubject, ResponseBuilder,
     SemanticRouter,
     llm::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage},
 };
@@ -31,10 +32,22 @@ impl LlmClient for ScenarioFakeLlm {
             .unwrap_or_default()
             .to_lowercase();
         let (intent, domain) = route_case(&message);
+        let request_shape = if message.contains("random") || message.contains("sembarang") {
+            RequestShape {
+                operation: RequestOperation::RandomSample,
+                subject: RequestSubject::Client,
+                grouping: RequestGrouping::None,
+                output: RequestOutput::List,
+                pii: RequestPii::ClientIdentity,
+            }
+        } else {
+            RequestShape::default()
+        };
         Ok(LlmResponse {
             value: json!({
                 "intent": intent,
                 "domain": domain,
+                "request_shape": request_shape,
                 "language": AssistantLanguage::En,
                 "entities": [],
                 "constraints": {},
@@ -115,10 +128,26 @@ async fn semantic_assistant_default_scenario_matrix_routes_without_live_services
             AssistantIntentKind::UnsafeRequest,
             AssistantDomain::Unknown,
         ),
+        (
+            "give me 5 random clients this year",
+            AssistantIntentKind::ReportRequest,
+            AssistantDomain::Client,
+        ),
+        (
+            "coba berikan saya 5 client sembarang pada tahun ini",
+            AssistantIntentKind::ReportRequest,
+            AssistantDomain::Client,
+        ),
     ] {
         let routed = router.route(prompt, &empty_context()).await.unwrap();
         assert_eq!(routed.intent, expected_intent, "{prompt}: {routed:?}");
         assert_eq!(routed.domain, expected_domain, "{prompt}: {routed:?}");
+        if prompt.contains("random") || prompt.contains("sembarang") {
+            assert_eq!(
+                routed.request_shape.operation,
+                RequestOperation::RandomSample
+            );
+        }
         assert_response_contract(prompt, &routed);
     }
 }
@@ -142,6 +171,7 @@ async fn semantic_clarification_reply_selects_balance_by_meaning() {
         attempt: 1,
         source_intent: None,
         allow_free_text: true,
+        is_missing_execution_parameters: false,
     };
 
     let outcome = ClarificationResolver::resolve(
@@ -235,6 +265,8 @@ fn route_case(message: &str) -> (AssistantIntentKind, AssistantDomain) {
         )
     } else if message.contains("sekarang") {
         (AssistantIntentKind::FollowUp, AssistantDomain::Client)
+    } else if message.contains("random") || message.contains("sembarang") {
+        (AssistantIntentKind::ReportRequest, AssistantDomain::Client)
     } else if message.contains("client") || message.contains("tony") {
         (AssistantIntentKind::DataLookup, AssistantDomain::Client)
     } else {
@@ -271,6 +303,7 @@ fn assert_response_contract(prompt: &str, intent: &AssistantIntent) {
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
+                is_missing_execution_parameters: false,
             })
         }
         _ => ResponseBuilder::selected(format!("{:?}", intent.domain)),

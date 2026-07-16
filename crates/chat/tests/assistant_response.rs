@@ -85,6 +85,7 @@ fn intent() -> AssistantIntent {
     AssistantIntent {
         intent: AssistantIntentKind::DataLookup,
         domain: AssistantDomain::Client,
+        request_shape: Default::default(),
         language: AssistantLanguage::En,
         entities: Vec::new(),
         constraints: AssistantConstraints::default(),

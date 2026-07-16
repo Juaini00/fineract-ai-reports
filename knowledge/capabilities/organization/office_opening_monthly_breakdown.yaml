@@ -10,6 +10,12 @@ query_id: organization.office_opening_monthly_breakdown
 metrics:
   - organization.office_count
 output_mode: monthly_breakdown
+request_shape:
+  operation: trend
+  subject: office
+  grouping: month
+  output: time_series
+  pii: none
 examples:
   - Monthly office openings for 2026.
   - How many offices opened each month last year?

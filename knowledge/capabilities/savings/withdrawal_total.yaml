@@ -12,6 +12,12 @@ metrics:
   - savings.withdrawal_amount
   - savings.withdrawal_count
 output_mode: total
+request_shape:
+  operation: total
+  subject: savings_transaction
+  grouping: none
+  output: scalar
+  pii: none
 examples:
   - What is the total withdrawal this month?
   - Total savings withdrawal from January to September 2026.

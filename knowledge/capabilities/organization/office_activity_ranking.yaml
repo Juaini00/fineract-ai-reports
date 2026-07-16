@@ -11,6 +11,12 @@ query_id: organization.office_activity_ranking
 metrics:
   - savings.transaction_count
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: office
+  grouping: office
+  output: ranking
+  pii: none
 examples:
   - Which offices had the most transactions this month?
   - Top 10 busiest offices by transaction count in Q2.

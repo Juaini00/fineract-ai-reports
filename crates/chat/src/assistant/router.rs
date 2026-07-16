@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
 use serde_json::json;
 
 use crate::{
@@ -9,73 +8,28 @@ use crate::{
 
 pub struct SemanticRouter {
     llm: llm::SharedLlmClient,
-    candidates: Vec<RouteCandidate>,
 }
 
 impl SemanticRouter {
-    pub fn new(llm: llm::SharedLlmClient, catalog: &KnowledgeCatalog) -> Self {
-        let candidates = catalog
-            .capabilities
-            .iter()
-            .filter(|capability| matches!(capability.status.as_str(), "active" | "approved_mvp"))
-            .map(|capability| RouteCandidate {
-                id: capability.id.clone(),
-                domain: capability.domain.clone(),
-                description: capability.description.clone().unwrap_or_default(),
-                examples: capability.examples.clone(),
-                candidate_text: format!(
-                    "{} {} {}",
-                    capability.display_name.clone().unwrap_or_default(),
-                    capability.description.clone().unwrap_or_default(),
-                    capability.examples.join(" ")
-                ),
-            })
-            .collect();
-        Self { llm, candidates }
+    pub fn new(llm: llm::SharedLlmClient, _catalog: &KnowledgeCatalog) -> Self {
+        Self { llm }
     }
 
     pub async fn route(&self, message: &str, context: &ContextWindow) -> Result<AssistantIntent> {
         if message.trim().is_empty() {
             bail!("cannot route empty message");
         }
-        let message_vector = self
-            .llm
-            .embed(llm::LlmPurpose::RouteEmbedding, message)
-            .await
-            .context("embed route message")?
-            .vector;
-        let mut candidates = Vec::with_capacity(self.candidates.len());
-        for candidate in &self.candidates {
-            let candidate_vector = self
-                .llm
-                .embed(llm::LlmPurpose::RouteEmbedding, &candidate.candidate_text)
-                .await
-                .with_context(|| format!("embed route candidate {}", candidate.id))?
-                .vector;
-            candidates.push((cosine(&message_vector, &candidate_vector), candidate));
-        }
-        candidates.sort_by(|left, right| right.0.total_cmp(&left.0));
-        let candidates = candidates
-            .into_iter()
-            .take(8)
-            .map(|(score, candidate)| CandidatePrompt {
-                id: &candidate.id,
-                domain: &candidate.domain,
-                description: &candidate.description,
-                examples: &candidate.examples,
-                similarity: score,
-            })
-            .collect::<Vec<_>>();
         let user = json!({
             "message": message,
             "context": context,
-            "candidate_capabilities": candidates,
             "rules": [
-                "Return one AssistantIntent JSON object only with keys: intent, domain, language, entities, constraints, context_reference, confidence, reason.",
+                "Return one AssistantIntent JSON object only with keys: intent, domain, request_shape, language, entities, constraints, context_reference, confidence, reason.",
+                "request_shape must contain operation (total|summary|list|rank|trend|lookup|random_sample|unknown), subject (savings_transaction|savings_account|client|office|organization_hierarchy|product|unknown), grouping (none|month|office|product|unknown), output (scalar|summary|list|ranking|time_series|lookup|unknown), and pii (none|client_identity|conditional_client_identity|unknown).",
+                "Classify requests for arbitrary/random clients, including 'client sembarang', as subject=client and operation=random_sample.",
                 "Use entities=[] when no explicit named entity is required; context_reference must be the string none, not null.",
                 "intent must be one of: greeting, help, report_request, data_lookup, clarification_reply, follow_up, unsafe_request, out_of_domain, unsupported_in_domain.",
                 "For matched reporting capabilities use intent=report_request, not the capability id.",
-                "Use candidates only as hints; do not invent SQL or execute anything.",
+                "Do not invent SQL, capability ids, or unavailable report support.",
                 "If JSON cannot match the schema, fail rather than fallback."
             ]
         })
@@ -93,35 +47,6 @@ impl SemanticRouter {
 }
 
 const ROUTER_SYSTEM: &str = "You route reporting assistant messages. Return only JSON matching the AssistantIntent schema. No SQL. English-only user-facing reasoning.";
-
-#[derive(Debug, Clone)]
-struct RouteCandidate {
-    id: String,
-    domain: String,
-    description: String,
-    examples: Vec<String>,
-    candidate_text: String,
-}
-
-#[derive(Serialize)]
-struct CandidatePrompt<'a> {
-    id: &'a str,
-    domain: &'a str,
-    description: &'a str,
-    examples: &'a [String],
-    similarity: f32,
-}
-
-fn cosine(left: &[f32], right: &[f32]) -> f32 {
-    let dot = left.iter().zip(right).map(|(l, r)| l * r).sum::<f32>();
-    let left_norm = left.iter().map(|v| v * v).sum::<f32>().sqrt();
-    let right_norm = right.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if left_norm == 0.0 || right_norm == 0.0 {
-        0.0
-    } else {
-        dot / (left_norm * right_norm)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -161,6 +86,7 @@ mod tests {
                 value: json!({
                     "intent": intent,
                     "domain": domain,
+                    "request_shape": {},
                     "language": AssistantLanguage::En,
                     "entities": [],
                     "constraints": {},

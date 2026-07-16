@@ -10,7 +10,11 @@ async fn provider_test_without_sentinel_fails_closed_not_respondable() {
     let key = app.provision_wildcard_api_key(true).await;
 
     let resp = app
-        .post_json("/chat/jobs", Some(&key.raw), &json!({ "message": "hello" }))
+        .post_json(
+            "/chat/jobs",
+            Some(&key.raw),
+            &json!({ "message": "Show me the top 10 clients by savings balance" }),
+        )
         .await;
     assert_eq!(resp.status(), 201);
     let job_id = resp.json::<Value>().await.unwrap()["data"]["job_id"]

@@ -23,13 +23,13 @@ use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
 use crate::chat::model::{CreateChatJobInput, RespondToChatJobInput};
 use crate::chat::service::job::redis_url_log_value;
 
-#[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
+#[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatJobRequest>,
 ) -> Result<Response, ApiError> {
-    let job = state
+    let Some(job) = state
         .chat
         .jobs
         .create(CreateChatJobInput {
@@ -38,7 +38,10 @@ pub async fn create(
             message: request.message,
         })
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found("chat session not found"));
+    };
 
     info!(
         session_id = %job.session_id,
@@ -50,7 +53,7 @@ pub async fn create(
     Ok(response::success(StatusCode::CREATED, job).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn get(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
@@ -71,7 +74,7 @@ pub async fn get(
     Ok(response::success(StatusCode::OK, job).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn audit(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
@@ -90,7 +93,7 @@ pub async fn audit(
     Ok(response::success(StatusCode::OK, audit).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn stream(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
@@ -179,7 +182,7 @@ pub async fn stream(
     Ok(Sse::new(stream).into_response())
 }
 
-#[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn respond(
     AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,

@@ -16,11 +16,23 @@ impl MessageRepository {
         Self { pool }
     }
 
-    pub async fn list_for_client(
+    pub async fn list_for_user(
         &self,
         session_id: Uuid,
-        api_key_id: Uuid,
-    ) -> Result<Vec<ChatMessage>> {
+        user_id: Uuid,
+        include_legacy: bool,
+    ) -> Result<Option<Vec<ChatMessage>>> {
+        let visible = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = $1 AND (user_id = $2 OR ($3 AND user_id IS NULL)) AND archived_at IS NULL)",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(include_legacy)
+        .fetch_one(&self.pool)
+        .await?;
+        if !visible {
+            return Ok(None);
+        }
         let rows = sqlx::query_as::<_, ChatMessageRow>(
             r#"
             SELECT
@@ -34,17 +46,15 @@ impl MessageRepository {
             FROM chat_messages m
             JOIN chat_sessions s ON s.id = m.session_id
             WHERE m.session_id = $1
-              AND s.api_key_id = $2
               AND s.archived_at IS NULL
             ORDER BY m.created_at ASC
             "#,
         )
         .bind(session_id)
-        .bind(api_key_id)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        Ok(Some(rows.into_iter().map(Into::into).collect()))
     }
 
     pub async fn list_recent_for_session(

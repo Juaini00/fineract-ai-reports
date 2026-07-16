@@ -1,12 +1,89 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RequestShape {
+    #[serde(default)]
+    pub operation: RequestOperation,
+    #[serde(default)]
+    pub subject: RequestSubject,
+    #[serde(default)]
+    pub grouping: RequestGrouping,
+    #[serde(default)]
+    pub output: RequestOutput,
+    #[serde(default)]
+    pub pii: RequestPii,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestOperation {
+    Total,
+    Summary,
+    List,
+    Rank,
+    Trend,
+    Lookup,
+    RandomSample,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestSubject {
+    SavingsTransaction,
+    SavingsAccount,
+    Client,
+    Office,
+    OrganizationHierarchy,
+    Product,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestGrouping {
+    None,
+    Month,
+    Office,
+    Product,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestOutput {
+    Scalar,
+    Summary,
+    List,
+    Ranking,
+    TimeSeries,
+    Lookup,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestPii {
+    None,
+    ClientIdentity,
+    ConditionalClientIdentity,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssistantIntent {
     #[serde(default)]
     pub intent: AssistantIntentKind,
     #[serde(default)]
     pub domain: AssistantDomain,
+    #[serde(default)]
+    pub request_shape: RequestShape,
     #[serde(default = "default_language")]
     pub language: AssistantLanguage,
     #[serde(default)]
@@ -128,6 +205,8 @@ pub struct SourceIntentSnapshot {
     pub normalized_prompt: Option<String>,
     pub intent: AssistantIntentKind,
     pub domain: AssistantDomain,
+    #[serde(default)]
+    pub request_shape: RequestShape,
     #[serde(default)]
     pub entities: Vec<AssistantEntity>,
     #[serde(default)]

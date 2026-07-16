@@ -11,6 +11,12 @@ query_id: client.activation_top_n_offices
 metrics:
   - client.lifecycle_count
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: office
+  grouping: office
+  output: ranking
+  pii: none
 examples:
   - Top 5 offices by new client activations this month.
   - Which offices onboarded the most clients last quarter?

@@ -42,6 +42,7 @@ impl LlmClient for GoldenFakeLlm {
             value: json!({
                 "intent": intent,
                 "domain": domain,
+                "request_shape": {},
                 "language": AssistantLanguage::En,
                 "entities": [],
                 "constraints": {},
@@ -131,6 +132,7 @@ fn fake_response_type(intent: &AssistantIntent) -> String {
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
+                is_missing_execution_parameters: false,
             })
             .response_type
         }
@@ -196,6 +198,7 @@ async fn offline_fake_resolver_selects_semantic_balance_option() {
         attempt: 1,
         source_intent: None,
         allow_free_text: true,
+        is_missing_execution_parameters: false,
     };
     let outcome = ClarificationResolver::resolve(
         "yang balance aja",

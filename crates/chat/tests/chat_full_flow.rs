@@ -20,7 +20,8 @@
 
 mod common;
 
-use common::{TestApp, spawn_app};
+use app_core::config::CanonicalGatewayMode;
+use common::{TestApp, spawn_app, spawn_app_with_canonical_mode};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,56 @@ const CAPS: &[&str] = &[
     // capability for "activity" prompts instead of depending on exact wording.
     "savings_activity_list",
 ];
+
+#[tokio::test(flavor = "multi_thread")]
+async fn canonical_shadow_writes_job_scoped_baseline_without_changing_response() {
+    let app = spawn_app_with_canonical_mode(CanonicalGatewayMode::Shadow).await;
+    let key = app.provision_wildcard_api_key(true).await;
+    let session_id = create_session(&app, &key.raw, "canonical shadow").await;
+    let job_id = create_job(
+        &app,
+        &key.raw,
+        &session_id,
+        "show top 5 clients by savings account count",
+    )
+    .await;
+    let job = wait_until_not_running(&app, &key.raw, &job_id).await;
+    assert!(matches!(
+        job["status"].as_str(),
+        Some("completed" | "waiting_for_user_input")
+    ));
+
+    let job_id = uuid::Uuid::parse_str(&job_id).unwrap();
+    let original: (uuid::Uuid, uuid::Uuid) = sqlx::query_as(
+        "SELECT raw_message_id, job_id FROM assistant_original_intents WHERE job_id = $1",
+    )
+    .bind(job_id)
+    .fetch_one(&app.app_pool)
+    .await
+    .unwrap();
+    let user_message_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT user_message_id FROM chat_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&app.app_pool)
+            .await
+            .unwrap();
+    assert_eq!(original, (user_message_id, job_id));
+    let observation_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM assistant_fact_observations WHERE job_id = $1")
+            .bind(job_id)
+            .fetch_one(&app.app_pool)
+            .await
+            .unwrap();
+    assert!(observation_count > 0);
+    let revisions: Vec<i64> = sqlx::query_scalar(
+        "SELECT revision FROM assistant_effective_constraints WHERE job_id = $1 ORDER BY revision",
+    )
+    .bind(job_id)
+    .fetch_all(&app.app_pool)
+    .await
+    .unwrap();
+    assert_eq!(revisions, vec![0]);
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ambiguous_prompt_free_text_reply_never_loops() {
@@ -315,7 +366,7 @@ async fn domain_prompt_matrix_returns_expected_contracts() {
             &["client_top_n_by_savings_account_count"][..],
         ),
         (
-            "I want to see office savings summary",
+            "I want to see office savings summary top 5 in IDR.",
             true,
             &["organization_office_savings_summary"][..],
         ),
@@ -332,12 +383,17 @@ async fn domain_prompt_matrix_returns_expected_contracts() {
         ("I want to see savings charges and fees", false, &[][..]),
         ("I want to see tax report", false, &[][..]),
         ("I want to see accounting GL journal report", false, &[][..]),
+        ("give me 5 random clients this year", false, &[][..]),
+        (
+            "coba berikan saya 5 client sembarang pada tahun ini",
+            false,
+            &[][..],
+        ),
     ] {
         let job_id = create_job(&app, &key.raw, &session_id, prompt).await;
         let job = wait_until_not_running(&app, &key.raw, &job_id).await;
         let result = &job["result_json"];
         let response = &result["structured_response"];
-
         if supported {
             assert_ne!(
                 result["policy_blocked"].as_bool(),
@@ -372,6 +428,14 @@ async fn domain_prompt_matrix_returns_expected_contracts() {
             );
             assert_no_sql_or_table_leak(&job);
             assert!(response["table"].is_null(), "{prompt}: table leaked: {job}");
+            assert!(
+                option_ids(response).is_empty(),
+                "{prompt}: options leaked: {job}"
+            );
+            assert!(
+                result["selected_capability"].is_null(),
+                "{prompt}: capability selected: {job}"
+            );
         }
     }
 }

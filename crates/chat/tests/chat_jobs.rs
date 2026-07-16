@@ -15,16 +15,8 @@ use uuid::Uuid;
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-const SCENARIO_CAPABILITIES: &[&str] = &[
-    "savings_activity_list",
-    "savings_deposit_total",
-    "savings_deposit_top_n",
-    "savings_withdrawal_total",
-    "savings_withdrawal_top_n",
-];
-
 #[tokio::test(flavor = "multi_thread")]
-async fn create_job_without_api_key_is_unauthorized() {
+async fn create_job_without_bearer_is_unauthorized() {
     let app = spawn_app().await;
 
     let resp = app
@@ -37,10 +29,10 @@ async fn create_job_without_api_key_is_unauthorized() {
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_message_is_rejected_by_validator() {
     let app = spawn_app().await;
-    let key = app.provision_api_key(&[], vec![1], false).await;
+    let token = app.login_admin().await;
 
     let resp = app
-        .post_json("/chat/jobs", Some(&key.raw), &json!({ "message": "" }))
+        .post_json_bearer("/chat/jobs", &token, &json!({ "message": "" }))
         .await;
 
     assert!(
@@ -51,18 +43,56 @@ async fn empty_message_is_rejected_by_validator() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn job_routes_hide_jobs_owned_by_another_user() {
+    let app = spawn_app().await;
+    let owner = app.login_admin().await;
+    let other = app.create_test_user_bearer().await;
+    let job = create_job(&app, &owner, "hello").await;
+    let job_id = job["job_id"].as_str().unwrap();
+
+    let mine = app
+        .get_bearer(&format!("/chat/jobs/{job_id}"), &owner)
+        .await;
+    assert_eq!(mine.status(), 200);
+    let mine: Value = mine.json().await.unwrap();
+    assert!(mine["data"]["user_id"].is_string());
+    assert!(mine["data"]["api_key_id"].is_null());
+
+    let theirs = app
+        .get_bearer(&format!("/chat/jobs/{job_id}"), &other)
+        .await;
+    assert_eq!(theirs.status(), 404);
+
+    let foreign_session = app
+        .post_json_bearer(
+            "/chat/jobs",
+            &other,
+            &json!({ "session_id": job["session_id"], "message": "not mine" }),
+        )
+        .await;
+    assert_eq!(foreign_session.status(), 404);
+
+    let response = app
+        .post_json_bearer(
+            &format!("/chat/jobs/{job_id}/responses"),
+            &other,
+            &json!({ "message": "not mine" }),
+        )
+        .await;
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn deferred_domain_request_ends_without_leaking_internals() {
     // "loan disbursement last month" — loan domain is deferred; the pipeline
     // must classify → policy → reject with a sanitized template.
 
     let app = spawn_app().await;
-    let key = app
-        .provision_api_key(&["savings_deposit_total"], vec![1, 2], false)
-        .await;
+    let token = app.login_admin().await;
 
-    let job = create_job(&app, &key.raw, "How much loan did we disburse last month?").await;
+    let job = create_job(&app, &token, "How much loan did we disburse last month?").await;
 
-    let final_job = wait_for_terminal(&app, &key.raw, &job).await;
+    let final_job = wait_for_terminal(&app, &token, &job).await;
 
     // Sanitized-only assertions: whatever the final status, the client-visible
     // response must not leak SQL / stack / prompt / raw table names.
@@ -78,19 +108,21 @@ async fn deferred_domain_request_ends_without_leaking_internals() {
 #[tokio::test(flavor = "multi_thread")]
 async fn job_audit_endpoint_returns_pipeline_timeline() {
     let app = spawn_app().await;
-    let key = app
-        .provision_api_key(&["savings_deposit_total"], vec![1, 2], false)
-        .await;
+    let token = app.login_admin().await;
 
-    let job = create_job(&app, &key.raw, "How much loan did we disburse last month?").await;
+    let job = create_job(&app, &token, "How much loan did we disburse last month?").await;
     let job_id = job["job_id"].as_str().unwrap();
-    let _ = wait_for_terminal(&app, &key.raw, &job).await;
+    let _ = wait_for_terminal(&app, &token, &job).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
 
-    let audit = get_audit(&app, &key.raw, job_id).await;
+    let audit = get_audit(&app, &token, job_id).await;
     assert_eq!(audit["job_id"], job_id);
     let events = audit["events"].as_array().expect("audit events array");
+    assert!(!events.is_empty(), "audit timeline should contain an event");
     assert!(
         events.iter().all(|event| event.get("job_id").is_some()
+            && event["user_id"].is_string()
+            && event["api_key_id"].is_null()
             && event.get("layer").is_some()
             && event.get("blueprint_step").is_some()
             && event.get("status").is_some()
@@ -100,17 +132,60 @@ async fn job_audit_endpoint_returns_pipeline_timeline() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn admin_reads_legacy_unowned_audit_without_claiming_it() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+    let key = app.provision_wildcard_api_key(false).await;
+    let session_id = Uuid::new_v4();
+    let job_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO chat_sessions (id, api_key_id, status) VALUES ($1, $2, 'active')")
+        .bind(session_id)
+        .bind(key.id)
+        .execute(&app.app_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO chat_jobs (id, session_id, api_key_id, status, current_step, message, expires_at) VALUES ($1, $2, $3, 'completed', 'response', 'legacy', now() + interval '1 hour')",
+    )
+    .bind(job_id)
+    .bind(session_id)
+    .bind(key.id)
+    .execute(&app.app_pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chat_job_audit_events (id, job_id, session_id, api_key_id, event_type, stage, layer, status) VALUES ($1, $2, $3, $4, 'legacy', 'legacy', 'legacy', 'completed')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(job_id)
+    .bind(session_id)
+    .bind(key.id)
+    .execute(&app.app_pool)
+    .await
+    .unwrap();
+
+    let audit = get_audit(&app, &token, &job_id.to_string()).await;
+    assert!(audit["events"][0]["user_id"].is_null());
+    assert_eq!(audit["events"][0]["api_key_id"], key.id.to_string());
+    let owner: Option<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM chat_job_audit_events WHERE job_id = $1")
+            .bind(job_id)
+            .fetch_one(&app.app_pool)
+            .await
+            .unwrap();
+    assert!(owner.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn missing_date_range_triggers_clarification_and_continues_same_job() {
     let app = spawn_app().await;
-    let key = app
-        .provision_api_key(&["savings_deposit_total"], vec![1, 2], false)
-        .await;
+    let token = app.login_admin().await;
 
     // Turn 1: no date range → planner should ask for clarification (or classifier)
-    let job1 = create_job(&app, &key.raw, "How much did we deposit?").await;
+    let job1 = create_job(&app, &token, "How much did we deposit?").await;
     let job1_id = job1["job_id"].as_str().unwrap().to_string();
 
-    let after_turn1 = wait_for_terminal(&app, &key.raw, &job1).await;
+    let after_turn1 = wait_for_terminal(&app, &token, &job1).await;
     // Whatever the terminal state (needs_clarification is expected but the
     // planner may fall back to unsupported), the reply must be short and safe.
     let payload = serde_json::to_string(&after_turn1).unwrap();
@@ -120,9 +195,9 @@ async fn missing_date_range_triggers_clarification_and_continues_same_job() {
     // spawn a new job. Even if the pipeline had already terminated, the
     // /responses route belongs to the same job_id.
     let resp = app
-        .post_json(
+        .post_json_bearer(
             &format!("/chat/jobs/{job1_id}/responses"),
-            Some(&key.raw),
+            &token,
             &json!({ "message": "from 2026-01-01 to 2026-01-31" }),
         )
         .await;
@@ -138,7 +213,7 @@ async fn missing_date_range_triggers_clarification_and_continues_same_job() {
 
     // The job under this id is still the same one.
     let got = app
-        .get(&format!("/chat/jobs/{job1_id}"), Some(&key.raw))
+        .get_bearer(&format!("/chat/jobs/{job1_id}"), &token)
         .await;
     assert_eq!(got.status(), 200);
     let got_json: Value = got.json().await.unwrap();
@@ -148,12 +223,10 @@ async fn missing_date_range_triggers_clarification_and_continues_same_job() {
 #[tokio::test(flavor = "multi_thread")]
 async fn all_activity_request_returns_activity_list() {
     let app = spawn_app().await;
-    let key = app
-        .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
-        .await;
+    let token = app.login_admin().await;
 
-    let job = create_job(&app, &key.raw, "Show customer savings activity this week").await;
-    let final_job = wait_for_terminal(&app, &key.raw, &job).await;
+    let job = create_job(&app, &token, "Show customer savings activity this week").await;
+    let final_job = wait_for_terminal(&app, &token, &job).await;
     assert_ne!(
         final_job["result_json"]["structured_response"]["response_type"],
         "error"
@@ -161,10 +234,7 @@ async fn all_activity_request_returns_activity_list() {
 
     let session_id = final_job["session_id"].as_str().unwrap();
     let messages = app
-        .get(
-            &format!("/chat/sessions/{session_id}/messages"),
-            Some(&key.raw),
-        )
+        .get_bearer(&format!("/chat/sessions/{session_id}/messages"), &token)
         .await;
     assert_eq!(messages.status(), 200);
     let body: Value = messages.json().await.unwrap();
@@ -183,9 +253,9 @@ async fn all_activity_request_returns_activity_list() {
     );
 }
 
-async fn create_job(app: &TestApp, api_key: &str, message: &str) -> Value {
+async fn create_job(app: &TestApp, token: &str, message: &str) -> Value {
     let resp = app
-        .post_json("/chat/jobs", Some(api_key), &json!({ "message": message }))
+        .post_json_bearer("/chat/jobs", token, &json!({ "message": message }))
         .await;
     assert_eq!(
         resp.status(),
@@ -197,16 +267,14 @@ async fn create_job(app: &TestApp, api_key: &str, message: &str) -> Value {
     body["data"].clone()
 }
 
-async fn wait_for_terminal(app: &TestApp, api_key: &str, initial: &Value) -> Value {
+async fn wait_for_terminal(app: &TestApp, token: &str, initial: &Value) -> Value {
     let job_id = initial["job_id"].as_str().unwrap();
     // sanity: a valid UUID
     let _ = Uuid::parse_str(job_id).expect("job_id is uuid");
 
     let deadline = Instant::now() + POLL_TIMEOUT;
     loop {
-        let resp = app
-            .get(&format!("/chat/jobs/{job_id}"), Some(api_key))
-            .await;
+        let resp = app.get_bearer(&format!("/chat/jobs/{job_id}"), token).await;
         assert_eq!(resp.status(), 200);
         let body: Value = resp.json().await.unwrap();
         let status = body["data"]["status"].as_str().unwrap_or("").to_string();
@@ -221,9 +289,9 @@ async fn wait_for_terminal(app: &TestApp, api_key: &str, initial: &Value) -> Val
     }
 }
 
-async fn get_audit(app: &TestApp, api_key: &str, job_id: &str) -> Value {
+async fn get_audit(app: &TestApp, token: &str, job_id: &str) -> Value {
     let resp = app
-        .get(&format!("/chat/jobs/{job_id}/audit"), Some(api_key))
+        .get_bearer(&format!("/chat/jobs/{job_id}/audit"), token)
         .await;
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -231,12 +299,10 @@ async fn get_audit(app: &TestApp, api_key: &str, job_id: &str) -> Value {
 }
 
 #[allow(dead_code)]
-async fn wait_for_final_after_response(app: &TestApp, api_key: &str, job_id: &str) -> Value {
+async fn wait_for_final_after_response(app: &TestApp, token: &str, job_id: &str) -> Value {
     let deadline = Instant::now() + POLL_TIMEOUT;
     loop {
-        let resp = app
-            .get(&format!("/chat/jobs/{job_id}"), Some(api_key))
-            .await;
+        let resp = app.get_bearer(&format!("/chat/jobs/{job_id}"), token).await;
         assert_eq!(resp.status(), 200);
         let body: Value = resp.json().await.unwrap();
         let status = body["data"]["status"].as_str().unwrap_or("").to_string();

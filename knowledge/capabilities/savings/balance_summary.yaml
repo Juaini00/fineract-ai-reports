@@ -10,6 +10,12 @@ query_id: savings.balance_summary
 metrics:
   - savings.account_balance
 output_mode: summary
+request_shape:
+  operation: summary
+  subject: savings_account
+  grouping: none
+  output: summary
+  pii: none
 examples:
   - What is the total savings balance right now?
   - Show the savings portfolio summary.

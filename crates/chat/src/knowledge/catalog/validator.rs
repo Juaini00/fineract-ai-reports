@@ -165,6 +165,30 @@ impl KnowledgeValidator {
                 bail!("approved capability {} must declare metrics", capability.id);
             }
 
+            if capability.status == "approved_mvp"
+                && (matches!(
+                    capability.request_shape.operation,
+                    crate::assistant::RequestOperation::Unknown
+                ) || matches!(
+                    capability.request_shape.subject,
+                    crate::assistant::RequestSubject::Unknown
+                ) || matches!(
+                    capability.request_shape.grouping,
+                    crate::assistant::RequestGrouping::Unknown
+                ) || matches!(
+                    capability.request_shape.output,
+                    crate::assistant::RequestOutput::Unknown
+                ) || matches!(
+                    capability.request_shape.pii,
+                    crate::assistant::RequestPii::Unknown
+                ))
+            {
+                bail!(
+                    "approved capability {} must declare a complete request_shape",
+                    capability.id
+                );
+            }
+
             validate_status(
                 "capability output mode",
                 &capability.id,

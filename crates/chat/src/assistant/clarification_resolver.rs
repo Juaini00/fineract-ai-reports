@@ -170,6 +170,7 @@ mod tests {
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
+                is_missing_execution_parameters: false,
             },
             &ContextWindow {
                 summary: None,
@@ -211,6 +212,7 @@ mod tests {
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
+                is_missing_execution_parameters: false,
             },
             &ContextWindow {
                 summary: None,

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 
 use crate::chat::classifier::{ClassificationOutcome, ClassificationResult};
 use crate::knowledge::model::KnowledgeCatalog;
@@ -195,7 +195,7 @@ fn param_terms(params: &Value) -> Vec<&str> {
 }
 
 pub fn evaluate_policy(
-    client: &ClientContext,
+    client: &PrincipalContext,
     plan: Option<&ExecutionPlan>,
     _catalog: &KnowledgeCatalog,
 ) -> PolicyDecision {

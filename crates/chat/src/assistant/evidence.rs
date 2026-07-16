@@ -2,7 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    assistant::{AssistantDomain, AssistantEntity, AssistantIntent, AssistantIntentKind},
+    assistant::{
+        AssistantDomain, AssistantEntity, AssistantEntityType, AssistantIntent,
+        AssistantIntentKind, RequestShape,
+    },
     knowledge::index::repository::RetrievedKnowledgeCandidate,
 };
 
@@ -11,6 +14,7 @@ pub struct RetrievalPlan {
     pub query_text: String,
     pub domain: AssistantDomain,
     pub intent: AssistantIntentKind,
+    pub request_shape: RequestShape,
     #[serde(default)]
     pub entities: Vec<AssistantEntity>,
     #[serde(default)]
@@ -34,6 +38,7 @@ impl RetrievalPlan {
             query_text: query_text.into(),
             domain: intent.domain.clone(),
             intent: intent.intent.clone(),
+            request_shape: intent.request_shape.clone(),
             entities: intent.entities.clone(),
             constraints: serde_json::to_value(&intent.constraints).unwrap_or_default(),
             metadata_filters: domain_filter(&intent.domain),
@@ -86,15 +91,11 @@ pub enum EvidenceDecision {
     BlockedByPolicy,
 }
 
-pub struct EvidenceEvaluator {
-    strong_capability_score: f32,
-}
+pub struct EvidenceEvaluator;
 
 impl Default for EvidenceEvaluator {
     fn default() -> Self {
-        Self {
-            strong_capability_score: 0.60,
-        }
+        Self
     }
 }
 
@@ -111,59 +112,31 @@ impl EvidenceEvaluator {
                     .iter()
                     .filter(|item| is_allowed(plan, item))
                     .collect::<Vec<_>>();
-                metric_match(plan, &allowed)
-                    .or_else(|| {
-                        allowed
-                            .as_slice()
-                            .first()
-                            .filter(|_| !evidence.iter().any(|item| item.conflicting))
-                            .filter(|item| item.score >= self.strong_capability_score)
-                            .map(|item| EvidenceDecision::Select {
-                                capability_id: item.capability_id.clone(),
-                            })
-                    })
-                    .unwrap_or(if evidence.is_empty() {
-                        EvidenceDecision::UnsupportedInDomain
-                    } else {
-                        EvidenceDecision::Clarify
-                    })
+                const MIN_SELECT_SCORE: f32 = 0.25;
+                let has_conflict = evidence.iter().any(|item| item.conflicting);
+                let has_metric_entity = plan
+                    .entities
+                    .iter()
+                    .any(|entity| entity.entity_type == AssistantEntityType::Metric);
+                if allowed.is_empty() {
+                    EvidenceDecision::UnsupportedInDomain
+                } else if has_conflict || allowed[0].score < MIN_SELECT_SCORE {
+                    EvidenceDecision::Clarify
+                } else if allowed.len() == 1 {
+                    EvidenceDecision::Select {
+                        capability_id: allowed[0].capability_id.clone(),
+                    }
+                } else if allowed[0].score - allowed[1].score <= 0.05 || !has_metric_entity {
+                    EvidenceDecision::Clarify
+                } else {
+                    EvidenceDecision::Select {
+                        capability_id: allowed[0].capability_id.clone(),
+                    }
+                }
             }
             _ => EvidenceDecision::Clarify,
         }
     }
-}
-
-fn metric_match(plan: &RetrievalPlan, evidence: &[&Evidence]) -> Option<EvidenceDecision> {
-    let terms = plan
-        .entities
-        .iter()
-        .filter(|entity| {
-            matches!(
-                entity.entity_type,
-                crate::assistant::AssistantEntityType::Metric
-            )
-        })
-        .flat_map(|entity| {
-            entity
-                .canonical
-                .as_deref()
-                .unwrap_or(&entity.value)
-                .split(|ch: char| !ch.is_alphanumeric())
-                .filter(|part| part.len() > 2)
-                .map(str::to_lowercase)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    if terms.is_empty() {
-        return None;
-    }
-    evidence
-        .iter()
-        .copied()
-        .find(|item| terms.iter().all(|term| item.capability_id.contains(term)))
-        .map(|item| EvidenceDecision::Select {
-            capability_id: item.capability_id.clone(),
-        })
 }
 
 fn is_allowed(plan: &RetrievalPlan, evidence: &Evidence) -> bool {
@@ -187,6 +160,7 @@ mod tests {
             &AssistantIntent {
                 intent,
                 domain: AssistantDomain::Savings,
+                request_shape: Default::default(),
                 language: AssistantLanguage::En,
                 entities: Vec::new(),
                 constraints: Default::default(),
@@ -214,8 +188,7 @@ mod tests {
     #[test]
     fn strong_evidence_selects_capability() {
         assert_eq!(
-            EvidenceEvaluator::default()
-                .evaluate(&plan(AssistantIntentKind::ReportRequest), &[evidence(0.8)]),
+            EvidenceEvaluator.evaluate(&plan(AssistantIntentKind::ReportRequest), &[evidence(0.8)]),
             EvidenceDecision::Select {
                 capability_id: "savings_deposit_total".into()
             }
@@ -225,8 +198,7 @@ mod tests {
     #[test]
     fn weak_evidence_clarifies() {
         assert_eq!(
-            EvidenceEvaluator::default()
-                .evaluate(&plan(AssistantIntentKind::DataLookup), &[evidence(0.2)]),
+            EvidenceEvaluator.evaluate(&plan(AssistantIntentKind::DataLookup), &[evidence(0.2)]),
             EvidenceDecision::Clarify
         );
     }
@@ -234,8 +206,7 @@ mod tests {
     #[test]
     fn out_of_domain_stays_out_of_domain() {
         assert_eq!(
-            EvidenceEvaluator::default()
-                .evaluate(&plan(AssistantIntentKind::OutOfDomain), &[evidence(0.9)]),
+            EvidenceEvaluator.evaluate(&plan(AssistantIntentKind::OutOfDomain), &[evidence(0.9)]),
             EvidenceDecision::OutOfDomain
         );
     }

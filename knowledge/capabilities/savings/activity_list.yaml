@@ -14,6 +14,12 @@ metrics:
   - savings.deposit_amount
   - savings.withdrawal_amount
 output_mode: list
+request_shape:
+  operation: list
+  subject: savings_transaction
+  grouping: none
+  output: list
+  pii: conditional_client_identity
 examples:
   - Show customer savings activity this month.
   - List savings transactions this week.

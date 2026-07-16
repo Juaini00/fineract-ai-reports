@@ -5,6 +5,7 @@ mod common;
 
 use common::spawn_app;
 use serde_json::json;
+use uuid::Uuid;
 
 const SCENARIO_CAPABILITIES: &[&str] = &[
     "savings_deposit_total",
@@ -21,7 +22,7 @@ const SCENARIO_CAPABILITIES: &[&str] = &[
 ];
 
 #[tokio::test(flavor = "multi_thread")]
-async fn admin_can_create_api_key_and_client_can_create_chat_session() {
+async fn admin_can_create_api_key_and_bearer_can_create_chat_session() {
     // Arrange
     let app = spawn_app().await;
 
@@ -29,11 +30,12 @@ async fn admin_can_create_api_key_and_client_can_create_chat_session() {
     let created = app
         .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
         .await;
+    assert!(created.raw.starts_with("air_test_"));
 
     let session = app
-        .post_json(
+        .post_json_bearer(
             "/chat/sessions",
-            Some(&created.raw),
+            &app.login_admin().await,
             &json!({ "title": "API key session" }),
         )
         .await;
@@ -84,15 +86,6 @@ async fn me_without_api_key_is_unauthorized() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn me_with_invalid_api_key_is_unauthorized() {
-    let app = spawn_app().await;
-
-    let resp = app.get("/chat/sessions", Some("air_test_bogus")).await;
-
-    assert_eq!(resp.status(), 401);
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn chat_route_with_api_key_but_no_bearer_is_unauthorized() {
     let app = spawn_app().await;
     let created = app
@@ -108,4 +101,84 @@ async fn chat_route_with_api_key_but_no_bearer_is_unauthorized() {
         .unwrap();
 
     assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_lifecycle_endpoints_are_unchanged() {
+    let app = spawn_app().await;
+
+    let created = app
+        .provision_api_key(SCENARIO_CAPABILITIES, vec![1, 2], true)
+        .await;
+    let (user_id, key_prefix, key_hash, revoked_at): (
+        Uuid,
+        String,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT user_id, key_prefix, key_hash, revoked_at FROM api_keys WHERE id = $1",
+    )
+    .bind(created.id)
+    .fetch_one(&app.app_pool)
+    .await
+    .expect("created api key row");
+
+    assert_eq!(user_id, app.admin_user_id().await);
+    assert!(created.raw.starts_with("air_test_"));
+    assert!(created.raw.starts_with(&key_prefix));
+    assert_ne!(key_hash, created.raw);
+    assert!(revoked_at.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn x_api_key_variants_do_not_change_bearer_chat_authorization() {
+    let app = spawn_app().await;
+    let bearer = app.login_admin().await;
+    let valid = app.provision_wildcard_api_key(false).await;
+    let revoked = app.provision_wildcard_api_key(false).await;
+    let expired = app.provision_wildcard_api_key(false).await;
+    let ownerless = app.insert_legacy_api_key_without_user().await;
+    let other_user = app.provision_wildcard_api_key(false).await;
+    let other_user_id = Uuid::new_v4();
+
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, 'unused', 'admin')",
+    )
+    .bind(other_user_id)
+    .bind(format!("api-key-owner-{other_user_id}"))
+    .execute(&app.app_pool)
+    .await
+    .expect("insert other API-key owner");
+    sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = $1")
+        .bind(revoked.id)
+        .execute(&app.app_pool)
+        .await
+        .expect("revoke api key");
+    sqlx::query("UPDATE api_keys SET expires_at = now() - interval '1 second' WHERE id = $1")
+        .bind(expired.id)
+        .execute(&app.app_pool)
+        .await
+        .expect("expire api key");
+    sqlx::query("UPDATE api_keys SET user_id = $1 WHERE id = $2")
+        .bind(other_user_id)
+        .bind(other_user.id)
+        .execute(&app.app_pool)
+        .await
+        .expect("reassign api key");
+
+    let variants = [
+        ("absent", None),
+        ("valid", Some(valid.raw.as_str())),
+        ("invalid", Some("air_test_invalid")),
+        ("revoked", Some(revoked.raw.as_str())),
+        ("expired", Some(expired.raw.as_str())),
+        ("ownerless", Some(ownerless.as_str())),
+        ("other-user", Some(other_user.raw.as_str())),
+    ];
+    for (name, api_key) in variants {
+        let response = app
+            .get_bearer_with_api_key("/chat/sessions", &bearer, api_key)
+            .await;
+        assert_eq!(response.status(), 200, "variant {name}");
+    }
 }

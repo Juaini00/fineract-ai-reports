@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use std::str::FromStr;
+
+use anyhow::{Context, Result, bail};
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -121,10 +123,32 @@ pub struct CatalogConfig {
 #[derive(Clone, Debug)]
 pub struct ChatFeatureConfig {
     pub lqr_enabled: bool,
+    pub canonical_gateway_mode: CanonicalGatewayMode,
     pub context_soft_token_limit: usize,
     pub context_hard_token_limit: usize,
     pub context_max_recent_messages: usize,
     pub context_max_relevant_jobs: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CanonicalGatewayMode {
+    #[default]
+    Disabled,
+    Shadow,
+    Authoritative,
+}
+
+impl FromStr for CanonicalGatewayMode {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "disabled" => Ok(Self::Disabled),
+            "shadow" => Ok(Self::Shadow),
+            "authoritative" => Ok(Self::Authoritative),
+            _ => bail!("CHAT_CANONICAL_GATEWAY_MODE must be disabled, shadow, or authoritative"),
+        }
+    }
 }
 
 impl AppConfig {
@@ -273,6 +297,8 @@ impl AppConfig {
             },
             chat_features: ChatFeatureConfig {
                 lqr_enabled: get_env_or("LQR_ENABLED", "true").eq_ignore_ascii_case("true"),
+                canonical_gateway_mode: get_env_or("CHAT_CANONICAL_GATEWAY_MODE", "disabled")
+                    .parse()?,
                 context_soft_token_limit: get_env_or("CHAT_CONTEXT_SOFT_TOKEN_LIMIT", "6000")
                     .parse()
                     .context("CHAT_CONTEXT_SOFT_TOKEN_LIMIT must be an integer")?,
@@ -296,4 +322,26 @@ fn get_required_env(key: &str) -> Result<String> {
 
 fn get_env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CanonicalGatewayMode;
+
+    #[test]
+    fn canonical_gateway_mode_rejects_invalid_values() {
+        assert_eq!(
+            "disabled".parse::<CanonicalGatewayMode>().unwrap(),
+            CanonicalGatewayMode::Disabled
+        );
+        assert_eq!(
+            "shadow".parse::<CanonicalGatewayMode>().unwrap(),
+            CanonicalGatewayMode::Shadow
+        );
+        assert_eq!(
+            "authoritative".parse::<CanonicalGatewayMode>().unwrap(),
+            CanonicalGatewayMode::Authoritative
+        );
+        assert!("legacy".parse::<CanonicalGatewayMode>().is_err());
+    }
 }

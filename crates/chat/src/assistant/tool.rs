@@ -1,11 +1,14 @@
 use anyhow::{Result, bail};
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    assistant::{AssistantEntityType, AssistantIntent, DeterministicExtraction, Quantity},
+    assistant::{
+        AssistantEntityType, AssistantIntent, ConstraintField, DeterministicExtraction,
+        EffectiveConstraints, LimitMode, ListPatch, PlannerInputSnapshot, Quantity, TypedFactValue,
+    },
     chat::planner::{
         AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
         evaluate_policy,
@@ -94,6 +97,9 @@ pub fn plan_selected_capability_verified(
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
 ) -> Result<ExecutionPlan> {
+    if let Some(error) = deterministic_extraction.and_then(|value| value.temporal_error.as_ref()) {
+        bail!("{}: {}", error.code, error.message);
+    }
     let capability = catalog
         .capabilities
         .iter()
@@ -138,8 +144,196 @@ pub fn plan_selected_capability_verified(
     })
 }
 
+pub fn normalize_effective_parameters(
+    catalog: &KnowledgeCatalog,
+    capability_id: &str,
+    effective: &EffectiveConstraints,
+) -> Result<Value> {
+    let capability = executable_capability(catalog, capability_id)?;
+    let query = catalog
+        .queries
+        .iter()
+        .find(|item| item.id == capability.query_id)
+        .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
+    if let Some(TypedFactValue::Metric(metric)) = effective.values.get(&ConstraintField::Metric) {
+        let trusted = normalize_metric(metric);
+        if !capability
+            .metrics
+            .iter()
+            .any(|item| normalize_metric(item) == trusted)
+        {
+            bail!("selected capability does not match requested metric {metric}");
+        }
+    }
+    validate_effective_date_range(effective)?;
+    let mut params = serde_json::Map::new();
+    for parameter in &query.parameters {
+        if parameter.source.as_deref() == Some("authorized_scope") {
+            continue;
+        }
+        let value = effective_parameter(effective, &parameter.name);
+        if let Some(value) = value {
+            params.insert(parameter.name.clone(), value);
+        } else if parameter.required {
+            bail!("missing parameter {}", parameter.name);
+        }
+    }
+    Ok(Value::Object(params))
+}
+
+fn validate_effective_date_range(effective: &EffectiveConstraints) -> Result<()> {
+    let from = effective.values.get(&ConstraintField::FromDate);
+    let to = effective.values.get(&ConstraintField::ToDate);
+    if let (Some(TypedFactValue::Date(from)), Some(TypedFactValue::Date(to))) = (from, to) {
+        let from = chrono::NaiveDate::parse_from_str(from, "%Y-%m-%d")
+            .map_err(|_| anyhow::anyhow!("temporal_invalid_date: invalid from_date"))?;
+        let to = chrono::NaiveDate::parse_from_str(to, "%Y-%m-%d")
+            .map_err(|_| anyhow::anyhow!("temporal_invalid_date: invalid to_date"))?;
+        if from > to {
+            bail!("temporal_range_reversed: start date is after end date");
+        }
+    }
+    Ok(())
+}
+
+pub fn plan_from_snapshot(
+    catalog: &KnowledgeCatalog,
+    snapshot: &PlannerInputSnapshot,
+) -> Result<ExecutionPlan> {
+    let capability = executable_capability(catalog, &snapshot.selected_capability_id)?;
+    let query = catalog
+        .queries
+        .iter()
+        .find(|item| item.id == capability.query_id)
+        .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
+    validate_snapshot_parameters(query, &snapshot.normalized_parameters)?;
+    Ok(ExecutionPlan {
+        plan_type: ExecutionPlanType::Atomic,
+        domain: capability.domain.clone(),
+        capability: capability.id.clone(),
+        query_id: query.id.clone(),
+        output_mode: capability.output_mode.clone(),
+        params: snapshot.normalized_parameters.clone(),
+        retrieval_plan: RetrievalPlan::default(),
+        evidence_evaluation: EvidenceEvaluation {
+            enough: true,
+            source_count: 1,
+            source_types: vec!["planner_input_snapshot".into()],
+            reason: None,
+        },
+        answer_plan: AnswerPlan {
+            sections: vec!["Result".into(), "Scope".into(), "Evidence".into()],
+        },
+        requires_policy_check: true,
+    })
+}
+
+fn executable_capability<'a>(
+    catalog: &'a KnowledgeCatalog,
+    capability_id: &str,
+) -> Result<&'a crate::knowledge::model::CapabilityKnowledge> {
+    catalog
+        .capabilities
+        .iter()
+        .find(|item| item.id == capability_id && item.status == "approved_mvp")
+        .ok_or_else(|| anyhow::anyhow!("selected capability is not executable"))
+}
+
+fn effective_parameter(effective: &EffectiveConstraints, name: &str) -> Option<Value> {
+    let value = |field| effective.values.get(&field);
+    match name {
+        "from_date" => typed_string(value(ConstraintField::FromDate)).map(Value::String),
+        "to_date" => typed_string(value(ConstraintField::ToDate)).map(Value::String),
+        "currency_code" => typed_string(value(ConstraintField::CurrencyCode)).map(Value::String),
+        "product_ids" => typed_ids(value(ConstraintField::ProductIds)).map(|ids| json!(ids)),
+        "product_id" => typed_ids(value(ConstraintField::ProductIds))
+            .and_then(|ids| ids.first().copied())
+            .map(|id| json!(id))
+            .or_else(|| {
+                typed_string(value(ConstraintField::Product))
+                    .and_then(|v| v.parse().ok())
+                    .map(|id: i64| json!(id))
+            }),
+        "search" | "name" => [
+            ConstraintField::PersonName,
+            ConstraintField::Office,
+            ConstraintField::Product,
+        ]
+        .into_iter()
+        .find_map(|field| typed_string(value(field)))
+        .map(Value::String),
+        "office" | "office_name" => typed_string(value(ConstraintField::Office)).map(Value::String),
+        "limit" | "top_n" => match (
+            value(ConstraintField::LimitMode),
+            value(ConstraintField::LimitValue),
+        ) {
+            (
+                Some(TypedFactValue::LimitMode(LimitMode::Limit | LimitMode::TopN)),
+                Some(TypedFactValue::Integer(limit)),
+            ) => Some(json!(limit)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn typed_string(value: Option<&TypedFactValue>) -> Option<String> {
+    match value? {
+        TypedFactValue::Date(v)
+        | TypedFactValue::CurrencyCode(v)
+        | TypedFactValue::Metric(v)
+        | TypedFactValue::PersonName(v)
+        | TypedFactValue::Office(v)
+        | TypedFactValue::Product(v) => Some(v.clone()),
+        _ => None,
+    }
+}
+
+fn typed_ids(value: Option<&TypedFactValue>) -> Option<Vec<i64>> {
+    match value? {
+        TypedFactValue::IdList(ListPatch::Replace(ids)) => Some(ids.clone()),
+        _ => None,
+    }
+}
+
+fn validate_snapshot_parameters(query: &QueryKnowledge, params: &Value) -> Result<()> {
+    let params = params
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("snapshot parameters must be an object"))?;
+    for name in params.keys() {
+        if !query.parameters.iter().any(|parameter| {
+            parameter.name == *name && parameter.source.as_deref() != Some("authorized_scope")
+        }) {
+            bail!("snapshot contains unexpected parameter {name}");
+        }
+    }
+    for parameter in &query.parameters {
+        if parameter.source.as_deref() == Some("authorized_scope") {
+            continue;
+        }
+        let Some(value) = params.get(&parameter.name) else {
+            if parameter.required {
+                bail!("snapshot missing parameter {}", parameter.name);
+            }
+            continue;
+        };
+        let valid = match parameter.kind.as_str() {
+            "date" | "string" => value.is_string(),
+            "integer" => value.as_i64().is_some(),
+            "array_bigint" => value
+                .as_array()
+                .is_some_and(|items| items.iter().all(|item| item.as_i64().is_some())),
+            _ => false,
+        };
+        if !valid {
+            bail!("snapshot parameter {} has invalid type", parameter.name);
+        }
+    }
+    Ok(())
+}
+
 pub fn guard_selected_capability(
-    client: &ClientContext,
+    client: &PrincipalContext,
     catalog: &KnowledgeCatalog,
     plan: &ExecutionPlan,
 ) -> crate::chat::planner::PolicyDecision {
@@ -277,6 +471,7 @@ mod tests {
             &AssistantIntent {
                 intent: AssistantIntentKind::DataLookup,
                 domain: AssistantDomain::Client,
+                request_shape: Default::default(),
                 language: AssistantLanguage::En,
                 entities: vec![AssistantEntity {
                     entity_type: AssistantEntityType::PersonName,
@@ -306,6 +501,7 @@ mod tests {
             &AssistantIntent {
                 intent: AssistantIntentKind::DataLookup,
                 domain: AssistantDomain::Client,
+                request_shape: Default::default(),
                 language: AssistantLanguage::En,
                 entities: vec![],
                 constraints: Default::default(),
@@ -345,6 +541,7 @@ mod tests {
             &AssistantIntent {
                 intent: AssistantIntentKind::ReportRequest,
                 domain: AssistantDomain::Savings,
+                request_shape: Default::default(),
                 language: AssistantLanguage::En,
                 entities: Vec::new(),
                 constraints: AssistantConstraints {
@@ -508,10 +705,38 @@ mod tests {
         assert_eq!(params["search"], "Tony");
     }
 
+    #[test]
+    fn canonical_snapshot_rejects_malformed_parameters() {
+        let catalog = catalog();
+        let snapshot = PlannerInputSnapshot {
+            id: uuid::Uuid::new_v4(),
+            job_id: uuid::Uuid::new_v4(),
+            revision: 0,
+            original_intent_id: uuid::Uuid::new_v4(),
+            effective_constraints_id: uuid::Uuid::new_v4(),
+            capability_catalog_version: uuid::Uuid::new_v4(),
+            principal_projection: crate::assistant::PrincipalProjection {
+                user_id: uuid::Uuid::new_v4(),
+                role: "admin".into(),
+                capability_ids: vec![],
+                office_ids: vec![],
+                can_view_pii: false,
+                legacy_api_key_id: None,
+            },
+            reference_instant: chrono::Utc::now(),
+            timezone: "UTC".into(),
+            selected_capability_id: "savings_deposit_total".into(),
+            normalized_parameters: json!([]),
+            created_at: chrono::Utc::now(),
+        };
+        assert!(plan_from_snapshot(&catalog, &snapshot).is_err());
+    }
+
     fn intent_with_quantity(quantity: Option<Quantity>) -> AssistantIntent {
         AssistantIntent {
             intent: AssistantIntentKind::ReportRequest,
             domain: AssistantDomain::Client,
+            request_shape: Default::default(),
             language: AssistantLanguage::En,
             entities: Vec::new(),
             constraints: AssistantConstraints {

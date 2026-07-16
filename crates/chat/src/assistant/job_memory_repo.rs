@@ -17,11 +17,16 @@ impl JobMemoryRepository {
         Self { pool }
     }
 
-    pub async fn create(&self, job_id: Uuid, graph_state: &str) -> Result<JobMemory> {
+    pub async fn create(
+        &self,
+        job_id: Uuid,
+        user_id: Uuid,
+        graph_state: &str,
+    ) -> Result<JobMemory> {
         let row = sqlx::query_as::<_, JobMemoryRow>(
             r#"
             INSERT INTO assistant_job_memory (job_id, graph_state)
-            VALUES ($1, $2)
+            SELECT id, $3 FROM chat_jobs WHERE id = $1 AND user_id = $2
             RETURNING job_id, graph_state, terminal_state, current_user_message_metadata_json,
                 intent_json, source_intent_json, retrieval_plan_json, retrieval_evidence_json,
                 evidence_decision_json, selected_capability, selected_tool, tool_params_json,
@@ -30,13 +35,14 @@ impl JobMemoryRepository {
             "#,
         )
         .bind(job_id)
+        .bind(user_id)
         .bind(graph_state)
         .fetch_one(&self.pool)
         .await?;
         Ok(row.into())
     }
 
-    pub async fn get(&self, job_id: Uuid) -> Result<Option<JobMemory>> {
+    pub async fn get(&self, job_id: Uuid, user_id: Uuid) -> Result<Option<JobMemory>> {
         let row = sqlx::query_as::<_, JobMemoryRow>(
             r#"
             SELECT job_id, graph_state, terminal_state, current_user_message_metadata_json,
@@ -46,15 +52,19 @@ impl JobMemoryRepository {
                 warnings_json, revision
             FROM assistant_job_memory
             WHERE job_id = $1
+              AND EXISTS (SELECT 1 FROM chat_jobs WHERE id = $1 AND user_id = $2)
             "#,
         )
         .bind(job_id)
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(Into::into))
     }
 
     pub async fn save(&self, memory: &JobMemory, expected_revision: i64) -> Result<JobMemory> {
+        let mut metadata = memory.current_user_message_metadata.clone();
+        metadata["planner_snapshot_id"] = serde_json::to_value(memory.planner_snapshot_id)?;
         let row = sqlx::query_as::<_, JobMemoryRow>(
             r#"
             UPDATE assistant_job_memory
@@ -81,7 +91,7 @@ impl JobMemoryRepository {
                 .transpose()?
                 .and_then(|v| v.as_str().map(str::to_string)),
         )
-        .bind(&memory.current_user_message_metadata)
+        .bind(metadata)
         .bind(
             memory
                 .intent
@@ -261,7 +271,7 @@ impl From<JobMemoryRow> for JobMemory {
             job_id: row.job_id,
             graph_state: row.graph_state,
             terminal_state,
-            current_user_message_metadata: row.current_user_message_metadata_json,
+            current_user_message_metadata: row.current_user_message_metadata_json.clone(),
             intent,
             source_intent: row.source_intent_json,
             retrieval_plan: row.retrieval_plan_json,
@@ -273,6 +283,10 @@ impl From<JobMemoryRow> for JobMemory {
             policy_decision: row.policy_decision_json,
             execution_summary: row.execution_summary_json,
             structured_response,
+            planner_snapshot_id: row
+                .current_user_message_metadata_json
+                .get("planner_snapshot_id")
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
             warnings: row.warnings_json,
             revision: row.revision,
         }

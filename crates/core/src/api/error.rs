@@ -55,6 +55,15 @@ impl ApiError {
         }
     }
 
+    pub fn forbidden_with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            message: message.into(),
+            details: None,
+        }
+    }
+
     pub fn internal(error: anyhow::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,

@@ -42,6 +42,7 @@ fn assistant_contracts_representative_round_trip() {
     let intent = AssistantIntent {
         intent: AssistantIntentKind::ReportRequest,
         domain: AssistantDomain::Savings,
+        request_shape: Default::default(),
         language: AssistantLanguage::En,
         entities: vec![AssistantEntity {
             entity_type: AssistantEntityType::PersonName,
@@ -70,6 +71,7 @@ fn assistant_contracts_representative_round_trip() {
         normalized_prompt: None,
         intent: AssistantIntentKind::ReportRequest,
         domain: AssistantDomain::Client,
+        request_shape: Default::default(),
         entities: Vec::new(),
         constraints: AssistantConstraints::default(),
         context_reference: ContextReference::None,
@@ -87,6 +89,7 @@ fn assistant_contracts_representative_round_trip() {
             attempt: 1,
             source_intent: Some(source.clone()),
             allow_free_text: true,
+            is_missing_execution_parameters: false,
         },
         source_intent: Some(source),
         created_at: None,
@@ -162,6 +165,7 @@ fn assistant_contracts_representative_round_trip() {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        planner_snapshot_id: None,
         warnings: json!([]),
         revision: 1,
     };

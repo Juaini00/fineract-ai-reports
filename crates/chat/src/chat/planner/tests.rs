@@ -76,7 +76,7 @@ fn allows_policy_for_configured_client() {
 #[test]
 fn blocks_policy_for_missing_capability() {
     let mut client = client();
-    client.allowed_capabilities.clear();
+    client.capability_ids.clear();
     let classification = matched_total_deposit();
     let catalog = catalog();
     let plan = build_execution_plan(&classification, &catalog);
@@ -93,7 +93,7 @@ fn allows_policy_and_marks_pii_visibility_when_query_output_declares_pii() {
     };
     let mut client = client();
     client
-        .allowed_capabilities
+        .capability_ids
         .push("savings_deposit_top_n".to_string());
     let catalog = catalog();
     let plan = build_execution_plan(&classification, &catalog);
@@ -122,19 +122,14 @@ fn matched_total_deposit() -> ClassificationResult {
     }
 }
 
-fn client() -> ClientContext {
-    ClientContext {
-        api_key_id: Uuid::nil(),
-        user_id: None,
-        name: "test".to_string(),
-        owner: "test".to_string(),
-        key_prefix: "air_test".to_string(),
-        allowed_office_ids: vec![1, 2],
-        allowed_capabilities: vec!["savings_deposit_total".to_string()],
-        allow_all_offices: false,
-        allow_all_capabilities: false,
+fn client() -> PrincipalContext {
+    PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".to_string(),
+        office_ids: vec![1, 2],
+        capability_ids: vec!["savings_deposit_total".to_string()],
         can_view_pii: false,
-        expires_at: None,
+        legacy_api_key_id: None,
     }
 }
 
