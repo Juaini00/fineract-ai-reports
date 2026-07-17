@@ -10,6 +10,10 @@ use crate::{
     knowledge::{index::repository::KnowledgeRepository, model::KnowledgeCatalog},
 };
 
+/// Boost applied to a candidate's score for each matched request_shape
+/// dimension (see `shape_score`), up to a cap of 0.99.
+const SHAPE_BOOST: f32 = 0.30;
+
 pub struct RetrievalEngine;
 
 impl RetrievalEngine {
@@ -19,12 +23,12 @@ impl RetrievalEngine {
         knowledge: Option<&KnowledgeRepository>,
         catalog: Option<&Arc<KnowledgeCatalog>>,
     ) -> Result<Vec<Evidence>> {
-        let compatible = catalog.map(|catalog| compatible_ids(plan, catalog));
-        if compatible.as_ref().is_some_and(Vec::is_empty) {
-            return Ok(Vec::new());
-        }
-        let search_ids = compatible.clone().or_else(|| allowed_ids(plan));
-        let mut evidence = Vec::new();
+        // Auth boundary: restrict to caller's allowed_capabilities.
+        // Catalog-wide search is NOT the same as widening auth.
+        let search_ids = allowed_ids(plan);
+
+        let mut evidence: Vec<Evidence> = Vec::new();
+
         if let (Some(llm), Some(knowledge)) = (llm, knowledge) {
             let embedding = llm
                 .embed(
@@ -41,21 +45,67 @@ impl RetrievalEngine {
                         &keyword_terms(&plan.query_text),
                         search_ids.as_deref(),
                         &plan.metadata_filters,
-                        8,
+                        16,
                     )
                     .await?
                     .into_iter()
                     .map(Evidence::from),
             );
         }
+
         if let Some(catalog) = catalog {
             evidence.extend(catalog_fallback(plan, catalog));
         }
-        if let Some(compatible) = compatible {
-            evidence.retain(|item| compatible.contains(&item.capability_id));
+
+        // Boost each candidate by shape match against the plan (up to +0.30).
+        if let Some(catalog) = catalog {
+            for item in evidence.iter_mut() {
+                if let Some(cap) = catalog
+                    .capabilities
+                    .iter()
+                    .find(|c| c.id == item.capability_id)
+                {
+                    let score = shape_score(plan, cap);
+                    item.score = (item.score + score * SHAPE_BOOST).min(0.99);
+                }
+            }
         }
+
         Ok(merge(evidence))
     }
+}
+
+/// Score in [0.0, 1.0] measuring how many request_shape dimensions match.
+/// 5 dimensions weighted equally; each match contributes 0.2. PII match
+/// includes the ClientIdentity -> ConditionalClientIdentity relaxation
+/// already used by `pii_compatible`.
+pub fn shape_score(
+    plan: &RetrievalPlan,
+    capability: &crate::knowledge::model::CapabilityKnowledge,
+) -> f32 {
+    let request = &plan.request_shape;
+    let cap = &capability.request_shape;
+    let mut hits = 0u8;
+    if enum_compatible(
+        &request.operation,
+        &cap.operation,
+        &RequestOperation::Unknown,
+    ) {
+        hits += 1;
+    }
+    if enum_compatible(&request.subject, &cap.subject, &RequestSubject::Unknown) {
+        hits += 1;
+    }
+    if enum_compatible(&request.grouping, &cap.grouping, &RequestGrouping::Unknown) {
+        hits += 1;
+    }
+    if enum_compatible(&request.output, &cap.output, &RequestOutput::Unknown) {
+        hits += 1;
+    }
+    if pii_compatible(&request.pii, &cap.pii) {
+        hits += 1;
+    }
+    (hits as f32) / 5.0
 }
 
 fn allowed_ids(plan: &RetrievalPlan) -> Option<Vec<String>> {
@@ -82,15 +132,30 @@ fn plan_terms(plan: &RetrievalPlan) -> Vec<String> {
     terms
 }
 
+// ponytail: plain English stopwords that would otherwise count as a keyword
+// "hit" against nearly every capability description, saturating scores to
+// the 0.99 cap and erasing the very ranking signal catalog_fallback exists
+// to provide. Removing the shape hard-gate (issue 01) makes this matter far
+// more than before, since it used to mask ties this loose. Upgrade path: a
+// real term-frequency/reranker (issue 02) replaces this heuristic entirely.
+const STOPWORDS: &[&str] = &[
+    "the", "and", "for", "with", "this", "that", "show", "give", "want", "please", "most", "have",
+    "where", "report", "see", "need", "berikan", "pada", "saya", "coba", "tahun", "ini",
+];
+
 pub fn catalog_fallback(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec<Evidence> {
-    let terms = plan_terms(plan);
-    let compatible = compatible_ids(plan, catalog);
+    let terms: Vec<String> = plan_terms(plan)
+        .into_iter()
+        .filter(|term| !STOPWORDS.contains(&term.as_str()))
+        .collect();
     catalog
         .capabilities
         .iter()
-        .filter(|cap| compatible.contains(&cap.id))
+        .filter(|cap| matches!(cap.status.as_str(), "approved_mvp" | "active"))
         .filter(|cap| plan.allow_all_capabilities || plan.allowed_capabilities.iter().any(|id| id == &cap.id))
-        .filter(|cap| plan.metadata_filters.get("domain").map(|d| d == &cap.domain).unwrap_or(true))
+        .filter(|cap| metric_compatible(plan, &cap.metrics))
+        .filter(|cap| parameters_feasible(plan, &cap.required_parameters))
+        // shape/domain no longer gate here — shape_score in retrieve() scores it instead
         .map(|cap| {
             let haystack = format!("{} {} {} {}", cap.id, cap.display_name.clone().unwrap_or_default(), cap.description.clone().unwrap_or_default(), cap.examples.join(" ")).to_lowercase();
             let hits = terms.iter().filter(|term| haystack.contains(term.as_str())).count() as f32;
@@ -123,17 +188,11 @@ pub fn compatible_ids(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec<S
         .iter()
         .filter(|cap| matches!(cap.status.as_str(), "approved_mvp" | "active"))
         .filter(|cap| plan.allow_all_capabilities || plan.allowed_capabilities.contains(&cap.id))
-        .filter(|cap| domain_compatible(plan, &cap.domain))
         .filter(|cap| shape_compatible(&plan.request_shape, &cap.request_shape))
         .filter(|cap| metric_compatible(plan, &cap.metrics))
         .filter(|cap| parameters_feasible(plan, &cap.required_parameters))
         .map(|cap| cap.id.clone())
         .collect()
-}
-
-fn domain_compatible(plan: &RetrievalPlan, domain: &str) -> bool {
-    matches!(plan.domain, crate::assistant::AssistantDomain::Unknown)
-        || format!("{:?}", plan.domain).eq_ignore_ascii_case(domain)
 }
 
 fn shape_compatible(
@@ -204,8 +263,17 @@ fn parameters_feasible(plan: &RetrievalPlan, required: &[String]) -> bool {
 }
 
 fn merge(items: Vec<Evidence>) -> Vec<Evidence> {
+    // ponytail: HashMap iteration order is randomized per-process; without a
+    // stable tiebreak, capability ties (increasingly common now that shape is
+    // a score, not a gate) would rank non-deterministically. Preserve
+    // first-seen order (embedding search, then catalog order) as the tiebreak
+    // for the stable sort below.
+    let mut order: Vec<String> = Vec::new();
     let mut best: HashMap<String, Evidence> = HashMap::new();
     for item in items {
+        if !best.contains_key(&item.capability_id) {
+            order.push(item.capability_id.clone());
+        }
         best.entry(item.capability_id.clone())
             .and_modify(|old| {
                 if item.score > old.score {
@@ -214,7 +282,10 @@ fn merge(items: Vec<Evidence>) -> Vec<Evidence> {
             })
             .or_insert(item);
     }
-    let mut merged: Vec<_> = best.into_values().collect();
+    let mut merged: Vec<_> = order
+        .into_iter()
+        .filter_map(|id| best.remove(&id))
+        .collect();
     merged.sort_by(|a, b| b.score.total_cmp(&a.score));
     merged
 }

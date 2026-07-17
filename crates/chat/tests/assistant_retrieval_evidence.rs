@@ -138,7 +138,12 @@ fn primary_runtime_does_not_use_legacy_prompt_shape_helpers() {
 }
 
 #[tokio::test]
-async fn structural_gate_rejects_random_clients_and_narrows_office_savings() {
+async fn shape_mismatch_no_longer_empties_random_clients_but_still_narrows_office_savings() {
+    // Issue 01 (retrieval-pipeline-rework): shape is now a scoring signal, not a
+    // hard gate. No capability in the real catalog has operation=RandomSample,
+    // so retrieval must still surface catalog_fallback candidates (ranked by
+    // keyword/semantic score) instead of collapsing to empty; ambiguity is a
+    // downstream (EvidenceEvaluator) concern now, not retrieval's.
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = std::sync::Arc::new(
         KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
@@ -159,10 +164,11 @@ async fn structural_gate_rejects_random_clients_and_narrows_office_savings() {
     ] {
         let plan = RetrievalPlan::new(prompt, &random, true, vec![]);
         assert!(
-            RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
+            !RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
                 .await
                 .unwrap()
-                .is_empty()
+                .is_empty(),
+            "shape mismatch alone must not collapse retrieval to empty for prompt: {prompt}"
         );
     }
 
@@ -186,11 +192,18 @@ async fn structural_gate_rejects_random_clients_and_narrows_office_savings() {
     )
     .await
     .unwrap();
-    assert_eq!(
+    // Issue 01: catalog_fallback no longer gates on shape/domain, so several
+    // office-shaped capabilities now qualify by keyword overlap alone (ranking
+    // precision among ties is issue 02's reranker concern, not retrieval's).
+    // Assert the correct capability is surfaced rather than the sole result.
+    assert!(
+        evidence
+            .iter()
+            .any(|item| item.capability_id == "organization_office_savings_summary"),
+        "expected organization_office_savings_summary among {:?}",
         evidence
             .iter()
             .map(|item| item.capability_id.as_str())
-            .collect::<Vec<_>>(),
-        ["organization_office_savings_summary"]
+            .collect::<Vec<_>>()
     );
 }

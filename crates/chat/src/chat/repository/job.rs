@@ -271,6 +271,34 @@ impl JobRepository {
         Ok(())
     }
 
+    /// Best-effort merge of a per-request retrieval audit trace into
+    /// `state_json.retrieval_trace`. Pure jsonb merge, no `state_revision`
+    /// bump — this is audit-only and must not race the pipeline that owns
+    /// the revision counter.
+    pub async fn merge_retrieval_trace(
+        &self,
+        job_id: Uuid,
+        user_id: Uuid,
+        trace: serde_json::Value,
+    ) -> Result<()> {
+        let patch = json!({ "retrieval_trace": trace });
+        sqlx::query(
+            r#"
+            UPDATE chat_jobs
+            SET state_json = state_json || $1::jsonb,
+                updated_at = now()
+            WHERE id = $2
+              AND user_id = $3
+            "#,
+        )
+        .bind(patch)
+        .bind(job_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Append a clarification response from the user, requeue the job, and
     /// write the matching checkpoint + status event in one transaction.
     pub async fn respond(

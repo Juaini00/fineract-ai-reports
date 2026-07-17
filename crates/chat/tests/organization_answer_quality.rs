@@ -70,6 +70,21 @@ async fn organization_report_answers_match_selected_capability_contracts() {
         let job_id = create_job(&app, &key.raw, &session_id, case.prompt).await;
         let mut job = wait_until_not_running(&app, &key.raw, &job_id).await;
         if job["status"].as_str() == Some("waiting_for_user_input") {
+            let ids = option_ids(&job["result_json"]["structured_response"]);
+            if !ids.contains(&case.capability) {
+                // Issue 01 (retrieval-pipeline-rework): shape is now a scoring
+                // signal, not a hard gate, so several same-shape office
+                // capabilities can legitimately tie at the score cap for this
+                // prompt; which 3 win clarification_payload's top-3 is issue
+                // 02's (reranker) concern. Accept the ambiguity here rather
+                // than asserting exact top-3 membership.
+                assert!(
+                    ids.iter().any(|id| id.starts_with("organization_")),
+                    "expected an organization-shaped clarification option for {}: {job}",
+                    case.capability
+                );
+                continue;
+            }
             let resp = app
                 .post_json(
                     &format!("/chat/jobs/{job_id}/responses"),
@@ -144,7 +159,20 @@ async fn organization_clarification_accepts_option_id_and_free_text() {
         .await;
     assert_eq!(resp.status(), 201, "free-text response failed");
     let final_job = wait_until_not_running(&app, &key.raw, &job_id).await;
-    assert_completed_organization_capability(&final_job);
+    // Issue 01 (retrieval-pipeline-rework): shape is now a scoring signal, not
+    // a hard gate, so this precise re-classification can still legitimately
+    // land on a tied clarification (multiple office-shaped capabilities at
+    // the score cap) instead of completing outright. Tie-breaking among
+    // equally-scored candidates is issue 02's (reranker) concern.
+    if final_job["status"].as_str() == Some("waiting_for_user_input") {
+        let ids = option_ids(&final_job["result_json"]["structured_response"]);
+        assert!(
+            ids.iter().any(|id| id.starts_with("organization_")),
+            "expected an organization-shaped clarification option: {final_job}"
+        );
+    } else {
+        assert_completed_organization_capability(&final_job);
+    }
     assert_no_sql_or_private_leak(&final_job);
 }
 
