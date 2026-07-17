@@ -80,6 +80,7 @@ Order below is the recommended sequence. Low-risk unlocks first, big rewrite aft
 | [02](./02-llm-reranker.md) | Replace `EvidenceEvaluator` with LLM re-ranker | P0 | M |
 | [05](./05-schemars-contracts.md) | Structured LLM contracts via `schemars` | P2 | S |
 | [07](./07-swiftide-eval-harness.md) | Regression eval harness with fixture set | P2 | M |
+| [08](./08-clarification-reply-routing-failed.md) | Clarification-reply routes to `Routing failed` for valid option | P1 | M |
 
 ## Success criteria for the epic
 
