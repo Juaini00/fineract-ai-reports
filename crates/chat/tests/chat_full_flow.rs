@@ -382,6 +382,76 @@ async fn wildcard_key_option_id_response_executes_same_job() {
     assert_non_empty_office_scope_if_present(&after_turn2);
 }
 
+/// Regression test for issue 08 Bug B: Turn 1 clarifies on an office-domain
+/// query, Turn 2 selects a valid capability whose request_shape differs from
+/// the source intent's ("summary"-ish office query -> hierarchy_tree list
+/// shape). Selecting a valid, allowed option must execute successfully, not
+/// return the generic "Routing failed" error.
+#[tokio::test(flavor = "multi_thread")]
+async fn clarification_selecting_hierarchy_tree_from_office_query_routes_successfully() {
+    let app = spawn_app().await;
+    let key = app.provision_wildcard_api_key(true).await;
+    let session_id = create_session(&app, &key.raw, "office hierarchy clarification").await;
+
+    let job_id = create_job(
+        &app,
+        &key.raw,
+        &session_id,
+        "show office hierarchy tree with parent and depth for 3 offices",
+    )
+    .await;
+    let after_turn1 = wait_until_not_running(&app, &key.raw, &job_id).await;
+    let status1 = after_turn1["status"].as_str().unwrap_or("");
+    assert_eq!(
+        status1, "waiting_for_user_input",
+        "expected turn 1 to clarify on an ambiguous office query: {after_turn1}"
+    );
+    let response1 = &after_turn1["result_json"]["structured_response"];
+    assert_eq!(response1["response_type"], "clarification", "{after_turn1}");
+    let ids = option_ids(response1);
+    assert!(
+        ids.contains(&"organization_office_hierarchy_tree"),
+        "expected organization_office_hierarchy_tree among clarification options: {response1}"
+    );
+
+    let resp = app
+        .post_json(
+            &format!("/chat/jobs/{job_id}/responses"),
+            Some(&key.raw),
+            &json!({
+                "message": "Return authorized offices as a walkable tree with parent_id and depth per node, ordered by path.",
+                "option_id": "organization_office_hierarchy_tree",
+            }),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        201,
+        "option-id response failed: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let after_turn2 = wait_until_not_running(&app, &key.raw, &job_id).await;
+    let result2 = &after_turn2["result_json"];
+    let response2 = &result2["structured_response"];
+    assert_ne!(
+        response2["title"].as_str(),
+        Some("Routing failed"),
+        "clarification-reply routing failed for a valid selection: {after_turn2}"
+    );
+    assert_eq!(
+        after_turn2["status"].as_str(),
+        Some("completed"),
+        "{after_turn2}"
+    );
+    assert_eq!(
+        result2["selected_capability"].as_str(),
+        Some("organization_office_hierarchy_tree"),
+        "{after_turn2}"
+    );
+    assert_ne!(response2["response_type"].as_str(), Some("error"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn domain_prompt_matrix_returns_expected_contracts() {
     let app = spawn_app().await;

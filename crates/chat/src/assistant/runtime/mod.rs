@@ -182,7 +182,12 @@ impl AssistantGraphRuntime {
             && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
         {
             memory.intent = Some(intent_from_source(payload, &context, canonical));
-            record_source_extraction_metadata(&mut memory, payload, canonical);
+            record_source_extraction_metadata(
+                &mut memory,
+                payload,
+                canonical,
+                &input.source_message,
+            );
             match outcome {
                 ClarificationOutcome::SelectedOption { option_id, .. } => {
                     memory.selected_capability = Some(option_id.clone());
@@ -262,7 +267,12 @@ impl AssistantGraphRuntime {
                 canonical,
             );
             memory.intent = Some(intent);
-            record_source_extraction_metadata(&mut memory, payload, canonical);
+            record_source_extraction_metadata(
+                &mut memory,
+                payload,
+                canonical,
+                &input.source_message,
+            );
             memory.selected_capability = Some(capability_id.clone());
             memory.retrieval_evidence =
                 clarification_audit("missing_parameters", &capability_id, &input, payload);
@@ -356,7 +366,12 @@ impl AssistantGraphRuntime {
                             if option_id == OTHER_CLARIFICATION_OPTION_ID =>
                         {
                             memory.intent = Some(intent_from_source(payload, &context, canonical));
-                            record_source_extraction_metadata(&mut memory, payload, canonical);
+                            record_source_extraction_metadata(
+                                &mut memory,
+                                payload,
+                                canonical,
+                                &input.source_message,
+                            );
                             memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
@@ -374,7 +389,12 @@ impl AssistantGraphRuntime {
                         }
                         Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
                             memory.intent = Some(intent_from_source(payload, &context, canonical));
-                            record_source_extraction_metadata(&mut memory, payload, canonical);
+                            record_source_extraction_metadata(
+                                &mut memory,
+                                payload,
+                                canonical,
+                                &input.source_message,
+                            );
                             memory.selected_capability = Some(option_id.clone());
                             memory.source_intent = payload
                                 .source_intent
@@ -400,7 +420,12 @@ impl AssistantGraphRuntime {
                         }
                         Ok(ClarificationOutcome::FreeFormOther { .. }) => {
                             memory.intent = Some(intent_from_source(payload, &context, canonical));
-                            record_source_extraction_metadata(&mut memory, payload, canonical);
+                            record_source_extraction_metadata(
+                                &mut memory,
+                                payload,
+                                canonical,
+                                &input.source_message,
+                            );
                             memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
@@ -756,14 +781,70 @@ fn merge_deterministic_extraction_at(
     record_extraction_metadata(memory, &extraction);
 }
 
+/// Records deterministic extraction metadata for a clarification-reply turn.
+///
+/// Bug 08-B: previously this only re-extracted facts from the *original*
+/// Turn-1 prompt (`payload.source_intent.prompt`), which clobbers whatever
+/// the user actually said in their Turn-2 reply. `verify_capability_metric`
+/// (tool.rs) then gates the newly *selected* capability against a metric
+/// extracted from Turn-1's wording — even though the user just explicitly
+/// picked a different capability in Turn 2. Refresh from the current turn's
+/// message and let it take priority; fall back to the Turn-1 extraction only
+/// for fields the current turn's message didn't mention (e.g. a bare "3"
+/// limit stated only in Turn 1).
 fn record_source_extraction_metadata(
     memory: &mut JobMemory,
     payload: &ClarificationPayload,
     canonical: Option<&CanonicalRuntimeContext>,
+    current_message: &str,
 ) {
-    if let Some(source) = &payload.source_intent {
-        let extraction = extract_for_context(&source.prompt, canonical);
-        record_extraction_metadata(memory, &extraction);
+    let source_extraction = payload
+        .source_intent
+        .as_ref()
+        .map(|source| extract_for_context(&source.prompt, canonical))
+        .unwrap_or_default();
+    let current_extraction = extract_for_context(current_message, canonical);
+    let refreshed = prefer_current_turn_extraction(source_extraction, current_extraction);
+    record_extraction_metadata(memory, &refreshed);
+}
+
+/// Merges two extraction passes, letting the current turn's signals win over
+/// the original (Turn-1) source prompt's — see `record_source_extraction_metadata`.
+fn prefer_current_turn_extraction(
+    source: DeterministicExtraction,
+    current: DeterministicExtraction,
+) -> DeterministicExtraction {
+    DeterministicExtraction {
+        constraints: crate::assistant::AssistantConstraints {
+            quantity: current.constraints.quantity.or(source.constraints.quantity),
+            from_date: current
+                .constraints
+                .from_date
+                .or(source.constraints.from_date),
+            to_date: current.constraints.to_date.or(source.constraints.to_date),
+            currency_code: current
+                .constraints
+                .currency_code
+                .or(source.constraints.currency_code),
+            product_ids: current
+                .constraints
+                .product_ids
+                .or(source.constraints.product_ids),
+            office_ids: current
+                .constraints
+                .office_ids
+                .or(source.constraints.office_ids),
+            metric: current.constraints.metric.or(source.constraints.metric),
+        },
+        domain: current.domain.or(source.domain),
+        entities: if current.entities.is_empty() {
+            source.entities
+        } else {
+            current.entities
+        },
+        candidates: current.candidates,
+        temporal_provenance: current.temporal_provenance.or(source.temporal_provenance),
+        temporal_error: current.temporal_error.or(source.temporal_error),
     }
 }
 
@@ -828,6 +909,13 @@ async fn execute_selected_capability(
         .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok())
         .and_then(|extraction| extraction.temporal_error)
     {
+        tracing::warn!(
+            target: "assistant::execute_selected_capability",
+            capability_id = %capability_id,
+            error_code = %error.code,
+            error_message = %error.message,
+            "clarification-reply execution blocked: invalid temporal input"
+        );
         let payload = ClarificationPayload {
             question: error.message.clone(),
             options: vec![ClarificationOption {
@@ -877,6 +965,13 @@ async fn execute_selected_capability(
             ) {
                 Ok(plan) => (plan, client.clone()),
                 Err(error) => {
+                    tracing::warn!(
+                        target: "assistant::execute_selected_capability",
+                        capability_id = %capability_id,
+                        error = %error,
+                        "clarification-reply plan_selected_capability_verified failed; \
+                         re-clarifying instead of executing"
+                    );
                     let payload = ClarificationPayload {
                         question: error.to_string(),
                         options: vec![
@@ -914,6 +1009,12 @@ async fn execute_selected_capability(
             }
         }
         Err(error) => {
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                error = %error,
+                "clarification-reply authoritative_plan failed; returning routing error"
+            );
             memory.warnings = json!([{ "message": error.to_string() }]);
             return graph_result(
                 memory,
@@ -981,6 +1082,13 @@ async fn execute_selected_capability(
             result_state
         }
         Err(error) => {
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                query_id = %plan.query_id,
+                error = %error,
+                "clarification-reply execute_plan failed; returning routing error"
+            );
             memory.warnings = json!([{ "message": error.to_string() }]);
             graph_result(
                 memory,
