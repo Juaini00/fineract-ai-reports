@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::assistant::intent::RequestShape;
+
 #[derive(Debug, Clone)]
 pub struct KnowledgeCatalog {
     pub root_path: PathBuf,
@@ -177,6 +179,7 @@ pub struct CapabilityKnowledge {
     pub domain: String,
     pub query_id: String,
     pub output_mode: String,
+    pub request_shape: RequestShape,
 
     #[serde(default)]
     pub display_name: Option<String>,

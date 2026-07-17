@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use uuid::Uuid;
 
 use crate::chat::model::ChatMessage;
@@ -15,14 +15,14 @@ impl MessageService {
         Self { messages }
     }
 
-    #[tracing::instrument(skip(self, client), fields(api_key_id = %client.api_key_id, session_id = %session_id))]
+    #[tracing::instrument(skip(self, client), fields(user_id = %client.user_id, session_id = %session_id))]
     pub async fn list_for_session(
         &self,
-        client: ClientContext,
+        client: PrincipalContext,
         session_id: Uuid,
-    ) -> Result<Vec<ChatMessage>> {
+    ) -> Result<Option<Vec<ChatMessage>>> {
         self.messages
-            .list_for_client(session_id, client.api_key_id)
+            .list_for_user(session_id, client.user_id, client.role == "admin")
             .await
     }
 }

@@ -1,18 +1,19 @@
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct CreateChatSessionInput {
-    pub client: ClientContext,
+    pub client: PrincipalContext,
     pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatSession {
     pub id: Uuid,
-    pub api_key_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub api_key_id: Option<Uuid>,
     pub title: Option<String>,
     pub status: String,
     pub context_json: serde_json::Value,

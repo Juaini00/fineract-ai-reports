@@ -14,6 +14,12 @@ metrics:
   - savings.deposit_amount
   - savings.deposit_count
 output_mode: total
+request_shape:
+  operation: total
+  subject: savings_transaction
+  grouping: none
+  output: scalar
+  pii: none
 examples:
   - What is the total deposit this month?
   - Total deposits from January to September 2026.

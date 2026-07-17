@@ -398,7 +398,7 @@ fn picking_other_resets_state_to_free_form_clarification() {
     // New semantics: picking Others is an escape hatch. The classifier drops
     // the prior options, params and domain so the user's next reply is treated
     // as a brand-new prompt. Re-classification of that next reply is the
-    // service layer's job (`classify_with_retrieval`), not the classifier's.
+    // assistant graph's job, not the classifier's.
     let original = clarify_retrieved_capabilities(
         "Show customer activity this week",
         today(),

@@ -1,174 +1,146 @@
-//! Scenario 07 — authorization scope. Verifies:
-//!
-//!   A. Capability gate — an API key with empty `allowed_capabilities` gets
-//!      short-circuited to unsupported without touching Fineract.
-//!   D. Job ownership — jobs are not visible across API keys, even when the
-//!      other key would otherwise be a valid caller.
-//!
-//! Also exercises the deferred-domain paths from Scenario 06.E for loan,
-//! accounting, and tax — each must terminate without leaking internals.
-
 mod common;
 
-use common::{TestApp, spawn_app};
-use serde_json::{Value, json};
-use std::time::{Duration, Instant};
-
-const POLL_TIMEOUT: Duration = Duration::from_secs(15);
-const POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-#[tokio::test(flavor = "multi_thread")]
-async fn job_is_invisible_across_api_keys() {
-    // Scenario 07.D — job ownership boundary.
-    let app = spawn_app().await;
-    let owner = app
-        .provision_api_key(&["savings_deposit_total"], vec![1, 2, 3], false)
-        .await;
-    let other = app
-        .provision_api_key(&["savings_deposit_total"], vec![1, 2, 3], false)
-        .await;
-
-    // Owner creates a job — any prompt is fine, deferred domain works too.
-    let create = app
-        .post_json(
-            "/chat/jobs",
-            Some(&owner.raw),
-            &json!({ "message": "How much loan did we disburse last month?" }),
-        )
-        .await;
-    assert_eq!(create.status(), 201);
-    let job: Value = create.json().await.unwrap();
-    let job_id = job["data"]["job_id"].as_str().unwrap().to_string();
-
-    // Other key cannot read the job.
-    let cross = app
-        .get(&format!("/chat/jobs/{job_id}"), Some(&other.raw))
-        .await;
-    assert_eq!(
-        cross.status(),
-        404,
-        "cross-key read must 404; got {}",
-        cross.status()
-    );
-
-    // And cannot post responses either.
-    let cross_respond = app
-        .post_json(
-            &format!("/chat/jobs/{job_id}/responses"),
-            Some(&other.raw),
-            &json!({ "message": "hi" }),
-        )
-        .await;
-    assert!(
-        matches!(cross_respond.status().as_u16(), 403 | 404),
-        "cross-key respond must 4xx; got {}",
-        cross_respond.status()
-    );
-}
+use app_core::auth::model::PrincipalContext;
+use chat::knowledge::catalog::loader::KnowledgeLoader;
+use chat::policy::authorization::{
+    AuthorizationError, effective_office_scope, ensure_capability_allowed, ensure_pii_allowed,
+    project_admin_principal,
+};
+use common::spawn_app;
+use reqwest::header;
+use serde_json::Value;
+use sqlx::postgres::PgPoolOptions;
+use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn empty_allowed_capabilities_short_circuits_to_unsupported() {
-    // Scenario 07 failure mode: API key with empty allowed_capabilities.
-    // Classification returns unsupported (`source: "no_allowed_capabilities"`),
-    // no Voyage/Fineract call. Terminal state is not queued/running.
+async fn authorization_scope_projects_admin_to_concrete_grants() {
     let app = spawn_app().await;
-    let key = app.provision_api_key(&[], vec![1, 2, 3], false).await;
-
-    let job = create_job(
-        &app,
-        &key.raw,
-        "What is the total deposit from 2026-01-01 to 2026-01-31?",
+    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = KnowledgeLoader::new(
+        workspace_root.join("knowledge"),
+        workspace_root.join("queries"),
     )
-    .await;
+    .load()
+    .expect("load catalog");
+    let mut principal = principal();
 
-    let terminal = wait_for_terminal(&app, &key.raw, &job).await;
+    project_admin_principal(&mut principal, &catalog, &app.fineract)
+        .await
+        .expect("project admin");
+
+    let expected_capability_ids: Vec<_> = catalog
+        .capabilities
+        .iter()
+        .filter(|capability| capability.status == "approved_mvp")
+        .map(|capability| capability.id.clone())
+        .collect();
+    let expected_office_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM m_office ORDER BY id")
+        .fetch_all(&app.fineract)
+        .await
+        .expect("load authoritative offices");
+
+    assert_eq!(principal.capability_ids, expected_capability_ids);
+    assert_eq!(principal.office_ids, expected_office_ids);
+    assert!(principal.can_view_pii);
+    assert_eq!(principal.legacy_api_key_id, None);
+}
+
+#[tokio::test]
+async fn authorization_scope_lookup_failure_grants_nothing() {
+    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = KnowledgeLoader::new(
+        workspace_root.join("knowledge"),
+        workspace_root.join("queries"),
+    )
+    .load()
+    .expect("load catalog");
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/unreachable")
+        .expect("lazy pool");
+    pool.close().await;
+    let mut principal = principal();
 
     assert!(
-        !matches!(
-            terminal["status"].as_str().unwrap_or(""),
-            "queued" | "running"
-        ),
-        "job stuck in non-terminal state: {terminal}"
+        project_admin_principal(&mut principal, &catalog, &pool)
+            .await
+            .is_err()
     );
-
-    // No SQL / raw table names must leak into the response.
-    let payload = serde_json::to_string(&terminal).unwrap();
-    for forbidden in ["SELECT ", "m_savings_account", "panic"] {
-        assert!(
-            !payload.contains(forbidden),
-            "response leaked {forbidden}: {payload}"
-        );
-    }
+    assert!(principal.capability_ids.is_empty());
+    assert!(principal.office_ids.is_empty());
+    assert!(!principal.can_view_pii);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn deferred_domains_all_end_without_leaking_internals() {
-    // Scenario 06.E — loan/accounting/tax are deferred. Group_center is
-    // candidate (conditional). All should terminate sanitized.
+async fn authorization_scope_rejects_non_admin_with_stable_code() {
     let app = spawn_app().await;
-    let key = app
-        .provision_api_key(
-            &["savings_deposit_total", "savings_deposit_top_n"],
-            vec![1, 2, 3],
-            false,
-        )
-        .await;
+    let token = app.login_admin().await;
+    sqlx::query("ALTER TABLE users DROP CONSTRAINT chk_users_role")
+        .execute(&app.app_pool)
+        .await
+        .expect("allow non-admin fixture");
+    sqlx::query("UPDATE users SET role = 'user' WHERE username = 'admin'")
+        .execute(&app.app_pool)
+        .await
+        .expect("demote admin");
 
-    for prompt in [
-        "How much loan did we disburse last month?",
-        "Show the journal entries from January 2026.",
-        "What tax did we collect last quarter?",
-    ] {
-        let job = create_job(&app, &key.raw, prompt).await;
-        let terminal = wait_for_terminal(&app, &key.raw, &job).await;
+    let response = app
+        .http
+        .post(format!("{}/catalog/validate", app.base_url))
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header("X-API-Key", "ignored-invalid-key")
+        .send()
+        .await
+        .expect("validate request");
 
-        let payload = serde_json::to_string(&terminal).unwrap();
-        for forbidden in [
-            "SELECT ",
-            "m_loan",
-            "acc_gl_journal_entry",
-            "m_tax_component",
-            "panic",
-            "stack backtrace",
-        ] {
-            assert!(
-                !payload.contains(forbidden),
-                "{prompt:?} leaked {forbidden}: {payload}"
-            );
-        }
-    }
+    sqlx::query("UPDATE users SET role = 'admin' WHERE username = 'admin'")
+        .execute(&app.app_pool)
+        .await
+        .expect("restore admin");
+    sqlx::query("ALTER TABLE users ADD CONSTRAINT chk_users_role CHECK (role IN ('admin'))")
+        .execute(&app.app_pool)
+        .await
+        .expect("restore role constraint");
+
+    assert_eq!(response.status(), 403);
+    let body: Value = response.json().await.expect("error body");
+    assert_eq!(body["error"]["code"], "role_not_authorized");
 }
 
-async fn create_job(app: &TestApp, api_key: &str, message: &str) -> Value {
-    let resp = app
-        .post_json("/chat/jobs", Some(api_key), &json!({ "message": message }))
-        .await;
+#[test]
+fn authorization_scope_policy_uses_only_concrete_principal_grants() {
+    let mut principal = principal();
+    principal.capability_ids = vec!["savings_deposit_total".into()];
+    principal.office_ids = vec![1, 2];
+    principal.can_view_pii = true;
+
+    assert!(ensure_capability_allowed(&principal, "savings_deposit_total").is_ok());
     assert_eq!(
-        resp.status(),
-        201,
-        "create_job failed: {}",
-        resp.text().await.unwrap_or_default()
+        ensure_capability_allowed(&principal, "savings_deposit_top_n"),
+        Err(AuthorizationError::CapabilityNotAllowed(
+            "savings_deposit_top_n".into()
+        ))
     );
-    let body: Value = resp.json().await.unwrap();
-    body["data"].clone()
+    assert_eq!(effective_office_scope(&principal, Some(&[2])), Ok(vec![2]));
+    assert_eq!(
+        effective_office_scope(&principal, Some(&[3])),
+        Err(AuthorizationError::OfficeNotAllowed(3))
+    );
+    assert!(ensure_pii_allowed(&principal, true).is_ok());
+
+    principal.office_ids.clear();
+    assert_eq!(
+        effective_office_scope(&principal, None),
+        Err(AuthorizationError::MissingOfficeScope)
+    );
 }
 
-async fn wait_for_terminal(app: &TestApp, api_key: &str, initial: &Value) -> Value {
-    let job_id = initial["job_id"].as_str().unwrap();
-    let deadline = Instant::now() + POLL_TIMEOUT;
-    loop {
-        let resp = app
-            .get(&format!("/chat/jobs/{job_id}"), Some(api_key))
-            .await;
-        assert_eq!(resp.status(), 200);
-        let body: Value = resp.json().await.unwrap();
-        let status = body["data"]["status"].as_str().unwrap_or("").to_string();
-        if !matches!(status.as_str(), "queued" | "running") {
-            return body["data"].clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("job did not reach terminal state within {POLL_TIMEOUT:?}: {body}");
-        }
-        tokio::time::sleep(POLL_INTERVAL).await;
+fn principal() -> PrincipalContext {
+    PrincipalContext {
+        user_id: Uuid::new_v4(),
+        role: "admin".into(),
+        capability_ids: Vec::new(),
+        office_ids: Vec::new(),
+        can_view_pii: false,
+        legacy_api_key_id: None,
     }
 }

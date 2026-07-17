@@ -1,19 +1,21 @@
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct CreateChatJobInput {
-    pub client: ClientContext,
+    pub client: PrincipalContext,
     pub session_id: Option<Uuid>,
     pub message: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct RespondToChatJobInput {
-    pub client: ClientContext,
+    pub client: PrincipalContext,
     pub job_id: Uuid,
+    pub source_message: String,
+    pub selected_option_id: Option<String>,
     pub message: String,
 }
 
@@ -30,7 +32,8 @@ pub struct CreatedChatJob {
 pub struct ChatJob {
     pub id: Uuid,
     pub session_id: Uuid,
-    pub api_key_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub api_key_id: Option<Uuid>,
     pub user_message_id: Option<Uuid>,
     pub status: String,
     pub current_step: String,
@@ -59,6 +62,7 @@ pub struct ChatJobAuditEvent {
     pub id: Uuid,
     pub job_id: Uuid,
     pub session_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
     pub api_key_id: Option<Uuid>,
     pub event_type: String,
     pub stage: String,

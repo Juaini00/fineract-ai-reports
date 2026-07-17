@@ -14,7 +14,8 @@ const AUDIT_FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 pub struct AuditEvent {
     pub job_id: Uuid,
     pub session_id: Option<Uuid>,
-    pub api_key_id: Option<Uuid>,
+    pub user_id: Uuid,
+    pub legacy_api_key_id: Option<Uuid>,
     pub event_type: String,
     pub stage: String,
     pub layer: String,
@@ -49,11 +50,12 @@ impl AuditHandle {
 }
 
 impl AuditEvent {
-    pub fn new(job_id: Uuid, stage: &str, layer: &str, status: &str) -> Self {
+    pub fn new(user_id: Uuid, job_id: Uuid, stage: &str, layer: &str, status: &str) -> Self {
         Self {
             job_id,
             session_id: None,
-            api_key_id: None,
+            user_id,
+            legacy_api_key_id: None,
             event_type: "pipeline".to_string(),
             stage: stage.to_string(),
             layer: layer.to_string(),
@@ -120,17 +122,18 @@ async fn insert_batch(pool: &PgPool, events: &[AuditEvent]) -> anyhow::Result<()
         sqlx::query(
             r#"
             INSERT INTO chat_job_audit_events (
-                id, job_id, session_id, api_key_id, event_type, stage, layer,
+                id, job_id, session_id, user_id, api_key_id, event_type, stage, layer,
                 blueprint_step, status, duration_ms, input_summary_json,
                 output_summary_json, decision_json, flags_json, error_json
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             "#,
         )
         .bind(Uuid::new_v4())
         .bind(event.job_id)
         .bind(event.session_id)
-        .bind(event.api_key_id)
+        .bind(event.user_id)
+        .bind(event.legacy_api_key_id)
         .bind(&event.event_type)
         .bind(&event.stage)
         .bind(&event.layer)
@@ -158,6 +161,7 @@ mod tests {
         let handle = AuditHandle::new_disabled();
         handle.record(AuditEvent::new(
             Uuid::nil(),
+            Uuid::nil(),
             "request_received",
             "http",
             "completed",
@@ -166,10 +170,18 @@ mod tests {
 
     #[test]
     fn event_new_uses_safe_defaults() {
-        let event = AuditEvent::new(Uuid::nil(), "policy_evaluated", "policy", "completed");
+        let event = AuditEvent::new(
+            Uuid::nil(),
+            Uuid::nil(),
+            "policy_evaluated",
+            "policy",
+            "completed",
+        );
         assert_eq!(event.event_type, "pipeline");
         assert_eq!(event.stage, "policy_evaluated");
         assert_eq!(event.layer, "policy");
+        assert_eq!(event.user_id, Uuid::nil());
+        assert!(event.legacy_api_key_id.is_none());
         assert_eq!(event.input_summary_json, json!({}));
         assert!(event.error_json.is_none());
     }

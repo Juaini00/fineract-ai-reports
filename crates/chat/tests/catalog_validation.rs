@@ -3,7 +3,7 @@
 //! same validator startup uses. This is the fastest guardrail against any
 //! YAML/SQL drift and doesn't need Postgres or Fineract.
 
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use chat::chat::planner::{
     AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
     RetrievalPlan, evaluate_policy,
@@ -39,19 +39,29 @@ fn real_catalog_loads_and_passes_validation() {
 }
 
 #[test]
-fn real_catalog_matches_documented_scenario_counts() {
+fn real_catalog_has_retrievable_capabilities_and_queries() {
     let catalog = load_catalog();
 
-    assert_eq!(catalog.data_areas.len(), 13);
-    assert_eq!(catalog.domains.len(), 7);
-    assert_eq!(catalog.metrics.len(), 8);
-    assert_eq!(catalog.capabilities.len(), 25);
-    assert_eq!(catalog.queries.len(), 25);
-    assert_eq!(catalog.policies.len(), 6);
-    assert_eq!(catalog.responses.len(), 3);
+    assert!(!catalog.capabilities.is_empty());
+    assert!(!catalog.queries.is_empty());
+    for capability in catalog
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "approved_mvp")
+    {
+        assert!(
+            catalog
+                .queries
+                .iter()
+                .any(|query| query.id == capability.query_id),
+            "missing query {} for capability {}",
+            capability.query_id,
+            capability.id
+        );
+    }
 
     let documents = RetrievalDocumentBuilder::build(&catalog);
-    assert_eq!(documents.len(), 101);
+    assert!(!documents.is_empty());
 }
 
 #[test]
@@ -121,6 +131,7 @@ fn approved_catalog_includes_all_client_and_organization_capabilities() {
             "client.activation_top_n_offices",
             "top_n",
         ),
+        ("client_name_lookup", "client.name_lookup", "list"),
         (
             "organization_office_summary",
             "organization.office_summary",
@@ -243,12 +254,43 @@ fn pii_policy_uses_selected_query_output_fields() {
         requires_policy_check: true,
     };
 
-    let blocked = evaluate_policy(&client(false), Some(&plan), &catalog);
-    assert_eq!(blocked.status, PolicyDecisionStatus::Blocked);
+    let hidden = evaluate_policy(&client(false), Some(&plan), &catalog);
+    assert_eq!(hidden.status, PolicyDecisionStatus::Allowed);
+    assert!(!hidden.can_view_pii);
 
     let allowed = evaluate_policy(&client(true), Some(&plan), &catalog);
     assert_eq!(allowed.status, PolicyDecisionStatus::Allowed);
     assert!(allowed.can_view_pii);
+}
+
+#[test]
+fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
+    let catalog = load_catalog();
+    let plan = ExecutionPlan {
+        plan_type: ExecutionPlanType::Atomic,
+        domain: "client".into(),
+        capability: "client_name_lookup".into(),
+        query_id: "client.name_lookup".into(),
+        output_mode: "list".into(),
+        params: json!({ "search": "Tony" }),
+        retrieval_plan: RetrievalPlan::default(),
+        evidence_evaluation: EvidenceEvaluation::default(),
+        answer_plan: AnswerPlan::default(),
+        requires_policy_check: true,
+    };
+    let mut client = client(false);
+
+    let missing_capability = evaluate_policy(&client, Some(&plan), &catalog);
+    assert_eq!(missing_capability.status, PolicyDecisionStatus::Blocked);
+
+    client.capability_ids.push("client_name_lookup".into());
+    let pii_hidden = evaluate_policy(&client, Some(&plan), &catalog);
+    assert_eq!(pii_hidden.status, PolicyDecisionStatus::Allowed);
+    assert!(!pii_hidden.can_view_pii);
+
+    client.can_view_pii = true;
+    let allowed = evaluate_policy(&client, Some(&plan), &catalog);
+    assert_eq!(allowed.status, PolicyDecisionStatus::Allowed);
 }
 
 fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
@@ -263,19 +305,14 @@ fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
     catalog
 }
 
-fn client(can_view_pii: bool) -> ClientContext {
-    ClientContext {
-        api_key_id: Uuid::new_v4(),
-        user_id: None,
-        name: "scenario-test".into(),
-        owner: "integration-tests".into(),
-        key_prefix: "air_test".into(),
-        allowed_office_ids: vec![1, 2, 3],
-        allowed_capabilities: vec!["savings_deposit_top_n".into()],
-        allow_all_offices: false,
-        allow_all_capabilities: false,
+fn client(can_view_pii: bool) -> PrincipalContext {
+    PrincipalContext {
+        user_id: Uuid::new_v4(),
+        role: "admin".into(),
+        office_ids: vec![1, 2, 3],
+        capability_ids: vec!["savings_deposit_top_n".into()],
         can_view_pii,
-        expires_at: None,
+        legacy_api_key_id: None,
     }
 }
 

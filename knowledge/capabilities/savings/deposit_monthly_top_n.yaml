@@ -11,6 +11,12 @@ query_id: savings.deposit_monthly_top_n
 metrics:
   - savings.deposit_amount
 output_mode: monthly_top_n
+request_shape:
+  operation: rank
+  subject: savings_transaction
+  grouping: month
+  output: ranking
+  pii: conditional_client_identity
 examples:
   - Largest deposit for each month from January to September 2026.
   - Top 3 deposits per month this year.

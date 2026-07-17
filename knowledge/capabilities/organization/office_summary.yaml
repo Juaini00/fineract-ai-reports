@@ -9,6 +9,12 @@ metrics:
   - organization.office_count
   - organization.active_staff_count
 output_mode: summary
+request_shape:
+  operation: summary
+  subject: office
+  grouping: none
+  output: summary
+  pii: none
 examples:
   - Show office summary.
   - How many offices are in my authorized scope?

@@ -22,4 +22,8 @@ pub struct RespondToChatJobRequest {
         message = "Message must be between 1 and 1000 characters long"
     ))]
     pub message: String,
+
+    #[serde(default)]
+    #[validate(length(max = 200, message = "Option id must be at most 200 characters long"))]
+    pub option_id: Option<String>,
 }

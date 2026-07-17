@@ -2,38 +2,42 @@ use std::{collections::HashSet, fmt};
 
 use anyhow::Result;
 use app_core::api::error::ApiError;
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use sqlx::PgPool;
 
 use crate::knowledge::model::KnowledgeCatalog;
 
-/// Expand `allow_all_*` wildcard grants into concrete lists.
-///
-/// Called once at each request/job entry point (auth boundary). After this
-/// runs, `client.allowed_capabilities` and `client.allowed_office_ids` hold
-/// the actual grant snapshot for this request — downstream code never sees
-/// the wildcard flags. Newly-approved capabilities and newly-created offices
-/// are picked up automatically on the next request.
-pub async fn resolve_wildcard_grants(
-    client: &mut ClientContext,
+pub async fn project_admin_principal(
+    principal: &mut PrincipalContext,
     catalog: &KnowledgeCatalog,
     fineract_pool: &PgPool,
 ) -> Result<()> {
-    if client.allow_all_capabilities {
-        client.allowed_capabilities = catalog
-            .capabilities
-            .iter()
-            .filter(|capability| capability.status == "approved_mvp")
-            .map(|capability| capability.id.clone())
-            .collect();
-    }
+    let capability_ids = catalog
+        .capabilities
+        .iter()
+        .filter(|capability| capability.status == "approved_mvp")
+        .map(|capability| capability.id.clone())
+        .collect();
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM m_office ORDER BY id")
+        .fetch_all(fineract_pool)
+        .await?;
+    let office_ids = rows.into_iter().map(|(id,)| id).collect();
+    finalize_admin_projection(principal, capability_ids, office_ids)?;
 
-    if client.allow_all_offices {
-        let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM m_office ORDER BY id")
-            .fetch_all(fineract_pool)
-            .await?;
-        client.allowed_office_ids = rows.into_iter().map(|(id,)| id).collect();
+    Ok(())
+}
+
+fn finalize_admin_projection(
+    principal: &mut PrincipalContext,
+    capability_ids: Vec<String>,
+    office_ids: Vec<i64>,
+) -> Result<(), AuthorizationError> {
+    if office_ids.is_empty() {
+        return Err(AuthorizationError::MissingOfficeScope);
     }
+    principal.capability_ids = capability_ids;
+    principal.office_ids = office_ids;
+    principal.can_view_pii = true;
 
     Ok(())
 }
@@ -55,17 +59,19 @@ impl fmt::Display for AuthorizationError {
             Self::CapabilityNotAllowed(capability) => {
                 write!(
                     formatter,
-                    "API key is not allowed to run capability `{capability}`"
+                    "principal is not allowed to run capability `{capability}`"
                 )
             }
-            Self::MissingOfficeScope => write!(formatter, "API key has no office scope"),
+            Self::MissingOfficeScope => write!(formatter, "principal has no office scope"),
             Self::OfficeNotAllowed(office_id) => {
                 write!(
                     formatter,
-                    "requested office `{office_id}` is outside API key scope"
+                    "requested office `{office_id}` is outside principal scope"
                 )
             }
-            Self::PiiNotAllowed => write!(formatter, "PII output is not allowed for this API key"),
+            Self::PiiNotAllowed => {
+                write!(formatter, "PII output is not allowed for this principal")
+            }
         }
     }
 }
@@ -79,11 +85,11 @@ impl From<AuthorizationError> for ApiError {
 }
 
 pub fn ensure_capability_allowed(
-    client: &ClientContext,
+    principal: &PrincipalContext,
     capability: &str,
 ) -> Result<(), AuthorizationError> {
-    if client
-        .allowed_capabilities
+    if principal
+        .capability_ids
         .iter()
         .any(|allowed| allowed == capability)
     {
@@ -96,14 +102,14 @@ pub fn ensure_capability_allowed(
 }
 
 pub fn effective_office_scope(
-    client: &ClientContext,
+    principal: &PrincipalContext,
     requested_office_ids: Option<&[i64]>,
 ) -> Result<Vec<i64>, AuthorizationError> {
-    if client.allowed_office_ids.is_empty() {
+    if principal.office_ids.is_empty() {
         return Err(AuthorizationError::MissingOfficeScope);
     }
 
-    let allowed: HashSet<i64> = client.allowed_office_ids.iter().copied().collect();
+    let allowed: HashSet<i64> = principal.office_ids.iter().copied().collect();
 
     let office_ids = match requested_office_ids {
         Some(requested) => {
@@ -115,25 +121,25 @@ pub fn effective_office_scope(
 
             requested.to_vec()
         }
-        None => client.allowed_office_ids.clone(),
+        None => principal.office_ids.clone(),
     };
 
     Ok(office_ids)
 }
 
 pub fn ensure_pii_allowed(
-    client: &ClientContext,
+    principal: &PrincipalContext,
     output_requires_pii: bool,
 ) -> Result<(), AuthorizationError> {
-    if !output_requires_pii || client.can_view_pii {
+    if !output_requires_pii || principal.can_view_pii {
         Ok(())
     } else {
         Err(AuthorizationError::PiiNotAllowed)
     }
 }
 
-pub fn pii_output_allowed(client: &ClientContext, output_requires_pii: bool) -> bool {
-    ensure_pii_allowed(client, output_requires_pii).is_ok()
+pub fn pii_output_allowed(principal: &PrincipalContext, output_requires_pii: bool) -> bool {
+    ensure_pii_allowed(principal, output_requires_pii).is_ok()
 }
 
 // TODO(reporting): call these guards from the reporting execution plan before any
@@ -146,19 +152,14 @@ mod tests {
 
     use super::*;
 
-    fn client() -> ClientContext {
-        ClientContext {
-            api_key_id: Uuid::nil(),
-            user_id: None,
-            name: "test-client".to_string(),
-            owner: "test-owner".to_string(),
-            key_prefix: "air_test".to_string(),
-            allowed_office_ids: vec![1, 2],
-            allowed_capabilities: vec!["savings_deposit_total".to_string()],
-            allow_all_offices: false,
-            allow_all_capabilities: false,
+    fn client() -> PrincipalContext {
+        PrincipalContext {
+            user_id: Uuid::nil(),
+            role: "admin".to_string(),
+            office_ids: vec![1, 2],
+            capability_ids: vec!["savings_deposit_total".to_string()],
             can_view_pii: false,
-            expires_at: None,
+            legacy_api_key_id: None,
         }
     }
 
@@ -208,12 +209,29 @@ mod tests {
     #[test]
     fn rejects_empty_office_scope() {
         let mut client = client();
-        client.allowed_office_ids.clear();
+        client.office_ids.clear();
 
         assert_eq!(
             effective_office_scope(&client, None),
             Err(AuthorizationError::MissingOfficeScope)
         );
+    }
+
+    #[test]
+    fn admin_projection_rejects_empty_offices_without_granting_access() {
+        let mut principal = PrincipalContext {
+            capability_ids: Vec::new(),
+            office_ids: Vec::new(),
+            ..client()
+        };
+
+        assert_eq!(
+            finalize_admin_projection(&mut principal, vec!["approved".into()], Vec::new()),
+            Err(AuthorizationError::MissingOfficeScope)
+        );
+        assert!(principal.capability_ids.is_empty());
+        assert!(principal.office_ids.is_empty());
+        assert!(!principal.can_view_pii);
     }
 
     #[test]

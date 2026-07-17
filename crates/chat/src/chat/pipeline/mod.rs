@@ -8,7 +8,7 @@ pub mod retrieval;
 pub mod router;
 
 use anyhow::{Result, bail};
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 use serde_json::{Value, json};
 
 use crate::chat::llm::LlmPlannerClient;
@@ -16,7 +16,7 @@ use crate::chat::pipeline::model::{RouteDecision, StrictPipelineState};
 
 pub struct StrictPipelineInput<'a> {
     pub message: &'a str,
-    pub client: &'a ClientContext,
+    pub client: &'a PrincipalContext,
     pub llm: &'a LlmPlannerClient,
 }
 
@@ -53,11 +53,11 @@ pub async fn run_strict_pipeline(input: StrictPipelineInput<'_>) -> Result<Stric
     Ok(StrictPipelineOutput { state })
 }
 
-fn conversation_context(client: &ClientContext) -> Value {
+fn conversation_context(client: &PrincipalContext) -> Value {
     json!({
-        "api_key_id": client.api_key_id,
-        "allowed_capabilities": client.allowed_capabilities,
-        "allowed_office_ids": client.allowed_office_ids,
+        "user_id": client.user_id,
+        "capabilities": client.capability_ids,
+        "office_ids": client.office_ids,
         "can_view_pii": client.can_view_pii,
     })
 }
@@ -69,23 +69,18 @@ mod tests {
 
     #[test]
     fn conversation_context_excludes_secrets_and_includes_scope() {
-        let client = ClientContext {
-            api_key_id: Uuid::nil(),
-            user_id: None,
-            name: "local".to_string(),
-            owner: "owner".to_string(),
-            key_prefix: "air_test_x".to_string(),
-            allowed_office_ids: vec![1, 2],
-            allowed_capabilities: vec!["savings_activity_list".to_string()],
-            allow_all_offices: false,
-            allow_all_capabilities: false,
+        let client = PrincipalContext {
+            user_id: Uuid::nil(),
+            role: "admin".to_string(),
+            office_ids: vec![1, 2],
+            capability_ids: vec!["savings_activity_list".to_string()],
             can_view_pii: true,
-            expires_at: None,
+            legacy_api_key_id: None,
         };
 
         let context = conversation_context(&client);
 
-        assert_eq!(context["allowed_office_ids"], json!([1, 2]));
+        assert_eq!(context["office_ids"], json!([1, 2]));
         assert!(context.get("key_prefix").is_none());
         assert!(context.get("raw_api_key").is_none());
     }

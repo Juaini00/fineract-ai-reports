@@ -11,6 +11,12 @@ query_id: client.top_n_by_savings_account_count
 metrics:
   - savings.account_count
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: client
+  grouping: none
+  output: ranking
+  pii: client_identity
 examples:
   - Top 10 clients by number of savings accounts.
   - Which clients have the most savings accounts?

@@ -1,5 +1,5 @@
 use app_core::api::{
-    error::ApiError, extractors::authenticated_client::AuthenticatedClient, response,
+    error::ApiError, extractors::authenticated_chat_client::AuthenticatedChatClient, response,
 };
 use axum::{
     extract::State,
@@ -18,7 +18,7 @@ use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::sync::KnowledgeSyncService;
 
 pub async fn validate(
-    AuthenticatedClient(_client): AuthenticatedClient,
+    AuthenticatedChatClient(_client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
 ) -> Result<Response, ApiError> {
     validate_runtime(&state.catalog, &state.core.pools.fineract)
@@ -75,7 +75,7 @@ pub async fn capabilities(
 }
 
 pub async fn vector_index_rebuild(
-    AuthenticatedClient(_client): AuthenticatedClient,
+    AuthenticatedChatClient(_client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
 ) -> Result<Response, ApiError> {
     let core = &state.core;
@@ -104,7 +104,7 @@ pub async fn vector_index_rebuild(
 }
 
 pub async fn vector_index_status(
-    AuthenticatedClient(_client): AuthenticatedClient,
+    AuthenticatedChatClient(_client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
 ) -> Result<Response, ApiError> {
     let row: Option<(

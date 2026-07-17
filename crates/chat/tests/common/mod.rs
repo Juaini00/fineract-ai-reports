@@ -15,12 +15,13 @@
 use std::net::SocketAddr;
 
 use app_core::api::AppState;
-use app_core::auth::api_key;
+use app_core::auth::{api_key, token::TokenService};
 use app_core::config::{
-    AppConfig, AuthConfig, CatalogConfig, LlmConfig, QueryConfig, RedisConfig, ServerConfig,
-    VoyageAiConfig,
+    AppConfig, AuthConfig, CanonicalGatewayMode, CatalogConfig, LlmConfig, QueryConfig,
+    RedisConfig, ServerConfig, VoyageAiConfig,
 };
 use app_core::db::DatabasePools;
+use chrono::{Duration, Utc};
 use reqwest::header;
 use serde_json::{Value, json};
 use sqlx::{AssertSqlSafe, PgPool, postgres::PgPoolOptions};
@@ -35,6 +36,7 @@ pub struct TestApp {
     pub base_url: String,
     pub http: reqwest::Client,
     pub app_pool: PgPool,
+    pub fineract: PgPool,
     pub app_db_name: String,
     admin_db_url: String,
     server: Option<JoinHandle<()>>,
@@ -50,7 +52,10 @@ impl TestApp {
     pub async fn get(&self, path: &str, api_key: Option<&str>) -> reqwest::Response {
         let mut req = self.http.get(format!("{}{path}", self.base_url));
         if let Some(key) = api_key {
-            req = req.header("X-API-Key", key);
+            let access_token = self.login_admin().await;
+            req = req
+                .header("X-API-Key", key)
+                .header(header::AUTHORIZATION, format!("Bearer {access_token}"));
         }
         req.send().await.expect("http get")
     }
@@ -65,6 +70,37 @@ impl TestApp {
             .expect("http get bearer")
     }
 
+    pub async fn get_bearer_with_api_key(
+        &self,
+        path: &str,
+        token: &str,
+        api_key: Option<&str>,
+    ) -> reqwest::Response {
+        let mut req = self
+            .http
+            .get(format!("{}{path}", self.base_url))
+            .bearer_auth(token);
+        if let Some(api_key) = api_key {
+            req = req.header("X-API-Key", api_key);
+        }
+        req.send().await.expect("http get bearer with api key")
+    }
+
+    pub async fn post_json_bearer(
+        &self,
+        path: &str,
+        token: &str,
+        body: &Value,
+    ) -> reqwest::Response {
+        self.http
+            .post(format!("{}{path}", self.base_url))
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await
+            .expect("http post bearer")
+    }
+
     /// POST JSON with an optional `X-API-Key`.
     pub async fn post_json(
         &self,
@@ -77,7 +113,10 @@ impl TestApp {
             .post(format!("{}{path}", self.base_url))
             .json(body);
         if let Some(key) = api_key {
-            req = req.header("X-API-Key", key);
+            let access_token = self.login_admin().await;
+            req = req
+                .header("X-API-Key", key)
+                .header(header::AUTHORIZATION, format!("Bearer {access_token}"));
         }
         req.send().await.expect("http post")
     }
@@ -109,6 +148,53 @@ impl TestApp {
             .to_string()
     }
 
+    pub async fn admin_user_id(&self) -> Uuid {
+        sqlx::query_scalar("SELECT id FROM users WHERE username = 'admin'")
+            .fetch_one(&self.app_pool)
+            .await
+            .expect("admin user id")
+    }
+
+    pub async fn create_test_user_bearer(&self) -> String {
+        let user_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, 'unused', 'admin')",
+        )
+        .bind(user_id)
+        .bind(format!("test-{user_id}"))
+        .execute(&self.app_pool)
+        .await
+        .expect("insert test user");
+        sqlx::query("INSERT INTO user_sessions (id, user_id, expires_at) VALUES ($1, $2, $3)")
+            .bind(session_id)
+            .bind(user_id)
+            .bind(Utc::now() + Duration::hours(1))
+            .execute(&self.app_pool)
+            .await
+            .expect("insert test user session");
+        TokenService::new(AuthConfig {
+            bootstrap_admin_token: ADMIN_TOKEN.into(),
+            bootstrap_admin_enabled: true,
+            bootstrap_admin_username: "admin".into(),
+            bootstrap_admin_password: "password123".into(),
+            bootstrap_admin_email: "admin@example.com".into(),
+            jwt_access_secret: "test-access-secret-change-me".into(),
+            jwt_refresh_secret: "test-refresh-secret-change-me".into(),
+            jwt_access_token_expiry_seconds: 900,
+            jwt_refresh_token_expiry_seconds: 604800,
+            refresh_cookie_name: "refresh_token".into(),
+            refresh_cookie_secure: false,
+            refresh_cookie_same_site: "strict".into(),
+            refresh_cookie_path: "/".into(),
+            api_key_prefix: "air_test".into(),
+            api_key_default_expiration_days: 0,
+        })
+        .issue_access_token(user_id, session_id, "admin")
+        .expect("issue test user token")
+        .token
+    }
+
     /// Create an API key via logged-in dashboard user auth.
     pub async fn provision_api_key(
         &self,
@@ -135,6 +221,37 @@ impl TestApp {
             resp.status(),
             reqwest::StatusCode::CREATED,
             "provision_api_key failed: {}",
+            resp.text().await.unwrap_or_default()
+        );
+        let payload: Value = resp.json().await.expect("api key json");
+        ApiKey {
+            raw: payload["data"]["api_key"].as_str().unwrap().to_string(),
+            id: Uuid::parse_str(payload["data"]["id"].as_str().unwrap()).unwrap(),
+        }
+    }
+
+    pub async fn provision_wildcard_api_key(&self, can_view_pii: bool) -> ApiKey {
+        let access_token = self.login_admin().await;
+        let body = json!({
+            "name": format!("harness-{}", &Uuid::new_v4().to_string()[..8]),
+            "allowed_capabilities": [],
+            "allowed_office_ids": [],
+            "allow_all_offices": true,
+            "allow_all_capabilities": true,
+            "can_view_pii": can_view_pii,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/auth/api-keys", self.base_url))
+            .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+            .json(&body)
+            .send()
+            .await
+            .expect("post wildcard api key");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::CREATED,
+            "provision_wildcard_api_key failed: {}",
             resp.text().await.unwrap_or_default()
         );
         let payload: Value = resp.json().await.expect("api key json");
@@ -207,6 +324,21 @@ impl Drop for TestApp {
 
 /// Spin up a fresh app DB, run migrations, boot axum on `127.0.0.1:0`.
 pub async fn spawn_app() -> TestApp {
+    spawn_app_with_canonical_mode(CanonicalGatewayMode::Disabled).await
+}
+
+pub async fn spawn_app_with_canonical_mode(mode: CanonicalGatewayMode) -> TestApp {
+    spawn_app_with_options("__ai_report_test_llm__", mode).await
+}
+
+pub async fn spawn_app_with_llm_api_key(llm_api_key: &str) -> TestApp {
+    spawn_app_with_options(llm_api_key, CanonicalGatewayMode::Disabled).await
+}
+
+async fn spawn_app_with_options(
+    llm_api_key: &str,
+    canonical_gateway_mode: CanonicalGatewayMode,
+) -> TestApp {
     let admin_db_url = std::env::var("TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://root:password@127.0.0.1:5432/postgres".into());
     let fineract_db_url = std::env::var("TEST_FINERACT_DATABASE_URL").unwrap_or_else(|_| {
@@ -270,12 +402,23 @@ pub async fn spawn_app() -> TestApp {
         },
         llm: LlmConfig {
             provider: "test".into(),
-            api_key: String::new(),
+            api_key: llm_api_key.into(),
             chat_completions_url: "https://example.invalid".into(),
+            base_url: "https://example.invalid".into(),
             model: "test".into(),
             timeout_ms: 5000,
+            max_retries: 1,
             max_output_tokens: 100,
             temperature: 0.0,
+        },
+        embedding: app_core::config::EmbeddingConfig {
+            provider: "test".into(),
+            api_key: String::new(),
+            base_url: "https://example.invalid".into(),
+            model: "test".into(),
+            timeout_ms: 5000,
+            max_retries: 1,
+            dimensions: 1024,
         },
         voyage_ai: VoyageAiConfig {
             api_key: String::new(),
@@ -290,7 +433,14 @@ pub async fn spawn_app() -> TestApp {
             validate_on_startup: true,
             sync_on_startup: false,
         },
-        chat_features: app_core::config::ChatFeatureConfig { lqr_enabled: false },
+        chat_features: app_core::config::ChatFeatureConfig {
+            lqr_enabled: false,
+            canonical_gateway_mode,
+            context_soft_token_limit: 6000,
+            context_hard_token_limit: 8000,
+            context_max_recent_messages: 12,
+            context_max_relevant_jobs: 3,
+        },
     };
     let pools = DatabasePools::connect(&config)
         .await
@@ -300,6 +450,7 @@ pub async fn spawn_app() -> TestApp {
         .await
         .expect("run app migrations");
     let app_pool = pools.app.clone();
+    let fineract = pools.fineract.clone();
 
     // Compose router the same way main.rs does
     let core_state = AppState::new(config.clone(), pools);
@@ -323,6 +474,7 @@ pub async fn spawn_app() -> TestApp {
         base_url: format!("http://{addr}"),
         http: reqwest::Client::new(),
         app_pool,
+        fineract,
         app_db_name: db_name,
         admin_db_url,
         server: Some(handle),

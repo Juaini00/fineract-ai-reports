@@ -29,14 +29,16 @@ where
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ApiError::unauthorized("missing access token"))?;
 
-        let claims = AuthService::from_ref(state)
-            .verify_access_token(token)
-            .map_err(|_| ApiError::unauthorized("invalid access token"))?;
+        let user = AuthService::from_ref(state)
+            .authenticate_access_token(token)
+            .await
+            .map_err(|_| ApiError::internal(anyhow::anyhow!("authentication service unavailable")))?
+            .ok_or_else(|| ApiError::unauthorized("invalid access token"))?;
 
         Ok(Self {
-            user_id: claims.sub,
-            session_id: claims.sid,
-            role: claims.role,
+            user_id: user.user_id,
+            session_id: user.session_id,
+            role: user.role,
         })
     }
 }

@@ -8,6 +8,12 @@ query_id: client.lifecycle_summary
 metrics:
   - client.lifecycle_count
 output_mode: summary
+request_shape:
+  operation: summary
+  subject: client
+  grouping: none
+  output: summary
+  pii: none
 examples:
   - Show client lifecycle summary.
   - How many active clients are in my authorized offices?

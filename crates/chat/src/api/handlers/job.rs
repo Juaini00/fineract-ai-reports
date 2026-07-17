@@ -1,6 +1,8 @@
 use app_core::api::{
     error::ApiError,
-    extractors::{authenticated_client::AuthenticatedClient, validated_json::ValidatedJson},
+    extractors::{
+        authenticated_chat_client::AuthenticatedChatClient, validated_json::ValidatedJson,
+    },
     response,
 };
 use axum::{
@@ -21,13 +23,13 @@ use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
 use crate::chat::model::{CreateChatJobInput, RespondToChatJobInput};
 use crate::chat::service::job::redis_url_log_value;
 
-#[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id))]
+#[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     ValidatedJson(request): ValidatedJson<CreateChatJobRequest>,
 ) -> Result<Response, ApiError> {
-    let job = state
+    let Some(job) = state
         .chat
         .jobs
         .create(CreateChatJobInput {
@@ -36,7 +38,10 @@ pub async fn create(
             message: request.message,
         })
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found("chat session not found"));
+    };
 
     info!(
         session_id = %job.session_id,
@@ -48,9 +53,9 @@ pub async fn create(
     Ok(response::success(StatusCode::CREATED, job).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn get(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -69,9 +74,9 @@ pub async fn get(
     Ok(response::success(StatusCode::OK, job).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn audit(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -88,9 +93,9 @@ pub async fn audit(
     Ok(response::success(StatusCode::OK, audit).into_response())
 }
 
-#[tracing::instrument(skip(state, client), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn stream(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -177,20 +182,31 @@ pub async fn stream(
     Ok(Sse::new(stream).into_response())
 }
 
-#[tracing::instrument(skip(state, client, request), fields(api_key_id = %client.api_key_id, job_id = %job_id))]
+#[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id, job_id = %job_id))]
 pub async fn respond(
-    AuthenticatedClient(client): AuthenticatedClient,
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
     Path(job_id): Path<Uuid>,
     ValidatedJson(request): ValidatedJson<RespondToChatJobRequest>,
 ) -> Result<Response, ApiError> {
+    let selected_option_id = request
+        .option_id
+        .map(|option_id| option_id.trim().to_owned())
+        .filter(|option_id| !option_id.is_empty());
+    let source_message = request.message;
+    let message = selected_option_id
+        .clone()
+        .unwrap_or_else(|| source_message.clone());
+
     let Some(message) = state
         .chat
         .jobs
         .respond(RespondToChatJobInput {
             client,
             job_id,
-            message: request.message,
+            source_message,
+            selected_option_id,
+            message,
         })
         .await
         .map_err(ApiError::internal)?

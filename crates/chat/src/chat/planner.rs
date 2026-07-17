@@ -3,13 +3,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use app_core::auth::model::ClientContext;
+use app_core::auth::model::PrincipalContext;
 
 use crate::chat::classifier::{ClassificationOutcome, ClassificationResult};
 use crate::knowledge::model::KnowledgeCatalog;
-use crate::policy::authorization::{
-    effective_office_scope, ensure_capability_allowed, ensure_pii_allowed,
-};
+use crate::policy::authorization::{effective_office_scope, ensure_capability_allowed};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -197,9 +195,9 @@ fn param_terms(params: &Value) -> Vec<&str> {
 }
 
 pub fn evaluate_policy(
-    client: &ClientContext,
+    client: &PrincipalContext,
     plan: Option<&ExecutionPlan>,
-    catalog: &KnowledgeCatalog,
+    _catalog: &KnowledgeCatalog,
 ) -> PolicyDecision {
     let Some(plan) = plan else {
         return PolicyDecision {
@@ -218,20 +216,6 @@ pub fn evaluate_policy(
         Ok(office_ids) => office_ids,
         Err(error) => return blocked(error.to_string()),
     };
-
-    let output_requires_pii = catalog
-        .queries
-        .iter()
-        .find(|query| query.id == plan.query_id)
-        .is_some_and(|query| {
-            query
-                .output_fields
-                .iter()
-                .any(|field| field.sensitivity == "pii")
-        });
-    if let Err(error) = ensure_pii_allowed(client, output_requires_pii) {
-        return blocked(error.to_string());
-    }
 
     PolicyDecision {
         status: PolicyDecisionStatus::Allowed,

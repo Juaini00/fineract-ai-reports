@@ -1,129 +1,118 @@
 # AGENTS.md
 
-## Current Architecture
+Operating contract for AI agents. Read fully once per session; do not re-scan the repo before consulting the docs referenced here.
 
-- This is a Rust workspace with exactly three crates for now: `crates/app`, `crates/core`, and `crates/chat`. Do not add `api`, `infra`, `runtime`, `knowledge`, `reporting`, or any `ai_report_*` crates yet.
-- The root `Cargo.toml` is workspace-only; it must not contain `[package]`.
-- Crate names must stay short and direct: `app`, `core`, `chat`. Do not use names like `ai_report_core`, `ai_report_chat`, or `chat_service`.
-- `crates/app` is the binary entrypoint and composition root. It wires `core` foundation pieces and the `chat` feature crate.
-- `crates/core` owns shared foundation: config, tracing, DB pools, API primitives, auth, extractors, response envelope, validation primitives, and the API key `ClientContext`.
-- `crates/chat` owns the main chat-driven reporting feature: API routes/handlers/DTOs, chat sessions/messages/jobs, knowledge catalog/index usage, report policy helpers, checkpoints/events, and future pipeline orchestration.
-- Knowledge remains folders/YAML under `knowledge/` and SQL remains under `queries/`; do not create `crates/knowledge` yet.
-- Reporting remains part of the chat-driven flow for now; do not create `crates/reporting` yet.
-- Keep the existing boundaries: route -> service -> repository -> database. Do not put `sqlx` calls directly in route handlers or services.
+## Before you scan the code
 
-## Multi-Agent Workflow
+1. Read `docs/current/status.md` (what's implemented / partial / pending).
+2. Read `docs/current/active-context.md` (rules for edits happening now).
+3. Consult the **Doc trigger table** below — jump to the specific doc for the area you're changing.
+4. Only scan source code if the answer isn't already in the docs.
 
-Primary session = orchestrator. Delegate to protect the main context window, not as procedure. Default: do it yourself.
+Re-scanning the repo when a doc file already answers the question is the #1 way tokens are wasted here.
 
-### When to delegate
+## Doc trigger table (read the file when its trigger fires)
 
-- Task touches > 3 files or > 1 module → delegate the implementation.
-- Investigation that requires reading many files → delegate to an explorer.
-- Single file, < 50 lines, path is clear → do it inline, no agent.
+| Trigger | Read |
+| --- | --- |
+| Any edit today | `docs/current/status.md`, `docs/current/active-context.md` |
+| Deciding what to work on next | `docs/current/next-work.md` |
+| Any architectural / cross-crate change | `docs/architecture/overview.md` |
+| Touching chat / session / job code | `docs/architecture/chat-data-model.md` |
+| Touching a response formatter or SQL result path | `docs/product/pii-policy/` |
+| Adding / changing a capability | `docs/product/reporting-capabilities/`, `docs/product/reporting-data-scope/`, `knowledge/**/*.yaml`, `queries/**/*.sql` |
+| Running / verifying the app | `docs/runtime/README.md` |
+| Migration or schema question | `migrations/*.sql` (source of truth), `docs/architecture/chat-data-model.md` |
+| Planning a phase / picking next task | `docs/roadmap/implementation-roadmap.md` |
+| Filing or reading an issue | `docs/issues/` |
+| Writing a spec or implementation plan | `docs/superpowers/` |
 
-### Two roles only
+## Workspace layout (locked)
 
-- **Brainstorm / Plan (strong model)** — primary session. Understand the problem, map the files that will change, write a short plan.
-- **Executor (cheap model, e.g. haiku)** — mechanical implementation against the plan. Does not make architectural decisions.
+Three crates only: `crates/app`, `crates/core`, `crates/chat`. Names stay short — never `ai_report_*`. Do not add `api`, `infra`, `runtime`, `knowledge`, `reporting` crates.
 
-Review, test, and debug are not mandatory steps. Call them on demand: build fails → debugger; sensitive change (auth, SQL, migrations) → reviewer. Do not run them as a fixed pipeline.
+- `app` — binary entrypoint + composition root. Wires `core` + `chat`.
+- `core` — config, tracing, DB pools, Redis, API envelope, `ValidatedJson<T>`, `ApiError`, auth (`ApiKeyRepository`, `AuthService`, `AuthenticatedClient`, `ClientContext`). `AuthenticatedClient` is generic over any `S: FromRef<AuthService>`.
+- `chat` — chat-driven reporting: `chat::{model, repository, service}`, `chat::knowledge::{catalog, index}`, `chat::api::{handlers, routes, dto}`, `chat::policy::authorization` (wired via `chat::chat::planner::evaluate_policy` before `executor::execute_plan`).
 
-## Development Principles
+Knowledge stays as YAML under `knowledge/`, SQL under `queries/`, schema changes only via `migrations/*.sql`.
 
-- Keep changes minimal.
-- Respect existing architecture.
-- Preserve project conventions.
-- Never expand scope unnecessarily.
-- Validate changes before reporting completion.
-- Report assumptions whenever uncertainty exists.
+## Architectural invariants
 
-## Ponytail Mode
+- Layer order: `route → service → repository → database`. **No `sqlx` calls in handlers or services** — repositories only.
+- All HTTP responses: envelope `{ success, data, error }`. Errors via `ApiError`. Never leak raw Serde / Axum / SQL / stack / prompt text.
+- Request validation: `validator` derive + global `ValidatedJson<T>`. No hand-rolled per-route validators.
+- Durable chat/job state → PostgreSQL (`chat_sessions`, `chat_messages`, `chat_jobs`, `chat_job_checkpoints`, `chat_job_events`). Redis is only for live SSE keys (`chat_job:{id}:live_state` / `:latest_event` / `:lock`). Checkpoints at meaningful boundaries, not per heartbeat.
+- Clarification continues the same job via `POST /chat/jobs/{job_id}/responses`. Never spawn a new job for clarification.
+- Office scope enforced inside approved SQL via bound `office_ids` parameter — never post-filter in Rust.
+- API keys: raw key returned once, DB stores `key_hash` + `key_prefix` only. `POST /auth/api-keys` gated by `AUTH_BOOTSTRAP_ADMIN_TOKEN`.
+- Product language policy: English only until multilingual extraction, classification, and templates are implemented and tested. No Indonesian classifier / clarification / template text yet.
+- Schema changes only via `migrations/*.sql`. App startup must never create/alter tables. `APP_DATABASE_MIGRATE_ON_STARTUP=true` is local/dev only.
 
-- Use Ponytail by default: prefer the smallest correct change that moves the roadmap forward.
-- Stop at the first solution that holds: existing code, stdlib/native feature, already-installed dependency, then minimal new code.
-- Do not add speculative abstractions, extra crates, future scaffolding, factories, or interfaces with one implementation.
-- Delete or reuse before adding. Keep code boring and local unless reuse is already real.
-- Non-trivial logic needs one small runnable check. Do not create broad test scaffolding unless the feature needs it.
-- Mark deliberate shortcuts only when there is a real ceiling, for example `// ponytail: global lock, per-job locks if throughput matters`.
+## Multi-agent workflow
+
+Primary session = orchestrator. Delegate to protect context, not as procedure. Default: do it yourself.
+
+### Delegation threshold
+
+| Situation | Action |
+| --- | --- |
+| Single file, <50 LOC, path clear | Inline. No subagent. |
+| Rename / format / typo / obvious diff | Inline. No subagent. No skill load. |
+| >3 files or >1 module change | `task-executor` |
+| Reading many files to answer a question | `code-explorer` |
+| Doc lookup | `documentation-researcher` |
+| Build / test failure with unknown root cause | `debugger` — on demand only |
+| Touching auth / SQL / migrations / money paths, OR diff >100 LOC | `code-reviewer` — on demand only |
+| Rest of the time | No review. No debugger. Not a pipeline. |
+
+Model is chosen once at session level (opencode TUI / `opencode.json`). Agents do not override it. Efficiency comes from *when* to delegate, not from swapping models mid-task. After a plan is agreed, delegate mechanical implementation to `task-executor` so the primary session doesn't burn context on rename / format / edit.
+
+### Subagent input contract
+
+When delegating, ALWAYS pass:
+
+- `task`: one-sentence goal.
+- `target_files`: explicit `path:line-range` list.
+- `already_known`: symbols / decisions / conventions parent has already established.
+- `budget`: max tool calls or LOC.
+
+Subagents MUST NOT re-explore paths in `already_known` without stating a reason.
+
+## Development principles (Ponytail default)
+
+- Smallest correct change that moves the roadmap forward.
+- Stop at the first working rung: existing code → stdlib/native → installed dep → then minimal new code.
+- No speculative abstractions, factories, one-impl interfaces, "for later" scaffolding.
+- Delete or reuse before adding. Boring and local wins.
+- Non-trivial logic needs one small runnable check. No broad test scaffolding unless the feature needs it.
+- Mark deliberate shortcuts only with a real ceiling: `// ponytail: global lock, per-job locks if throughput matters`.
+
+## File editing
+
+- Native `Edit` / `Write` first. `ctx_edit` fallback. Never MCP write when native works.
+- Shell heredocs / `sed` / `python3 -c` for edits are forbidden unless doing a bulk mechanical transform.
+- `ctx_read` / `ctx_search` / `ctx_shell` / `ctx_tree` before native `Read` / `Grep` / `Bash`.
 
 ## Commands
 
-- Build/check everything: `cargo check`
-- Run tests: `cargo test`
-- Run the app: `cargo run -p app`
-- Format Rust code: `cargo fmt`
-- Run migrations manually: `sqlx migrate run --database-url "postgres://root:password@127.0.0.1:5432/ai_reports"`
-- Start Redis: `docker compose up -d redis`
-- Check Redis: `docker compose exec -T redis redis-cli ping`
+```bash
+cargo check                    # workspace type-check
+cargo test                     # all tests
+cargo test -p chat <name>      # one crate, substring match
+cargo run -p app               # HTTP on :3007
+cargo fmt
+docker compose up -d redis     # Redis on host :6380 → container :6379
+sqlx migrate run --database-url "postgres://root:password@127.0.0.1:5432/ai_reports"
+```
 
-## File Editing
+Local app: `http://127.0.0.1:3007`. Health: `GET /health`, `GET /ready` (checks app DB, Fineract DB, pgvector, Redis when `REDIS_ENABLED=true`).
 
-- Do not use Python/Node/shell scripts to edit files unless editing many files, doing a mechanical transformation, or native edit/`ctx_edit` failed.
-- For normal file edits, use native Edit/StrReplace first, then lean-ctx `ctx_edit`.
-- Use shell for runtime commands only (`cargo test`, `cargo check`, `cargo fmt`, Docker, migrations), not for file rewrites.
-- Never use `python3 - <<'PY'`, `node -e`, `perl -pi`, or shell heredocs for file edits when Edit/StrReplace or `ctx_edit` can do the change.
+## Postman MCP (only when doing API verification)
 
-## Postman MCP Workflow
-
-- Use Postman MCP for API collection discovery, request inspection, and request/collection updates when verifying API behavior.
-- Read `postman://instructions` before Postman API work.
-- Primary local verification collection: `fineract report` in workspace `cms-rivolta`, folder `chat`.
-- Collection variables are expected for local use: `BASE_URL`, `LOCAL_ADMIN_TOKEN`, `API_KEY`, `SESSION_ID`, and `JOB_ID`.
-- Preferred Postman MCP flow: `searchPostmanElements` for the collection, `getCollection` with `model=full`, then inspect/update the relevant request definitions.
-- If the active Postman MCP tool profile has no request/collection runner, execute the same request sequence locally against `http://127.0.0.1:3007` and keep secrets out of command output.
-
-## Local Runtime
-
-- Local app port is `3007` from `.env`; use `http://127.0.0.1:3007` in examples.
-- Redis must run through Docker Compose, not Homebrew/local install. It maps host port `6380` to container port `6379` because local port `6379` may be occupied.
-- Health endpoints: `GET /health`, `GET /ready`.
-- `/ready` checks App DB, Fineract DB, pgvector, and Redis when `REDIS_ENABLED=true`.
-- Startup logs should show environment, address, health URL, ready URL, and dependency readiness.
-
-## Database And Migrations
-
-- App DB is PostgreSQL database `ai_reports`; Fineract DB is read-only/replica via `FINERACT_DATABASE_URL`.
-- `pgvector` is a PostgreSQL extension in the app DB, not a separate vector service.
-- Schema changes belong in `migrations/*.sql`. Do not create or alter tables from application startup code.
-- `.env` currently has `APP_DATABASE_MIGRATE_ON_STARTUP=true` for local/dev. Default policy should remain false outside local/dev.
-
-## API And Validation Conventions
-
-- All API responses use the envelope: `{ "success": bool, "data": ..., "error": ... }`.
-- Use `validator` derive plus the global `ValidatedJson<T>` extractor for request validation. Do not hand-roll per-route JSON validators unless there is no reasonable crate support.
-- Keep client-facing errors sanitized. Log parser/internal details with tracing, but do not return raw Serde/Axum parser messages, stack traces, SQL, prompts, or secrets to clients.
-- MVP user-facing language is English only. Do not add Indonesian classifier phrases, clarification text, response templates, or examples unless multilingual support is explicitly added later.
-
-## Auth Status And Rules
-
-- Implemented: `POST /auth/api-keys`, bootstrap admin token auth, API key hashing, `ApiKeyRepository`, `AuthService`, API key authentication extractor, `GET /auth/me`, consistent response envelope.
-- Raw API keys are returned once and never stored. DB stores `key_hash` and `key_prefix` only.
-- Authorization helpers in `crates/chat/src/policy/authorization.rs` (capability, office-scope, PII) are wired into the chat job pipeline: `chat::chat::planner::evaluate_policy` runs before `chat::chat::executor::execute_plan`, and execution is blocked when the decision is not `Allowed`.
-- Office filtering is enforced inside approved SQL: `queries/savings/*.sql` use `office_id = ANY($3::bigint[])` and the executor binds `policy_decision.office_ids` to that parameter. New approved queries must follow the same pattern — do not post-filter office scope in Rust.
-
-## Chat/Job Design Decisions
-
-- Durable chat state belongs in PostgreSQL: `chat_sessions`, `chat_messages`, `chat_jobs`, `chat_job_checkpoints`, `chat_job_events`.
-- Redis is only for live progress/SSE coordination: `chat_job:{job_id}:live_state`, `chat_job:{job_id}:latest_event`, `chat_job:{job_id}:lock`.
-- Memory is never the source of truth for resumable jobs.
-- Save PostgreSQL checkpoints only at important boundaries; do not write every heartbeat/progress update to PostgreSQL.
-- Clarification must continue the same job via `POST /chat/jobs/{job_id}/responses`; do not create a new job for clarification answers.
-
-## Current Implementation Order
-
-- Follow `docs/implementation-steps.md` as the active roadmap.
-- Completed: baseline, app bootstrap, DB pools/readiness, API key generation/authentication, reporting scope/capability/PII docs, chat session/job migrations, workspace alignment to `app` + `core` + `chat`, and current chat module split.
-- Partially done: Phase 10 catalog foundation (schema/metrics/policies/responses load as generic knowledge; typed field schemas still pending), Phase 17 LLM provider integration (constrained OpenAI-compatible planner fallback; response formatting fallback pending), Phase 18 retrieval breadth.
-- Done since last update: Phase 9 background worker + Redis-backed SSE (`JobService::emit_event` + spawned `run_pipeline`), Phase 11 runtime SQL validation via `validate_runtime` wired into `POST /catalog/validate`, Phase 18 admin endpoints `POST /vector-index/rebuild` and `GET /vector-index/status`, Phase 19 savings runtime matrix with 9 approved capabilities.
-- Next: typed schema/metric/policy/response validation, broader LLM context consumption, then new non-savings capabilities after data-scope promotion.
-
-## Important References
-
-- `docs/project-setup.md`: current workspace/crate setup rules.
-- `docs/implementation-steps.md`: active phase roadmap.
-- `docs/chat-data-model.md`: chat/session/job tables and Redis state rules.
-- `docs/ai-reporting-design.md`: broader AI reporting architecture.
-- `docs/reporting-data-scope.md`: approved/deferred reporting data scope.
-- `docs/reporting-capabilities.md`: executable capability rules.
-- `docs/reporting-pii-policy.md`: PII/masking/never-expose rules.
+- Not loaded by default. Enable in `~/.config/opencode/opencode.json` per-session when needed.
+- Read `postman://instructions` first.
+- Collection: `fineract report`, workspace `cms-rivolta`, folder `chat`.
+- Vars: `BASE_URL`, `LOCAL_ADMIN_TOKEN`, `API_KEY`, `SESSION_ID`, `JOB_ID`.
+- Prefer `searchPostmanElements` → `getCollection model=full` → inspect/update.
+- Fallback: hit `http://127.0.0.1:3007` locally, keep secrets out of output.

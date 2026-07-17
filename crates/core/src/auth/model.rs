@@ -67,6 +67,16 @@ pub struct ClientContext {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrincipalContext {
+    pub user_id: Uuid,
+    pub role: String,
+    pub capability_ids: Vec<String>,
+    pub office_ids: Vec<i64>,
+    pub can_view_pii: bool,
+    pub legacy_api_key_id: Option<Uuid>,
+}
+
 impl From<ActiveApiKeyRecord> for ClientContext {
     fn from(record: ActiveApiKeyRecord) -> Self {
         Self {
@@ -108,6 +118,13 @@ pub struct UserRecord {
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedUserRecord {
+    pub user_id: Uuid,
+    pub session_id: Uuid,
+    pub role: String,
 }
 
 #[derive(Debug, Clone)]

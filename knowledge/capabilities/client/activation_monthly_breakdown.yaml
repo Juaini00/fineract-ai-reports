@@ -10,6 +10,12 @@ query_id: client.activation_monthly_breakdown
 metrics:
   - client.lifecycle_count
 output_mode: monthly_breakdown
+request_shape:
+  operation: trend
+  subject: client
+  grouping: month
+  output: time_series
+  pii: none
 examples:
   - Monthly client activations for 2026.
   - How many clients did we activate each month last year?

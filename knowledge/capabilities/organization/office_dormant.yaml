@@ -10,6 +10,12 @@ query_id: organization.office_dormant
 metrics:
   - organization.office_count
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: office
+  grouping: office
+  output: ranking
+  pii: none
 examples:
   - Which offices had no activity this quarter?
   - List dormant offices from 2026-04-01 to 2026-06-30.

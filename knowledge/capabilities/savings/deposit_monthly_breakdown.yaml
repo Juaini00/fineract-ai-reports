@@ -12,6 +12,12 @@ metrics:
   - savings.deposit_amount
   - savings.deposit_count
 output_mode: monthly_breakdown
+request_shape:
+  operation: trend
+  subject: savings_transaction
+  grouping: month
+  output: time_series
+  pii: none
 examples:
   - Monthly deposit totals from January to September 2026.
   - Show savings deposits per month for this year.

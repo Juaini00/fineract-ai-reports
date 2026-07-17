@@ -4,8 +4,8 @@ use sqlx::{FromRow, PgPool, types::Json};
 use uuid::Uuid;
 
 use crate::auth::model::{
-    ActiveApiKeyRecord, NewApiKeyRecord, NewRefreshTokenRecord, NewSessionRecord, NewUserRecord,
-    UserRecord,
+    ActiveApiKeyRecord, AuthenticatedUserRecord, NewApiKeyRecord, NewRefreshTokenRecord,
+    NewSessionRecord, NewUserRecord, UserRecord,
 };
 
 #[derive(Debug, FromRow)]
@@ -253,6 +253,37 @@ impl SessionRepository {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn find_authenticated_user(
+        &self,
+        user_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<AuthenticatedUserRecord>> {
+        let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+            r#"
+            SELECT u.id, us.id, u.role
+            FROM users u
+            JOIN user_sessions us ON us.user_id = u.id
+            WHERE u.id = $1
+              AND us.id = $2
+              AND u.is_active = true
+              AND us.revoked_at IS NULL
+              AND us.expires_at > now()
+            "#,
+        )
+        .bind(user_id)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(
+            row.map(|(user_id, session_id, role)| AuthenticatedUserRecord {
+                user_id,
+                session_id,
+                role,
+            }),
+        )
     }
 
     pub async fn insert_refresh_token(&self, record: NewRefreshTokenRecord) -> Result<()> {

@@ -1,17 +1,28 @@
 # Capability Coverage Matrix: How outcomes map at runtime
 
-Source: `docs-old/capability-coverage-matrix.md`
+The current runtime is the semantic assistant graph, not the old classifier-first mapper.
 
-## How outcomes map at runtime
+```text
+user message
+  -> session context window
+  -> semantic intent route
+  -> retrieval plan
+  -> knowledge evidence retrieval
+  -> evidence evaluation
+  -> clarification OR policy guard/tool execution
+  -> structured assistant response + Markdown render
+```
 
-The classifier and planner emit one of four terminal outcomes. The coverage-matrix status drives the mapping.
+## Outcome mapping
 
-| Matrix status | Classifier outcome | Job terminal status | User-facing template |
-| --- | --- | --- | --- |
-| `implemented` | `Matched` (single) or `CompositeMatched` (batch) | `completed` | Report renders normally per output_mode. |
-| `planned` | `PlannedUnimplemented` | `planned_unimplemented` | Sanitised: "This report is planned but not yet available in this release. Expected in {target_milestone}." No SQL runs. |
-| `deferred` | `Unsupported` with reason `deferred_domain` | `unsupported` | Sanitised: "That data area is not yet enabled." |
-| `out_of_scope` | `Unsupported` with reason `hard_reject` | `unsupported` | Sanitised: "That request is not supported." |
-| — (nonsense combination) | `ClarificationRequired` | `awaiting_clarification` | Structured clarification prompt. |
+| Runtime decision | Job/status behavior | User-facing response |
+| --- | --- | --- |
+| Greeting/help | Completes or waits without SQL execution. | Structured help/summary response. |
+| Strong evidence for approved capability/tool | Runs policy guard, then approved catalog SQL only. | Structured table/cards/summary response with PII fields hidden when policy disallows them. |
+| Weak or ambiguous evidence | Stores pending clarification in session context and waits on the same job. | Structured clarification options; replies are resolved semantically. |
+| Unsupported in-domain request | No SQL execution. | Sanitized unsupported response. |
+| Out-of-domain request | No SQL execution. | Sanitized out-of-domain response. |
+| Unsafe/PII request without permission | Blocked before execution. | Sanitized policy-blocked response. |
+| Semantic router unavailable in local/test config | Saves message/context and waits safely. | Operational clarification telling the user routing is not enabled. |
 
-`PlannedUnimplemented` is the fourth outcome; the runtime today has `Matched | ClarificationRequired | Unsupported`. See `docs/ai-reporting-design.md` §18.3 for the design.
+Coverage-matrix status still constrains execution: only active/approved catalog capabilities with approved SQL can execute. Deferred or rejected data areas may be understood by the assistant, but they do not bypass catalog, policy, office-scope, or PII gates.

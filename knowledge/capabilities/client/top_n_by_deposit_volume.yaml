@@ -11,6 +11,12 @@ query_id: client.top_n_by_deposit_volume
 metrics:
   - savings.deposit_total
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: client
+  grouping: none
+  output: ranking
+  pii: client_identity
 examples:
   - Top 10 clients by deposit volume this month.
   - Which clients deposited the most in Q2?

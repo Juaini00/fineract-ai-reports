@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key_hash TEXT NOT NULL UNIQUE,
     allowed_office_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     allowed_capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    allow_all_capabilities BOOLEAN NOT NULL DEFAULT false,
+    allow_all_offices BOOLEAN NOT NULL DEFAULT false,
     can_view_pii BOOLEAN NOT NULL DEFAULT false,
     expires_at TIMESTAMPTZ NULL,
     revoked_at TIMESTAMPTZ NULL,

@@ -1,0 +1,46 @@
+id: client.name_lookup
+database: fineract
+sql_file: queries/client/name_lookup.sql
+data_areas:
+  - client_foundation
+  - organization_foundation
+tables:
+  - m_client
+  - m_office
+metrics:
+  - client.name_lookup
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: search
+    type: string
+    required: true
+output_fields:
+  - name: client_id
+    type: bigint
+    sensitivity: public_business
+  - name: display_name
+    type: string
+    sensitivity: pii
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: status_label
+    type: string
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  parameterized_only: true
+timeout_ms: 3000
+cost_class: low
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: office_filter_is_bound
+    rule: SQL must constrain c.office_id with ANY($1::bigint[]).
+  - id: no_raw_identifiers
+    rule: Query must not output account_no, external_id, mobile_no, or email.

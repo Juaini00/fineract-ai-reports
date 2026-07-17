@@ -11,6 +11,12 @@ query_id: savings.withdrawal_monthly_top_n
 metrics:
   - savings.withdrawal_amount
 output_mode: monthly_top_n
+request_shape:
+  operation: rank
+  subject: savings_transaction
+  grouping: month
+  output: ranking
+  pii: conditional_client_identity
 examples:
   - Largest withdrawal for each month from January to September 2026.
   - Top 3 withdrawals per month this year.

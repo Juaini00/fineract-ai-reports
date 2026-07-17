@@ -1,0 +1,8 @@
+{"prompt":"Hi","expected_intent":"greeting","expected_domain":"unknown","expected_entities":[],"expected_response_type":"summary"}
+{"prompt":"kamu bisa apa aja?","expected_intent":"help","expected_domain":"unknown","expected_entities":[],"expected_response_type":"help"}
+{"prompt":"ada gak nama Tony di client kita?","expected_intent":"data_lookup","expected_domain":"client","expected_entities":[{"type":"person_name","value":"Tony"}],"expected_response_type":"table"}
+{"prompt":"total savings deposit this month","expected_intent":"report_request","expected_domain":"savings","expected_entities":[],"expected_response_type":"summary"}
+{"prompt":"yang balance aja","expected_intent":"clarification_reply","expected_domain":"savings","expected_entities":[],"expected_response_type":"clarification"}
+{"prompt":"sekarang tampilkan client aktif bulan ini","expected_intent":"follow_up","expected_domain":"client","expected_entities":[],"expected_response_type":"table"}
+{"prompt":"tau gak harga laptop?","expected_intent":"out_of_domain","expected_domain":"unknown","expected_entities":[],"expected_response_type":"out_of_domain"}
+{"prompt":"show raw account numbers","expected_intent":"unsafe_request","expected_domain":"unknown","expected_entities":[],"expected_response_type":"policy_blocked"}

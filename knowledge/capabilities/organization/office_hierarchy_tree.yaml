@@ -10,6 +10,12 @@ query_id: organization.office_hierarchy_tree
 metrics:
   - organization.office_count
 output_mode: top_n
+request_shape:
+  operation: list
+  subject: office
+  grouping: none
+  output: list
+  pii: none
 examples:
   - Show my office hierarchy tree.
   - List offices with parent and depth.

@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 app_core = {package = "core", path = "../core"}
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 futures.workspace = true
@@ -26,6 +27,10 @@ pgvector.workspace = true
 reqwest.workspace = true
 redis.workspace = true
 tokio.workspace = true
+petgraph.workspace = true
+rig-core.workspace = true
+schemars.workspace = true
+swiftide.workspace = true
 
 [dev-dependencies]
 reqwest = { workspace = true }

@@ -13,6 +13,12 @@ query_id: savings.deposit_top_n
 metrics:
   - savings.deposit_amount
 output_mode: top_n
+request_shape:
+  operation: rank
+  subject: savings_transaction
+  grouping: none
+  output: ranking
+  pii: conditional_client_identity
 examples:
   - Who made the largest deposit today?
   - Show the largest deposits this month.
