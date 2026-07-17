@@ -39,14 +39,19 @@ async fn savings_answer_matrix_selects_expected_capabilities_and_shapes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "issue 01 (retrieval-pipeline-rework): savings_deposit_total now \
+#[ignore = "issue 01 (retrieval-pipeline-rework): savings_deposit_total still \
 ties with lexically-similar siblings (client_top_n_by_deposit_volume, \
 savings_deposit_monthly_breakdown/_top_n) on the full catalog and is \
 crowded out of clarification's top-3, so this test can no longer reach a \
 deterministic 'completed' state on which to assert office-scope row \
-filtering. Needs either a reranker (issue 02) or a dedicated retrieval \
-precision fix before re-enabling; the office-scope SQL behavior itself is \
-unrelated to this task and is not believed to have regressed."]
+filtering. Task-2-review fix pass 1 restored the metric_compatible/ \
+parameters_feasible filters in catalog_fallback (they had been dropped in \
+error), but this did not change the outcome: those siblings share the same \
+metric family as savings_deposit_total, so they still pass both filters and \
+still tie on shape_score + keyword overlap. Needs a reranker (issue 02) or a \
+dedicated retrieval precision fix before re-enabling; the office-scope SQL \
+behavior itself is unrelated to this task and is not believed to have \
+regressed."]
 async fn savings_answer_respects_narrow_office_scope() {
     let app = spawn_app().await;
     // Issue 01 (retrieval-pipeline-rework): the matrix's generic
@@ -113,12 +118,15 @@ async fn savings_answer_respects_narrow_office_scope() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "issue 01 (retrieval-pipeline-rework): the vague prompt \
-'I need a savings report' now reduces to a single generic keyword \
+'I need a savings report' still reduces to a single generic keyword \
 ('savings') after stopword filtering, so many savings/client capabilities \
-tie and savings_deposit_total is no longer guaranteed a clarification slot. \
-Needs a reranker (issue 02) or a dedicated retrieval precision fix before \
-re-enabling; the parameter-only-reply continuation logic itself is \
-unrelated to this task and is not believed to have regressed."]
+tie and savings_deposit_total is not guaranteed a clarification slot. \
+Task-2-review fix pass 1 restored the metric_compatible/parameters_feasible \
+filters in catalog_fallback, but this prompt carries no metric entity at \
+all, so both filters are no-ops here and every savings/client capability \
+still ties. Needs a reranker (issue 02) or a dedicated retrieval precision \
+fix before re-enabling; the parameter-only-reply continuation logic itself \
+is unrelated to this task and is not believed to have regressed."]
 async fn savings_clarification_keeps_selected_capability_for_parameter_only_reply() {
     let app = spawn_app().await;
     let case = case_for_capability("savings_deposit_total");

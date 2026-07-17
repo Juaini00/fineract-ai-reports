@@ -10,6 +10,10 @@ use crate::{
     knowledge::{index::repository::KnowledgeRepository, model::KnowledgeCatalog},
 };
 
+/// Boost applied to a candidate's score for each matched request_shape
+/// dimension (see `shape_score`), up to a cap of 0.99.
+const SHAPE_BOOST: f32 = 0.30;
+
 pub struct RetrievalEngine;
 
 impl RetrievalEngine {
@@ -55,7 +59,6 @@ impl RetrievalEngine {
 
         // Boost each candidate by shape match against the plan (up to +0.30).
         if let Some(catalog) = catalog {
-            let shape_boost = 0.30;
             for item in evidence.iter_mut() {
                 if let Some(cap) = catalog
                     .capabilities
@@ -63,7 +66,7 @@ impl RetrievalEngine {
                     .find(|c| c.id == item.capability_id)
                 {
                     let score = shape_score(plan, cap);
-                    item.score = (item.score + score * shape_boost).min(0.99);
+                    item.score = (item.score + score * SHAPE_BOOST).min(0.99);
                 }
             }
         }
@@ -150,6 +153,8 @@ pub fn catalog_fallback(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec
         .iter()
         .filter(|cap| matches!(cap.status.as_str(), "approved_mvp" | "active"))
         .filter(|cap| plan.allow_all_capabilities || plan.allowed_capabilities.iter().any(|id| id == &cap.id))
+        .filter(|cap| metric_compatible(plan, &cap.metrics))
+        .filter(|cap| parameters_feasible(plan, &cap.required_parameters))
         // shape/domain no longer gate here — shape_score in retrieve() scores it instead
         .map(|cap| {
             let haystack = format!("{} {} {} {}", cap.id, cap.display_name.clone().unwrap_or_default(), cap.description.clone().unwrap_or_default(), cap.examples.join(" ")).to_lowercase();
