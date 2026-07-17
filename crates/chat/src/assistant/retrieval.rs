@@ -123,17 +123,11 @@ pub fn compatible_ids(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec<S
         .iter()
         .filter(|cap| matches!(cap.status.as_str(), "approved_mvp" | "active"))
         .filter(|cap| plan.allow_all_capabilities || plan.allowed_capabilities.contains(&cap.id))
-        .filter(|cap| domain_compatible(plan, &cap.domain))
         .filter(|cap| shape_compatible(&plan.request_shape, &cap.request_shape))
         .filter(|cap| metric_compatible(plan, &cap.metrics))
         .filter(|cap| parameters_feasible(plan, &cap.required_parameters))
         .map(|cap| cap.id.clone())
         .collect()
-}
-
-fn domain_compatible(plan: &RetrievalPlan, domain: &str) -> bool {
-    matches!(plan.domain, crate::assistant::AssistantDomain::Unknown)
-        || format!("{:?}", plan.domain).eq_ignore_ascii_case(domain)
 }
 
 fn shape_compatible(
