@@ -842,7 +842,11 @@ fn prefer_current_turn_extraction(
         } else {
             current.entities
         },
-        candidates: current.candidates,
+        candidates: if current.candidates.is_empty() {
+            source.candidates
+        } else {
+            current.candidates
+        },
         temporal_provenance: current.temporal_provenance.or(source.temporal_provenance),
         temporal_error: current.temporal_error.or(source.temporal_error),
     }
@@ -2556,5 +2560,51 @@ mod tests {
 
         assert!(allow_all_capabilities(&context));
         assert!(allowed_capabilities(&context).is_empty());
+    }
+
+    fn sample_candidate(
+        field: crate::assistant::extraction::PayloadField,
+    ) -> crate::assistant::extraction::PayloadCandidate {
+        crate::assistant::extraction::PayloadCandidate {
+            field,
+            value: json!("sample"),
+            source: crate::assistant::extraction::PayloadSource::UserText,
+            trust: crate::assistant::extraction::PayloadTrust::Trusted,
+        }
+    }
+
+    #[test]
+    fn prefer_current_turn_extraction_falls_back_to_source_candidates_when_current_empty() {
+        let source = DeterministicExtraction {
+            candidates: vec![sample_candidate(
+                crate::assistant::extraction::PayloadField::Metric,
+            )],
+            ..Default::default()
+        };
+        let current = DeterministicExtraction::default();
+
+        let merged = prefer_current_turn_extraction(source.clone(), current);
+
+        assert_eq!(merged.candidates, source.candidates);
+    }
+
+    #[test]
+    fn prefer_current_turn_extraction_keeps_current_candidates_when_present() {
+        let source = DeterministicExtraction {
+            candidates: vec![sample_candidate(
+                crate::assistant::extraction::PayloadField::Metric,
+            )],
+            ..Default::default()
+        };
+        let current = DeterministicExtraction {
+            candidates: vec![sample_candidate(
+                crate::assistant::extraction::PayloadField::Limit,
+            )],
+            ..Default::default()
+        };
+
+        let merged = prefer_current_turn_extraction(source, current.clone());
+
+        assert_eq!(merged.candidates, current.candidates);
     }
 }
