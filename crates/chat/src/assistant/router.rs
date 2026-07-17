@@ -25,7 +25,10 @@ impl SemanticRouter {
             "rules": [
                 "Return one AssistantIntent JSON object only with keys: intent, domain, request_shape, language, entities, constraints, context_reference, confidence, reason.",
                 "request_shape must contain operation (total|summary|list|rank|trend|lookup|random_sample|unknown), subject (savings_transaction|savings_account|client|office|organization_hierarchy|product|unknown), grouping (none|month|office|product|unknown), output (scalar|summary|list|ranking|time_series|lookup|unknown), and pii (none|client_identity|conditional_client_identity|unknown).",
-                "Classify requests for arbitrary/random clients, including 'client sembarang', as subject=client and operation=random_sample.",
+                "Requests naming a metric to rank clients by (e.g. 'top N clients by savings accounts', '3 clients with most deposits', 'clients with highest balance') MUST be subject=client, operation=rank, output=ranking, grouping=none, pii=client_identity.",
+                "domain MUST match the primary subject of the request, not a noun that merely appears in the sentence. If subject=client the domain is client; if subject=office/organization_hierarchy the domain is organization; only pick savings when subject is savings_transaction or savings_account. Example: 'top 3 clients by savings account count' → subject=client, domain=client (NOT savings).",
+                "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients') without a ranking metric are unsupported by the approved catalog — return intent=unsupported_in_domain instead of inventing a shape.",
+                "When any dimension of request_shape is genuinely ambiguous set it to 'unknown' rather than guessing; the retriever tolerates 'unknown' but rejects wrong guesses.",
                 "Use entities=[] when no explicit named entity is required; context_reference must be the string none, not null.",
                 "intent must be one of: greeting, help, report_request, data_lookup, clarification_reply, follow_up, unsafe_request, out_of_domain, unsupported_in_domain.",
                 "For matched reporting capabilities use intent=report_request, not the capability id.",

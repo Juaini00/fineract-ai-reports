@@ -303,6 +303,24 @@ impl AssistantGraphRuntime {
             );
         };
         let route = router.route(message, &context).await;
+        match &route {
+            Ok(intent) => tracing::info!(
+                target: "assistant::mapping",
+                message = %message,
+                intent = ?intent.intent,
+                domain = ?intent.domain,
+                request_shape = ?intent.request_shape,
+                entities = ?intent.entities,
+                confidence = intent.confidence,
+                "router intent"
+            ),
+            Err(error) => tracing::warn!(
+                target: "assistant::mapping",
+                message = %message,
+                error = %error,
+                "router failed"
+            ),
+        }
         let mut pending_clarification = None;
         let (terminal, reason, response) = match route {
             Ok(mut intent) => {
@@ -483,12 +501,34 @@ impl AssistantGraphRuntime {
                     }
                     _ => {}
                 }
+                tracing::info!(
+                    target: "assistant::mapping",
+                    query = %plan.query_text,
+                    domain = ?plan.domain,
+                    request_shape = ?plan.request_shape,
+                    allow_all_capabilities = plan.allow_all_capabilities,
+                    allowed_capabilities = ?plan.allowed_capabilities,
+                    compatible_ids = ?catalog.map(|c| crate::assistant::retrieval::compatible_ids(&plan, c)),
+                    "retrieval plan"
+                );
                 let evidence = RetrievalEngine::retrieve(&plan, llm, knowledge, catalog).await;
                 let (evidence, warning) = match evidence {
                     Ok(evidence) => (evidence, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 };
+                tracing::info!(
+                    target: "assistant::mapping",
+                    evidence_count = evidence.len(),
+                    evidence = ?evidence.iter().map(|e| (&e.capability_id, e.score)).collect::<Vec<_>>(),
+                    warning = ?warning,
+                    "retrieval evidence"
+                );
                 let decision = EvidenceEvaluator.evaluate(&plan, &evidence);
+                tracing::info!(
+                    target: "assistant::mapping",
+                    decision = ?decision,
+                    "evidence decision"
+                );
                 memory.retrieval_plan = json!(plan);
                 memory.retrieval_evidence = json!(evidence);
                 memory.evidence_decision = json!(decision);
