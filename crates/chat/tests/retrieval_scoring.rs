@@ -197,3 +197,35 @@ fn top_n_by_savings_account_count_selected_for_rank_query() {
         "client_top_n_by_savings_account_count"
     );
 }
+
+#[test]
+fn build_retrieval_trace_emits_expected_top_level_keys() {
+    use chat::assistant::evidence::{Evidence, EvidenceDecision};
+    use chat::assistant::runtime::build_retrieval_trace;
+
+    let intent = make_intent(AssistantDomain::Client, RequestSubject::Client);
+    let plan = RetrievalPlan::new("top 3 clients", &intent, false, vec!["capability_a".into()]);
+    let evidence = vec![Evidence {
+        capability_id: "capability_a".into(),
+        title: "Cap A".into(),
+        score: 0.82,
+        source_type: "capability".into(),
+        metadata: serde_json::json!({}),
+        conflicting: false,
+    }];
+    let decision = EvidenceDecision::Select {
+        capability_id: "capability_a".into(),
+    };
+
+    let trace = build_retrieval_trace(&intent, &plan, &evidence, &decision);
+
+    let obj = trace.as_object().expect("trace must be a JSON object");
+    for key in ["router_intent", "plan", "candidates", "decision"] {
+        assert!(obj.contains_key(key), "missing key {key}");
+    }
+    let candidates = trace["candidates"].as_array().expect("candidates array");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["capability_id"], "capability_a");
+    assert_eq!(trace["decision"]["kind"], "select");
+    assert_eq!(trace["decision"]["capability_id"], "capability_a");
+}

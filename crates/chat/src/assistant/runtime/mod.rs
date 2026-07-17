@@ -35,6 +35,11 @@ pub struct GraphRuntimeResult {
     pub memory: JobMemory,
     pub transitions: Vec<GraphTransition>,
     pub pending_clarification: Option<Option<ClarificationPayload>>,
+    /// Per-request retrieval audit trace (issue 06), set only on the
+    /// semantic retrieval path. `None` elsewhere (deterministic responses,
+    /// clarification continuations, error paths). Best-effort — the caller
+    /// persists it without failing the request if the write errors.
+    pub retrieval_trace: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +132,7 @@ impl AssistantGraphRuntime {
             memory,
             transitions,
             pending_clarification: None,
+            retrieval_trace: None,
         }
     }
 
@@ -322,6 +328,7 @@ impl AssistantGraphRuntime {
             ),
         }
         let mut pending_clarification = None;
+        let mut retrieval_trace: Option<serde_json::Value> = None;
         let (terminal, reason, response) = match route {
             Ok(mut intent) => {
                 merge_deterministic_extraction_at(
@@ -535,10 +542,18 @@ impl AssistantGraphRuntime {
                 if let Some(message) = warning {
                     memory.warnings = json!([{ "message": message }]);
                 }
+                if let Some(routed_intent) = memory.intent.as_ref() {
+                    retrieval_trace = Some(build_retrieval_trace(
+                        routed_intent,
+                        &plan,
+                        &evidence,
+                        &decision,
+                    ));
+                }
                 match decision {
                     EvidenceDecision::Select { capability_id } => {
                         memory.selected_capability = Some(capability_id.clone());
-                        return execute_selected_capability(
+                        let mut result = execute_selected_capability(
                             memory,
                             context.recent_messages.len(),
                             capability_id,
@@ -549,6 +564,11 @@ impl AssistantGraphRuntime {
                             None,
                         )
                         .await;
+                        // execute_selected_capability builds its own GraphRuntimeResult
+                        // (trace: None) internally, so reattach the trace built above
+                        // from this decision's plan/evidence.
+                        result.retrieval_trace = retrieval_trace.clone();
+                        return result;
                     }
                     EvidenceDecision::Clarify => {
                         let payload = clarification_payload(
@@ -650,6 +670,7 @@ impl AssistantGraphRuntime {
             memory,
             transitions,
             pending_clarification,
+            retrieval_trace,
         }
     }
 }
@@ -1183,6 +1204,7 @@ fn graph_result(
         memory,
         transitions,
         pending_clarification,
+        retrieval_trace: None,
     }
 }
 
@@ -1608,6 +1630,56 @@ fn clarification_transitions(terminal: TerminalState, reason: &str) -> Vec<Graph
             reason: reason.into(),
         },
     ]
+}
+
+/// Builds a JSON audit trace of one retrieval pass for `state_json.retrieval_trace`.
+/// Best-effort/debug-only shape — not part of the graph contract, so it is built
+/// inline at the call site rather than added as a `JobMemory` field.
+pub fn build_retrieval_trace(
+    intent: &AssistantIntent,
+    plan: &crate::assistant::evidence::RetrievalPlan,
+    evidence: &[crate::assistant::evidence::Evidence],
+    decision: &EvidenceDecision,
+) -> serde_json::Value {
+    let candidates: Vec<_> = evidence
+        .iter()
+        .take(10)
+        .map(|e| {
+            json!({
+                "capability_id": e.capability_id,
+                "title": e.title,
+                "score": e.score,
+                "source_type": e.source_type,
+            })
+        })
+        .collect();
+
+    let decision_json = match decision {
+        EvidenceDecision::Select { capability_id } => json!({
+            "kind": "select",
+            "capability_id": capability_id,
+        }),
+        EvidenceDecision::Clarify => json!({ "kind": "clarify" }),
+        EvidenceDecision::UnsupportedInDomain => json!({ "kind": "unsupported_in_domain" }),
+        EvidenceDecision::OutOfDomain => json!({ "kind": "out_of_domain" }),
+        EvidenceDecision::BlockedByPolicy => json!({ "kind": "blocked_by_policy" }),
+    };
+
+    json!({
+        "router_intent": {
+            "intent": intent.intent,
+            "domain": intent.domain,
+            "request_shape": intent.request_shape,
+            "confidence": intent.confidence,
+        },
+        "plan": {
+            "query_text": plan.query_text,
+            "allowed_capability_count": plan.allowed_capabilities.len(),
+            "allow_all_capabilities": plan.allow_all_capabilities,
+        },
+        "candidates": candidates,
+        "decision": decision_json,
+    })
 }
 
 #[cfg(test)]

@@ -379,6 +379,13 @@ impl JobService {
         {
             warn!(job_id = %job_id, "canonical shadow write failed");
         }
+        // Best-effort audit trace (issue 06): never fail the request on this write.
+        if let Some(trace) = result.retrieval_trace.clone() {
+            self.jobs
+                .merge_retrieval_trace(job_id, client.user_id, trace)
+                .await
+                .ok();
+        }
         AssistantGraphTopology::new().validate_sequence(&result.transitions)?;
         let memory = self
             .job_memory
