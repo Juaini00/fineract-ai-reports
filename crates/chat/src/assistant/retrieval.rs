@@ -171,7 +171,10 @@ pub fn catalog_fallback(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec
                 * 0.25;
             Evidence {
                 capability_id: cap.id.clone(),
-                title: cap.display_name.clone().unwrap_or_else(|| cap.id.clone()),
+                title: cap
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| crate::assistant::clarification::humanize_id(&cap.id)),
                 score: (0.25 + hits * 0.15 + metric_boost).min(0.99),
                 source_type: "capability".into(),
                 metadata: serde_json::json!({"domain": cap.domain, "query_id": cap.query_id, "description": cap.description}),

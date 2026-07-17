@@ -229,3 +229,67 @@ fn build_retrieval_trace_emits_expected_top_level_keys() {
     assert_eq!(trace["decision"]["kind"], "select");
     assert_eq!(trace["decision"]["capability_id"], "capability_a");
 }
+
+#[test]
+fn clarification_option_falls_back_to_humanized_id_when_display_name_missing() {
+    // Regression for issue 08 Bug A: organization_office_summary rendered in
+    // a clarification prompt with label = raw id ("organization_office_summary")
+    // because the YAML lacked display_name and the option builder had no
+    // humanization fallback. The fix is a humanize_id() helper used wherever
+    // a ClarificationOption label is derived from a capability.
+    use chat::assistant::clarification::{ClarificationOption, humanize_id};
+
+    let mut cap = make_capability(
+        "organization_office_summary",
+        "organization",
+        RequestSubject::Office,
+    );
+    cap.display_name = None;
+
+    let option = ClarificationOption {
+        id: cap.id.clone(),
+        label: cap
+            .display_name
+            .clone()
+            .unwrap_or_else(|| humanize_id(&cap.id)),
+        description: cap.description.clone(),
+    };
+
+    assert_eq!(option.label, "Organization Office Summary");
+    assert_ne!(
+        option.label, cap.id,
+        "label must not be the raw capability id"
+    );
+}
+
+#[test]
+fn retrieval_evidence_title_is_humanized_when_display_name_missing() {
+    // Same regression, exercised through the actual production fallback
+    // path (RetrievalEngine::retrieve -> catalog_fallback) that feeds
+    // clarification_payload's ClarificationOption labels.
+    use chat::assistant::retrieval::RetrievalEngine;
+
+    let intent = make_intent(AssistantDomain::Organization, RequestSubject::Office);
+    let plan = RetrievalPlan::new(
+        "berikan office summary",
+        &intent,
+        false,
+        vec!["organization_office_summary".to_string()],
+    );
+    let mut cap = make_capability(
+        "organization_office_summary",
+        "organization",
+        RequestSubject::Office,
+    );
+    cap.display_name = None;
+    let catalog = std::sync::Arc::new(catalog_with(cap));
+
+    let evidence = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async { RetrievalEngine::retrieve(&plan, None, None, Some(&catalog)).await })
+        .expect("retrieve should not error");
+
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].title, "Organization Office Summary");
+    assert_ne!(evidence[0].title, "organization_office_summary");
+}
