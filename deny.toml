@@ -9,6 +9,11 @@ ignore = [
     # No fix available upstream. Re-check quarterly; drop this entry once
     # `validator` migrates to `manyhow` or `proc-macro2-diagnostics`.
     "RUSTSEC-2026-0173",
+    # backoff / instant unmaintained — transitive via swiftide-core 0.32.1.
+    # No fix available in the current swiftide release line; re-check when
+    # upgrading swiftide and drop these entries once it removes backoff.
+    "RUSTSEC-2025-0012",
+    "RUSTSEC-2024-0384",
 ]
 
 [bans]
