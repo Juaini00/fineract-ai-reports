@@ -61,6 +61,7 @@ impl ClarificationResolver {
                 "context": context,
             })
             .to_string(),
+            None,
         )
         .await?;
         Ok(decision.value.outcome)

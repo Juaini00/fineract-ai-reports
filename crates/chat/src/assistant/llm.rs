@@ -93,44 +93,31 @@ pub trait LlmClient: Send + Sync {
     async fn record_malformed(&self, _purpose: LlmPurpose, _error: &str) {}
 }
 
+/// Runs a structured LLM call and decodes the response as `T`.
+///
+/// `schema` lets the caller supply a pre-built `schemars::Schema` (e.g. one
+/// trimmed or shared across call sites); when `None` it is derived from `T`
+/// via `schemars::schema_for!`. The schema is always sent to the provider's
+/// structured-output mode via `LlmClient::structured_value`.
 pub async fn structured<T>(
     client: &dyn LlmClient,
     purpose: LlmPurpose,
     system: &str,
     user: &str,
+    schema: Option<schemars::Schema>,
 ) -> Result<LlmResponse<T>>
 where
     T: JsonSchema + DeserializeOwned + Serialize,
 {
-    let schema = schemars::schema_for!(T);
+    let schema = schema.unwrap_or_else(|| schemars::schema_for!(T));
     let response = client
         .structured_value(purpose, system, user, serde_json::to_value(schema)?)
         .await?;
-    let parsed = serde_json::from_value(response.value.clone()).or_else(|_| {
-        response
-            .value
-            .as_object()
-            .and_then(|object| {
-                (object.len() == 1)
-                    .then(|| object.values().next())
-                    .flatten()
-                    .cloned()
-            })
-            .map(serde_json::from_value)
-            .transpose()?
-            .ok_or_else(|| {
-                <serde_json::Error as serde::de::Error>::custom(
-                    "structured LLM response schema mismatch",
-                )
-            })
-    });
-    let value = match parsed {
+    let value = match decode_structured::<T>(&response.value) {
         Ok(value) => value,
         Err(error) => {
-            client
-                .record_malformed(purpose, "structured LLM response schema mismatch")
-                .await;
-            return Err(error.into());
+            client.record_malformed(purpose, &error.to_string()).await;
+            return Err(error);
         }
     };
     Ok(LlmResponse {
@@ -141,6 +128,27 @@ where
         model: response.model,
         latency_ms: response.latency_ms,
     })
+}
+
+/// Decodes a structured LLM response into `T`, preferring the real
+/// field-level decode error (via `serde_path_to_error`) over a generic
+/// message. Falls back to unwrapping a single-key wrapper object, which some
+/// providers use when they can't return a bare object/array.
+fn decode_structured<T: DeserializeOwned>(value: &serde_json::Value) -> Result<T> {
+    let primary_error = match serde_path_to_error::deserialize(value.clone()) {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    let unwrapped = value.as_object().and_then(|object| {
+        (object.len() == 1)
+            .then(|| object.values().next())
+            .flatten()
+            .cloned()
+    });
+    match unwrapped.and_then(|inner| serde_path_to_error::deserialize(inner).ok()) {
+        Some(value) => Ok(value),
+        None => bail!("structured LLM response schema mismatch: {primary_error}"),
+    }
 }
 
 pub type SharedLlmClient = Arc<dyn LlmClient>;
