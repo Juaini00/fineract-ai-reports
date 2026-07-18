@@ -1,0 +1,6 @@
+id: savings_deposit_top_n_en
+message: "show me the largest savings deposits this week"
+language: en
+domain: savings
+expected_decision: select
+expected_capability: savings_deposit_top_n

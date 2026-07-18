@@ -730,6 +730,26 @@ impl LlmClient for TestLlmClient {
         user: &str,
         _schema: serde_json::Value,
     ) -> Result<LlmResponse<serde_json::Value>> {
+        // Reranker calls carry a `candidates` array; sniff and answer without
+        // faking a router intent.
+        if let Some(value) = serde_json::from_str::<Value>(user).ok()
+            && let Some(candidates) = value.get("candidates").and_then(|c| c.as_array())
+            && !candidates.is_empty()
+        {
+            let query = value
+                .get("query")
+                .and_then(|q| q.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            return Ok(LlmResponse {
+                value: test_reranker_pick(&query, candidates),
+                usage: TokenUsage::default(),
+                cost_usd: None,
+                provider: "test".into(),
+                model: "test".into(),
+                latency_ms: 0,
+            });
+        }
         let message = serde_json::from_str::<serde_json::Value>(user)
             .ok()
             .and_then(|value| {
@@ -984,6 +1004,105 @@ impl LlmClient for TestLlmClient {
             provider: "test".into(),
             model: "test".into(),
             latency_ms: 0,
+        })
+    }
+}
+
+/// Test-only reranker heuristic: pick the candidate whose id/title/description
+/// shares the most alphanumeric tokens with the query, tie-broken by original
+/// retrieval score. High-margin winner → Select at confidence 0.9. Otherwise
+/// Clarify with the top-4 candidates as alternatives. Mirrors the semantic
+/// picks a real LLM would make well enough for integration tests.
+fn test_reranker_pick(query: &str, candidates: &[Value]) -> Value {
+    // 4-char prefix substring matching: handles simple plurals/inflections
+    // ("deposit" ↔ "deposits", "month" ↔ "monthly") without a stemmer.
+    let query_probes: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() >= 3)
+        .map(|s| {
+            let lower = s.to_lowercase();
+            if lower.len() > 4 {
+                lower[..4].to_string()
+            } else {
+                lower
+            }
+        })
+        .collect();
+    let mut ordered: Vec<(usize, usize, &Value)> = candidates
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| {
+            let examples = c
+                .get("examples")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            let hay = format!(
+                "{} {} {} {}",
+                c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                c.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                c.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                examples,
+            )
+            .to_lowercase();
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let hits = query_probes
+                .iter()
+                .filter(|probe| seen.insert(probe.as_str()) && hay.contains(probe.as_str()))
+                .count();
+            (hits, idx, c)
+        })
+        .collect();
+    // Specificity mismatch penalty: candidate id claims a grouping the query
+    // never asked for (a "monthly" cap when the query lacks any monthly cue).
+    // Cheap tie-breaker that mimics what a real LLM would penalize.
+    let query_lower = query.to_lowercase();
+    let query_wants_monthly = query_lower.contains("month") || query_lower.contains("per ");
+    for entry in ordered.iter_mut() {
+        let id = entry
+            .2
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !query_wants_monthly && id.contains("monthly") && entry.0 > 0 {
+            entry.0 -= 1;
+        }
+    }
+    ordered.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    let top_hits = ordered.first().map(|(h, _, _)| *h).unwrap_or(0);
+    let next_hits = ordered.get(1).map(|(h, _, _)| *h).unwrap_or(0);
+    let winner = ordered.first().and_then(|(_, _, c)| c.get("id"));
+
+    if top_hits >= 3 && top_hits > next_hits {
+        json!({
+            "decision": "select",
+            "capability_id": winner,
+            "confidence": 0.9,
+            "alternatives": [],
+            "reason": "test reranker: dominant keyword match",
+        })
+    } else {
+        // ponytail: 6 (not 4) so canonical siblings that alphabetically
+        // sort late (e.g. `savings_deposit_total` follows `_top_n`) still
+        // land in test clarification options. Real reranker returns 2-4.
+        let alternatives: Vec<Value> = ordered
+            .iter()
+            .take(6)
+            .filter_map(|(_, _, c)| c.get("id").cloned())
+            .collect();
+        json!({
+            "decision": "clarify",
+            "capability_id": null,
+            "confidence": 0.0,
+            "alternatives": alternatives,
+            "reason": "test reranker: ambiguous top-1",
         })
     }
 }

@@ -1,0 +1,6 @@
+id: org_office_activity_ranking_id
+message: "kantor mana yang paling banyak transaksi bulan ini"
+language: id
+domain: organization
+expected_decision: select
+expected_capability: organization_office_activity_ranking

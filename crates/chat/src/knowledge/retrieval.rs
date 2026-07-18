@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::json;
 
+use crate::assistant::clarification::humanize_id;
 use crate::knowledge::model::{
     CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
     QueryKnowledge,
@@ -189,7 +190,10 @@ fn build_capability_document(
     capability: &CapabilityKnowledge,
     domain: Option<&DomainKnowledge>,
 ) -> RetrievalDocument {
-    let title = format!("Capability {}", capability.id);
+    let title = capability
+        .display_name
+        .clone()
+        .unwrap_or_else(|| humanize_id(&capability.id));
     let concept_synonyms: Vec<String> = domain
         .map(|d| {
             d.concepts
@@ -300,4 +304,45 @@ fn compact_lines(lines: impl IntoIterator<Item = String>) -> String {
         .filter(|line| !line.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capability_with(id: &str, display_name: Option<&str>) -> CapabilityKnowledge {
+        CapabilityKnowledge {
+            id: id.to_string(),
+            status: "active".to_string(),
+            domain: "test_domain".to_string(),
+            query_id: "test_query".to_string(),
+            output_mode: "table".to_string(),
+            request_shape: Default::default(),
+            display_name: display_name.map(str::to_string),
+            description: None,
+            data_areas: Vec::new(),
+            metrics: Vec::new(),
+            examples: Vec::new(),
+            required_parameters: Vec::new(),
+            optional_parameters: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn build_capability_document_humanizes_id_when_display_name_missing() {
+        let capability = capability_with("client_lifecycle_summary", None);
+
+        let document = build_capability_document(&capability, None);
+
+        assert_eq!(document.title, "Client Lifecycle Summary");
+    }
+
+    #[test]
+    fn build_capability_document_uses_display_name_when_present() {
+        let capability = capability_with("client_lifecycle_summary", Some("Client Lifecycle"));
+
+        let document = build_capability_document(&capability, None);
+
+        assert_eq!(document.title, "Client Lifecycle");
+    }
 }

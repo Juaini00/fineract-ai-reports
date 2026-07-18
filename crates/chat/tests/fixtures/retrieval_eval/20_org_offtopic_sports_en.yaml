@@ -1,0 +1,6 @@
+id: org_offtopic_sports_en
+message: "the local football team won their game tonight"
+language: en
+domain: organization
+expected_decision: unsupported
+expected_capability: null

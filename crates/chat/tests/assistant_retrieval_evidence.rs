@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use chat::{
     assistant::{
         AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, ContextReference,
-        Evidence, EvidenceDecision, EvidenceEvaluator, RequestGrouping, RequestOperation,
-        RequestOutput, RequestPii, RequestShape, RequestSubject, RetrievalEngine, RetrievalPlan,
+        Evidence, LlmReranker, RequestGrouping, RequestOperation, RequestOutput, RequestPii,
+        RequestShape, RequestSubject, RerankerVerdict, RetrievalEngine, RetrievalPlan,
+        llm::{FakeLlmClient, SharedLlmClient},
     },
     knowledge::catalog::loader::KnowledgeLoader,
     knowledge::model::{CapabilityKnowledge, ClassificationPolicy, KnowledgeCatalog},
@@ -30,63 +33,92 @@ fn evidence(id: &str, score: f32) -> Evidence {
         title: id.into(),
         score,
         source_type: "capability".into(),
-        metadata: json!({}),
+        metadata: json!({"description": id}),
         conflicting: false,
     }
 }
 
-#[test]
-fn evidence_decisions_cover_phase8_states() {
-    let eval = EvidenceEvaluator;
-    let plan = RetrievalPlan::new(
-        "savings",
-        &intent(AssistantIntentKind::ReportRequest, AssistantDomain::Savings),
-        false,
-        vec!["cap".into()],
-    );
+fn shared(client: FakeLlmClient) -> SharedLlmClient {
+    Arc::new(client)
+}
+
+/// Reranker's LLM Select path routes to the chosen capability.
+#[tokio::test]
+async fn reranker_select_returns_capability() {
+    let llm = FakeLlmClient::default();
+    llm.push_structured(json!({
+        "decision": "select",
+        "capability_id": "savings_deposit_total",
+        "confidence": 0.85,
+        "alternatives": [],
+        "reason": "matches total intent",
+    }));
+    let llm = shared(llm);
+    let out = LlmReranker::new(Some(&llm))
+        .rerank(
+            "total savings deposits",
+            &[evidence("savings_deposit_total", 0.7)],
+        )
+        .await;
+    assert_eq!(out.decision, RerankerVerdict::Select);
+    assert_eq!(out.capability_id.as_deref(), Some("savings_deposit_total"));
+}
+
+/// Reranker's LLM Clarify path returns alternatives for the runtime to route.
+#[tokio::test]
+async fn reranker_clarify_returns_alternatives() {
+    let llm = FakeLlmClient::default();
+    llm.push_structured(json!({
+        "decision": "clarify",
+        "capability_id": null,
+        "confidence": 0.0,
+        "alternatives": ["savings_deposit_total", "savings_deposit_top_n"],
+        "reason": "ambiguous",
+    }));
+    let llm = shared(llm);
+    let out = LlmReranker::new(Some(&llm))
+        .rerank(
+            "savings report",
+            &[
+                evidence("savings_deposit_total", 0.6),
+                evidence("savings_deposit_top_n", 0.55),
+            ],
+        )
+        .await;
+    assert_eq!(out.decision, RerankerVerdict::Clarify);
     assert_eq!(
-        eval.evaluate(&plan, &[evidence("cap", 0.9)]),
-        EvidenceDecision::Select {
-            capability_id: "cap".into()
-        }
+        out.alternatives,
+        vec![
+            "savings_deposit_total".to_string(),
+            "savings_deposit_top_n".to_string()
+        ]
     );
-    assert_eq!(
-        eval.evaluate(&plan, &[evidence("cap", 0.3)]),
-        EvidenceDecision::Select {
-            capability_id: "cap".into()
-        }
-    );
-    assert_eq!(
-        eval.evaluate(&plan, &[]),
-        EvidenceDecision::UnsupportedInDomain
-    );
-    assert_eq!(
-        eval.evaluate(
-            &RetrievalPlan::new(
-                "x",
-                &intent(AssistantIntentKind::OutOfDomain, AssistantDomain::Unknown),
-                true,
-                vec![]
-            ),
-            &[]
-        ),
-        EvidenceDecision::OutOfDomain
-    );
-    assert_eq!(
-        eval.evaluate(
-            &RetrievalPlan::new(
-                "x",
-                &intent(AssistantIntentKind::UnsafeRequest, AssistantDomain::Savings),
-                true,
-                vec![]
-            ),
-            &[]
-        ),
-        EvidenceDecision::BlockedByPolicy
-    );
-    let mut conflict = evidence("cap", 0.9);
-    conflict.conflicting = true;
-    assert_eq!(eval.evaluate(&plan, &[conflict]), EvidenceDecision::Clarify);
+}
+
+/// Reranker's LLM Unsupported path surfaces the semantic-mismatch verdict.
+#[tokio::test]
+async fn reranker_unsupported_passes_through() {
+    let llm = FakeLlmClient::default();
+    llm.push_structured(json!({
+        "decision": "unsupported",
+        "capability_id": null,
+        "confidence": 0.0,
+        "alternatives": [],
+        "reason": "no candidate matches",
+    }));
+    let llm = shared(llm);
+    let out = LlmReranker::new(Some(&llm))
+        .rerank("weather report", &[evidence("savings_deposit_total", 0.4)])
+        .await;
+    assert_eq!(out.decision, RerankerVerdict::Unsupported);
+}
+
+/// Empty candidates short-circuit to Unsupported without an LLM call.
+#[tokio::test]
+async fn reranker_empty_candidates_is_unsupported() {
+    let llm = shared(FakeLlmClient::default());
+    let out = LlmReranker::new(Some(&llm)).rerank("anything", &[]).await;
+    assert_eq!(out.decision, RerankerVerdict::Unsupported);
 }
 
 #[tokio::test]
@@ -139,11 +171,6 @@ fn primary_runtime_does_not_use_legacy_prompt_shape_helpers() {
 
 #[tokio::test]
 async fn shape_mismatch_no_longer_empties_random_clients_but_still_narrows_office_savings() {
-    // Issue 01 (retrieval-pipeline-rework): shape is now a scoring signal, not a
-    // hard gate. No capability in the real catalog has operation=RandomSample,
-    // so retrieval must still surface catalog_fallback candidates (ranked by
-    // keyword/semantic score) instead of collapsing to empty; ambiguity is a
-    // downstream (EvidenceEvaluator) concern now, not retrieval's.
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = std::sync::Arc::new(
         KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
@@ -192,10 +219,6 @@ async fn shape_mismatch_no_longer_empties_random_clients_but_still_narrows_offic
     )
     .await
     .unwrap();
-    // Issue 01: catalog_fallback no longer gates on shape/domain, so several
-    // office-shaped capabilities now qualify by keyword overlap alone (ranking
-    // precision among ties is issue 02's reranker concern, not retrieval's).
-    // Assert the correct capability is surfaced rather than the sole result.
     assert!(
         evidence
             .iter()

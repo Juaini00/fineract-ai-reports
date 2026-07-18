@@ -1,0 +1,6 @@
+id: client_top_n_balance_id
+message: "berikan 5 client dengan saldo tabungan tertinggi"
+language: id
+domain: client
+expected_decision: select
+expected_capability: client_top_n_by_savings_balance

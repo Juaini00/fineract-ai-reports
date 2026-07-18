@@ -1,0 +1,57 @@
+id: client.client_list_recent
+database: fineract
+sql_file: queries/client/client_list_recent.sql
+data_areas:
+  - client_foundation
+  - organization_foundation
+tables:
+  - m_client
+  - m_office
+metrics:
+  - client.client_lifecycle_count
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: limit
+    type: integer
+    required: true
+output_fields:
+  - name: client_id
+    type: bigint
+    sensitivity: pii
+  - name: client_display_name
+    type: string
+    sensitivity: pii
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: activation_date
+    type: date
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  parameterized_only: true
+timeout_ms: 3000
+cost_class: low
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: office_filter_is_bound
+    rule: SQL must constrain c.office_id with ANY($1::bigint[]).
+  - id: limit_is_bound
+    rule: SQL must use bound LIMIT $2.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: pii_columns_labelled
+    rule: client_id and client_display_name output fields must be sensitivity=pii.
+  - id: no_raw_identifiers
+    rule: Query must not output account_no, external_id, mobile_no, or email_address.

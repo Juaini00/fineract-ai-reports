@@ -5,7 +5,7 @@ use axum::{
 
 use crate::{api::error::ApiError, auth::model::ClientContext, auth::service::AuthService};
 
-const X_API_KEY_HEADER: &str = "x-api-key";
+pub(crate) const X_API_KEY_HEADER: &str = "x-api-key";
 
 pub struct AuthenticatedClient(pub ClientContext);
 

@@ -1,0 +1,6 @@
+id: org_office_list_basic_id
+message: "berikan 3 office yg ada pada system saat ini"
+language: id
+domain: organization
+expected_decision: select
+expected_capability: office_list_basic

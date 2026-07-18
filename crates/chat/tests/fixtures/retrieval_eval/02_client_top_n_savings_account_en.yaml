@@ -1,0 +1,6 @@
+id: client_top_n_savings_account_en
+message: "give me 3 clients where have the most savings account for this year"
+language: en
+domain: client
+expected_decision: select
+expected_capability: client_top_n_by_savings_account_count

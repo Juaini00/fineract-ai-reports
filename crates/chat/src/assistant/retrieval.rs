@@ -152,29 +152,68 @@ pub fn catalog_fallback(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec
         .capabilities
         .iter()
         .filter(|cap| matches!(cap.status.as_str(), "approved_mvp" | "active"))
-        .filter(|cap| plan.allow_all_capabilities || plan.allowed_capabilities.iter().any(|id| id == &cap.id))
+        .filter(|cap| {
+            plan.allow_all_capabilities || plan.allowed_capabilities.iter().any(|id| id == &cap.id)
+        })
         .filter(|cap| metric_compatible(plan, &cap.metrics))
         .filter(|cap| parameters_feasible(plan, &cap.required_parameters))
         // shape/domain no longer gate here — shape_score in retrieve() scores it instead
         .map(|cap| {
-            let haystack = format!("{} {} {} {}", cap.id, cap.display_name.clone().unwrap_or_default(), cap.description.clone().unwrap_or_default(), cap.examples.join(" ")).to_lowercase();
-            let hits = terms.iter().filter(|term| haystack.contains(term.as_str())).count() as f32;
+            let haystack = format!(
+                "{} {} {} {}",
+                cap.id,
+                cap.display_name.clone().unwrap_or_default(),
+                cap.description.clone().unwrap_or_default(),
+                cap.examples.join(" ")
+            )
+            .to_lowercase();
+            let hits = terms
+                .iter()
+                .filter(|term| haystack.contains(term.as_str()))
+                .count() as f32;
             let metric_terms = plan
                 .entities
                 .iter()
-                .filter(|entity| matches!(entity.entity_type, crate::assistant::AssistantEntityType::Metric))
-                .flat_map(|entity| keyword_terms(entity.canonical.as_deref().unwrap_or(&entity.value)))
+                .filter(|entity| {
+                    matches!(
+                        entity.entity_type,
+                        crate::assistant::AssistantEntityType::Metric
+                    )
+                })
+                .flat_map(|entity| {
+                    keyword_terms(entity.canonical.as_deref().unwrap_or(&entity.value))
+                })
                 .collect::<Vec<_>>();
             let metric_boost = (!metric_terms.is_empty()
                 && metric_terms.iter().all(|term| haystack.contains(term)))
                 as i32 as f32
                 * 0.25;
+            // ponytail: tiny domain-match nudge so router's domain call
+            // breaks ties consistently (savings query → savings capability
+            // over office/client one at otherwise identical keyword hits).
+            let domain_boost = if cap
+                .domain
+                .eq_ignore_ascii_case(&format!("{:?}", plan.domain))
+            {
+                0.05
+            } else {
+                0.0
+            };
             Evidence {
                 capability_id: cap.id.clone(),
-                title: cap.display_name.clone().unwrap_or_else(|| cap.id.clone()),
-                score: (0.25 + hits * 0.15 + metric_boost).min(0.99),
+                title: cap
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| crate::assistant::clarification::humanize_id(&cap.id)),
+                score: (0.25 + hits * 0.15 + metric_boost + domain_boost).min(0.99),
                 source_type: "capability".into(),
-                metadata: serde_json::json!({"domain": cap.domain, "query_id": cap.query_id, "description": cap.description}),
+                metadata: serde_json::json!({
+                    "domain": cap.domain,
+                    "query_id": cap.query_id,
+                    "description": cap.description,
+                    "examples": cap.examples,
+                    "output_mode": cap.output_mode,
+                }),
                 conflicting: false,
             }
         })

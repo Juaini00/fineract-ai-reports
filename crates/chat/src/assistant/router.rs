@@ -23,17 +23,11 @@ impl SemanticRouter {
             "message": message,
             "context": context,
             "rules": [
-                "Return one AssistantIntent JSON object only with keys: intent, domain, request_shape, language, entities, constraints, context_reference, confidence, reason.",
-                "request_shape must contain operation (total|summary|list|rank|trend|lookup|random_sample|unknown), subject (savings_transaction|savings_account|client|office|organization_hierarchy|product|unknown), grouping (none|month|office|product|unknown), output (scalar|summary|list|ranking|time_series|lookup|unknown), and pii (none|client_identity|conditional_client_identity|unknown).",
-                "Requests naming a metric to rank clients by (e.g. 'top N clients by savings accounts', '3 clients with most deposits', 'clients with highest balance') MUST be subject=client, operation=rank, output=ranking, grouping=none, pii=client_identity.",
-                "domain MUST match the primary subject of the request, not a noun that merely appears in the sentence. If subject=client the domain is client; if subject=office/organization_hierarchy the domain is organization; only pick savings when subject is savings_transaction or savings_account. Example: 'top 3 clients by savings account count' → subject=client, domain=client (NOT savings).",
+                "Requests naming a metric to rank clients by (e.g. 'top N clients by savings accounts', '3 clients with most deposits', 'clients with highest balance') MUST use subject=client, operation=rank, output=ranking, grouping=none, pii=client_identity.",
+                "domain MUST match the primary subject of the request, not a noun that merely appears in the sentence. Example: 'top 3 clients by savings account count' → subject=client, domain=client (NOT savings).",
                 "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients') without a ranking metric are unsupported by the approved catalog — return intent=unsupported_in_domain instead of inventing a shape.",
-                "When any dimension of request_shape is genuinely ambiguous set it to 'unknown' rather than guessing; the retriever tolerates 'unknown' but rejects wrong guesses.",
-                "Use entities=[] when no explicit named entity is required; context_reference must be the string none, not null.",
-                "intent must be one of: greeting, help, report_request, data_lookup, clarification_reply, follow_up, unsafe_request, out_of_domain, unsupported_in_domain.",
-                "For matched reporting capabilities use intent=report_request, not the capability id.",
-                "Do not invent SQL, capability ids, or unavailable report support.",
-                "If JSON cannot match the schema, fail rather than fallback."
+                "When a request_shape dimension is genuinely ambiguous set it to unknown rather than guessing.",
+                "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support."
             ]
         })
         .to_string();
@@ -42,6 +36,7 @@ impl SemanticRouter {
             llm::LlmPurpose::RouteIntent,
             ROUTER_SYSTEM,
             &user,
+            Some(schemars::schema_for!(AssistantIntent)),
         )
         .await
         .context("route intent with structured LLM")?;
@@ -131,9 +126,8 @@ mod tests {
         ]
     }
 
-    #[tokio::test]
-    async fn router_returns_structured_intent_without_keyword_fallback() {
-        let catalog = KnowledgeCatalog {
+    fn empty_catalog() -> KnowledgeCatalog {
+        KnowledgeCatalog {
             root_path: Default::default(),
             query_path: Default::default(),
             data_areas: Vec::new(),
@@ -145,9 +139,11 @@ mod tests {
             policies: Vec::new(),
             responses: Vec::new(),
             classification: Default::default(),
-        };
-        let router = SemanticRouter::new(Arc::new(FakeLlm), &catalog);
-        let context = ContextWindow {
+        }
+    }
+
+    fn empty_context() -> ContextWindow {
+        ContextWindow {
             summary: None,
             active_domain: None,
             selected_entities: json!({}),
@@ -158,9 +154,90 @@ mod tests {
             source_snippets: Vec::new(),
             client_scope: json!({}),
             warnings: Vec::new(),
-        };
-        let intent = router.route("client list", &context).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn router_returns_structured_intent_without_keyword_fallback() {
+        let catalog = empty_catalog();
+        let router = SemanticRouter::new(Arc::new(FakeLlm), &catalog);
+        let intent = router.route("client list", &empty_context()).await.unwrap();
         assert_eq!(intent.intent, AssistantIntentKind::DataLookup);
         assert_eq!(intent.domain, AssistantDomain::Client);
+    }
+
+    /// LLM returns a value for `request_shape.operation` outside the
+    /// `RequestOperation` enum. The router must reject it with a
+    /// schema-level error naming the offending field, not a generic
+    /// `serde_json` decode failure.
+    struct InvalidEnumFakeLlm;
+
+    #[async_trait]
+    impl LlmClient for InvalidEnumFakeLlm {
+        async fn structured_value(
+            &self,
+            _purpose: crate::assistant::llm::LlmPurpose,
+            _system: &str,
+            _user: &str,
+            _schema: serde_json::Value,
+        ) -> Result<LlmResponse<serde_json::Value>> {
+            Ok(LlmResponse {
+                value: json!({
+                    "intent": "report_request",
+                    "domain": "savings",
+                    "request_shape": {"operation": "not_a_real_operation"},
+                    "language": "en",
+                    "entities": [],
+                    "constraints": {},
+                    "context_reference": "none",
+                    "confidence": 0.9,
+                    "reason": "fake"
+                }),
+                usage: TokenUsage::default(),
+                cost_usd: None,
+                provider: "fake".into(),
+                model: "fake".into(),
+                latency_ms: 0,
+            })
+        }
+
+        async fn embed(
+            &self,
+            _purpose: crate::assistant::llm::LlmPurpose,
+            text: &str,
+        ) -> Result<EmbeddingResponse> {
+            Ok(EmbeddingResponse {
+                vector: fake_embedding(text),
+                usage: TokenUsage::default(),
+                cost_usd: None,
+                provider: "fake".into(),
+                model: "fake".into(),
+                latency_ms: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn router_rejects_invalid_request_shape_operation_with_field_level_error() {
+        let catalog = empty_catalog();
+        let router = SemanticRouter::new(Arc::new(InvalidEnumFakeLlm), &catalog);
+        let error = router
+            .route("client list", &empty_context())
+            .await
+            .expect_err("invalid enum value must be rejected");
+        let message = error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            message.contains("request_shape.operation") || message.contains("operation"),
+            "error should name the offending field, got: {message}"
+        );
+        assert!(
+            !message.contains("structured LLM response schema mismatch")
+                || message.contains("operation"),
+            "generic fallback message must not swallow the field-level detail: {message}"
+        );
     }
 }

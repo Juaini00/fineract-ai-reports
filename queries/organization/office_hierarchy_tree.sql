@@ -3,7 +3,7 @@ WITH RECURSIVE tree AS (
         o.id AS office_id,
         o.name AS office_name,
         o.parent_id,
-        1 AS depth,
+        1::bigint AS depth,
         ARRAY[o.id]::bigint[] AS path
     FROM m_office o
     WHERE o.id = ANY($1::bigint[])

@@ -170,7 +170,7 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
     bad_shape.push_structured(json!({"not_ok": true}));
     let client = traced(bad_shape, repo.clone(), user_id, session_id, job_id);
     assert!(
-        structured::<TestShape>(&client, LlmPurpose::Test, "system", "user")
+        structured::<TestShape>(&client, LlmPurpose::Test, "system", "user", None)
             .await
             .is_err()
     );

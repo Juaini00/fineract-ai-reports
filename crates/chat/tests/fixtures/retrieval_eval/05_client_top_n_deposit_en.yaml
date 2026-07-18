@@ -1,0 +1,6 @@
+id: client_top_n_deposit_en
+message: "which clients deposited the most money this quarter"
+language: en
+domain: client
+expected_decision: select
+expected_capability: client_top_n_by_deposit_volume

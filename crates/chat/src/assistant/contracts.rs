@@ -2,8 +2,8 @@ use schemars::schema_for;
 
 use super::{
     AssistantIntent, AssistantResponse, ClarificationOutcome, ClarificationPayload, ContextWindow,
-    Evidence, EvidenceDecision, GraphState, GraphTransition, JobMemory, MemoryDelta,
-    PendingClarification, RetrievalPlan, SessionMemory, SourceIntentSnapshot, TerminalState,
+    Evidence, GraphState, GraphTransition, JobMemory, MemoryDelta, PendingClarification,
+    RerankerDecision, RetrievalPlan, SessionMemory, SourceIntentSnapshot, TerminalState,
     ToolRequest, ToolResult, ToolValidationError,
 };
 
@@ -19,7 +19,7 @@ pub fn assistant_contract_names() -> &'static [&'static str] {
         "GraphTransition",
         "RetrievalPlan",
         "Evidence",
-        "EvidenceDecision",
+        "RerankerDecision",
         "ContextWindow",
         "JobMemory",
         "SessionMemory",
@@ -74,8 +74,8 @@ pub fn assistant_contract_schemas() -> Vec<(&'static str, serde_json::Value)> {
             serde_json::to_value(schema_for!(Evidence)).unwrap(),
         ),
         (
-            "EvidenceDecision",
-            serde_json::to_value(schema_for!(EvidenceDecision)).unwrap(),
+            "RerankerDecision",
+            serde_json::to_value(schema_for!(RerankerDecision)).unwrap(),
         ),
         (
             "ContextWindow",

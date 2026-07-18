@@ -1,0 +1,6 @@
+id: savings_deposit_ambiguous_id
+message: "setoran tabungan terbesar"
+language: id
+domain: savings
+expected_decision: clarify
+expected_capability: null

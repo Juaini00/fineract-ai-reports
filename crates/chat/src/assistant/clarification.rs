@@ -37,6 +37,23 @@ pub struct ClarificationOption {
     pub description: Option<String>,
 }
 
+/// Turns a snake_case capability id into a human-readable label, e.g.
+/// `organization_office_summary` -> `Organization Office Summary`. Used as
+/// the label fallback when a capability's YAML has no `display_name`
+/// (issue 08 Bug A).
+pub fn humanize_id(id: &str) -> String {
+    id.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ClarificationPayload {
     pub question: String,

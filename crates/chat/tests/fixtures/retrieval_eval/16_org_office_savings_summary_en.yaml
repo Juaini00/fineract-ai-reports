@@ -1,0 +1,6 @@
+id: org_office_savings_summary_en
+message: "which office holds the most savings balance"
+language: en
+domain: organization
+expected_decision: select
+expected_capability: organization_office_savings_summary

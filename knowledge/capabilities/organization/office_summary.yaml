@@ -1,6 +1,8 @@
 id: organization_office_summary
 status: approved_mvp
 domain: organization
+display_name: Organization Office Summary
+description: Summarize offices in the caller's authorized scope, including office count and active staff count.
 data_areas:
   - organization_foundation
 required_api_capability: organization_office_summary

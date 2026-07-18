@@ -17,10 +17,11 @@ use crate::assistant::{
     JobMemory, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
     PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
     TerminalState, deterministic_observations,
-    evidence::{Evidence, EvidenceDecision, EvidenceEvaluator, RetrievalPlan},
+    evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
     merge_observations, original_request_observations,
+    reranker::{LlmReranker, RerankerDecision, RerankerVerdict},
     response::{ResponseAction, ResponseActionType},
     response_builder::finish,
     retrieval::RetrievalEngine,
@@ -182,7 +183,12 @@ impl AssistantGraphRuntime {
             && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
         {
             memory.intent = Some(intent_from_source(payload, &context, canonical));
-            record_source_extraction_metadata(&mut memory, payload, canonical);
+            record_source_extraction_metadata(
+                &mut memory,
+                payload,
+                canonical,
+                &input.source_message,
+            );
             match outcome {
                 ClarificationOutcome::SelectedOption { option_id, .. } => {
                     memory.selected_capability = Some(option_id.clone());
@@ -262,7 +268,12 @@ impl AssistantGraphRuntime {
                 canonical,
             );
             memory.intent = Some(intent);
-            record_source_extraction_metadata(&mut memory, payload, canonical);
+            record_source_extraction_metadata(
+                &mut memory,
+                payload,
+                canonical,
+                &input.source_message,
+            );
             memory.selected_capability = Some(capability_id.clone());
             memory.retrieval_evidence =
                 clarification_audit("missing_parameters", &capability_id, &input, payload);
@@ -356,7 +367,12 @@ impl AssistantGraphRuntime {
                             if option_id == OTHER_CLARIFICATION_OPTION_ID =>
                         {
                             memory.intent = Some(intent_from_source(payload, &context, canonical));
-                            record_source_extraction_metadata(&mut memory, payload, canonical);
+                            record_source_extraction_metadata(
+                                &mut memory,
+                                payload,
+                                canonical,
+                                &input.source_message,
+                            );
                             memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
@@ -374,7 +390,12 @@ impl AssistantGraphRuntime {
                         }
                         Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
                             memory.intent = Some(intent_from_source(payload, &context, canonical));
-                            record_source_extraction_metadata(&mut memory, payload, canonical);
+                            record_source_extraction_metadata(
+                                &mut memory,
+                                payload,
+                                canonical,
+                                &input.source_message,
+                            );
                             memory.selected_capability = Some(option_id.clone());
                             memory.source_intent = payload
                                 .source_intent
@@ -400,7 +421,12 @@ impl AssistantGraphRuntime {
                         }
                         Ok(ClarificationOutcome::FreeFormOther { .. }) => {
                             memory.intent = Some(intent_from_source(payload, &context, canonical));
-                            record_source_extraction_metadata(&mut memory, payload, canonical);
+                            record_source_extraction_metadata(
+                                &mut memory,
+                                payload,
+                                canonical,
+                                &input.source_message,
+                            );
                             memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
                             pending_clarification = Some(None);
                             return graph_result(
@@ -530,11 +556,13 @@ impl AssistantGraphRuntime {
                     warning = ?warning,
                     "retrieval evidence"
                 );
-                let decision = EvidenceEvaluator.evaluate(&plan, &evidence);
+                let decision = LlmReranker::new(llm)
+                    .rerank(&plan.query_text, &evidence)
+                    .await;
                 tracing::info!(
                     target: "assistant::mapping",
                     decision = ?decision,
-                    "evidence decision"
+                    "reranker decision"
                 );
                 memory.retrieval_plan = json!(plan);
                 memory.retrieval_evidence = json!(evidence);
@@ -550,30 +578,54 @@ impl AssistantGraphRuntime {
                         &decision,
                     ));
                 }
-                match decision {
-                    EvidenceDecision::Select { capability_id } => {
-                        memory.selected_capability = Some(capability_id.clone());
-                        let mut result = execute_selected_capability(
-                            memory,
-                            context.recent_messages.len(),
-                            capability_id,
-                            catalog,
-                            client,
-                            fineract_pool,
-                            canonical,
-                            None,
-                        )
-                        .await;
-                        // execute_selected_capability builds its own GraphRuntimeResult
-                        // (trace: None) internally, so reattach the trace built above
-                        // from this decision's plan/evidence.
-                        result.retrieval_trace = retrieval_trace.clone();
-                        return result;
+                match decision.decision {
+                    RerankerVerdict::Select => {
+                        // capability_id is required when Select; treat a missing/
+                        // unknown id as ambiguity and Clarify with alternatives.
+                        let capability_id = decision.capability_id.clone().and_then(|id| {
+                            evidence.iter().any(|e| e.capability_id == id).then_some(id)
+                        });
+                        match capability_id {
+                            Some(capability_id) => {
+                                memory.selected_capability = Some(capability_id.clone());
+                                let mut result = execute_selected_capability(
+                                    memory,
+                                    context.recent_messages.len(),
+                                    capability_id,
+                                    catalog,
+                                    client,
+                                    fineract_pool,
+                                    canonical,
+                                    None,
+                                )
+                                .await;
+                                result.retrieval_trace = retrieval_trace.clone();
+                                return result;
+                            }
+                            None => {
+                                let payload = clarification_payload_for(
+                                    &plan,
+                                    &evidence,
+                                    &decision.alternatives,
+                                    memory
+                                        .intent
+                                        .as_ref()
+                                        .map(|intent| source_intent_snapshot(intent, message)),
+                                );
+                                pending_clarification = Some(Some(payload.clone()));
+                                (
+                                    TerminalState::WaitingForUserInput,
+                                    "weak_retrieval_evidence",
+                                    ResponseBuilder::clarification(payload),
+                                )
+                            }
+                        }
                     }
-                    EvidenceDecision::Clarify => {
-                        let payload = clarification_payload(
+                    RerankerVerdict::Clarify => {
+                        let payload = clarification_payload_for(
                             &plan,
                             &evidence,
+                            &decision.alternatives,
                             memory
                                 .intent
                                 .as_ref()
@@ -586,20 +638,10 @@ impl AssistantGraphRuntime {
                             ResponseBuilder::clarification(payload),
                         )
                     }
-                    EvidenceDecision::UnsupportedInDomain => (
+                    RerankerVerdict::Unsupported => (
                         TerminalState::Unsupported,
                         "unsupported_in_domain",
                         ResponseBuilder::unsupported(),
-                    ),
-                    EvidenceDecision::OutOfDomain => (
-                        TerminalState::OutOfDomain,
-                        "out_of_domain",
-                        ResponseBuilder::out_of_domain(),
-                    ),
-                    EvidenceDecision::BlockedByPolicy => (
-                        TerminalState::BlockedByPolicy,
-                        "unsafe_request",
-                        ResponseBuilder::policy_blocked("This request is blocked by policy."),
                     ),
                 }
             }
@@ -756,14 +798,74 @@ fn merge_deterministic_extraction_at(
     record_extraction_metadata(memory, &extraction);
 }
 
+/// Records deterministic extraction metadata for a clarification-reply turn.
+///
+/// Bug 08-B: previously this only re-extracted facts from the *original*
+/// Turn-1 prompt (`payload.source_intent.prompt`), which clobbers whatever
+/// the user actually said in their Turn-2 reply. `verify_capability_metric`
+/// (tool.rs) then gates the newly *selected* capability against a metric
+/// extracted from Turn-1's wording — even though the user just explicitly
+/// picked a different capability in Turn 2. Refresh from the current turn's
+/// message and let it take priority; fall back to the Turn-1 extraction only
+/// for fields the current turn's message didn't mention (e.g. a bare "3"
+/// limit stated only in Turn 1).
 fn record_source_extraction_metadata(
     memory: &mut JobMemory,
     payload: &ClarificationPayload,
     canonical: Option<&CanonicalRuntimeContext>,
+    current_message: &str,
 ) {
-    if let Some(source) = &payload.source_intent {
-        let extraction = extract_for_context(&source.prompt, canonical);
-        record_extraction_metadata(memory, &extraction);
+    let source_extraction = payload
+        .source_intent
+        .as_ref()
+        .map(|source| extract_for_context(&source.prompt, canonical))
+        .unwrap_or_default();
+    let current_extraction = extract_for_context(current_message, canonical);
+    let refreshed = prefer_current_turn_extraction(source_extraction, current_extraction);
+    record_extraction_metadata(memory, &refreshed);
+}
+
+/// Merges two extraction passes, letting the current turn's signals win over
+/// the original (Turn-1) source prompt's — see `record_source_extraction_metadata`.
+fn prefer_current_turn_extraction(
+    source: DeterministicExtraction,
+    current: DeterministicExtraction,
+) -> DeterministicExtraction {
+    DeterministicExtraction {
+        constraints: crate::assistant::AssistantConstraints {
+            quantity: current.constraints.quantity.or(source.constraints.quantity),
+            from_date: current
+                .constraints
+                .from_date
+                .or(source.constraints.from_date),
+            to_date: current.constraints.to_date.or(source.constraints.to_date),
+            currency_code: current
+                .constraints
+                .currency_code
+                .or(source.constraints.currency_code),
+            product_ids: current
+                .constraints
+                .product_ids
+                .or(source.constraints.product_ids),
+            office_ids: current
+                .constraints
+                .office_ids
+                .or(source.constraints.office_ids),
+            metric: current.constraints.metric.or(source.constraints.metric),
+        },
+        domain: current.domain.or(source.domain),
+        entities: if current.entities.is_empty() {
+            source.entities
+        } else {
+            current.entities
+        },
+        candidates: if current.candidates.is_empty() {
+            source.candidates
+        } else {
+            current.candidates
+        },
+        temporal_provenance: current.temporal_provenance.or(source.temporal_provenance),
+        temporal_error: current.temporal_error.or(source.temporal_error),
     }
 }
 
@@ -828,6 +930,13 @@ async fn execute_selected_capability(
         .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok())
         .and_then(|extraction| extraction.temporal_error)
     {
+        tracing::warn!(
+            target: "assistant::execute_selected_capability",
+            capability_id = %capability_id,
+            error_code = %error.code,
+            error_message = %error.message,
+            "clarification-reply execution blocked: invalid temporal input"
+        );
         let payload = ClarificationPayload {
             question: error.message.clone(),
             options: vec![ClarificationOption {
@@ -877,6 +986,13 @@ async fn execute_selected_capability(
             ) {
                 Ok(plan) => (plan, client.clone()),
                 Err(error) => {
+                    tracing::warn!(
+                        target: "assistant::execute_selected_capability",
+                        capability_id = %capability_id,
+                        error = %error,
+                        "clarification-reply plan_selected_capability_verified failed; \
+                         re-clarifying instead of executing"
+                    );
                     let payload = ClarificationPayload {
                         question: error.to_string(),
                         options: vec![
@@ -914,6 +1030,12 @@ async fn execute_selected_capability(
             }
         }
         Err(error) => {
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                error = %error,
+                "clarification-reply authoritative_plan failed; returning routing error"
+            );
             memory.warnings = json!([{ "message": error.to_string() }]);
             return graph_result(
                 memory,
@@ -981,6 +1103,13 @@ async fn execute_selected_capability(
             result_state
         }
         Err(error) => {
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                query_id = %plan.query_id,
+                error = %error,
+                "clarification-reply execute_plan failed; returning routing error"
+            );
             memory.warnings = json!([{ "message": error.to_string() }]);
             graph_result(
                 memory,
@@ -1495,6 +1624,56 @@ fn execution_transitions(terminal: TerminalState, reason: &str) -> Vec<GraphTran
     ]
 }
 
+/// Variant of `clarification_payload` that prefers the reranker's `alternatives`
+/// (capability ids) as the option pool, filtering evidence to those ids. Falls
+/// back to the top-3 evidence when `alternatives` is empty (parity with the
+/// pre-reranker payload builder).
+fn clarification_payload_for(
+    plan: &RetrievalPlan,
+    evidence: &[Evidence],
+    alternatives: &[String],
+    source_intent: Option<SourceIntentSnapshot>,
+) -> ClarificationPayload {
+    if alternatives.is_empty() {
+        return clarification_payload(plan, evidence, source_intent);
+    }
+    let by_id: std::collections::HashMap<&str, &Evidence> = evidence
+        .iter()
+        .map(|e| (e.capability_id.as_str(), e))
+        .collect();
+    let mut options: Vec<ClarificationOption> = alternatives
+        .iter()
+        .filter_map(|id| {
+            by_id.get(id.as_str()).map(|e| ClarificationOption {
+                id: e.capability_id.clone(),
+                label: e.title.clone(),
+                description: e
+                    .metadata
+                    .get("description")
+                    .or_else(|| e.metadata.get("summary"))
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            })
+        })
+        .collect();
+    if options.is_empty() {
+        options = fallback_clarification_options(&plan.domain);
+    }
+    options.push(ClarificationOption {
+        id: OTHER_CLARIFICATION_OPTION_ID.into(),
+        label: "Others".into(),
+        description: Some("Let me describe what I need in my own words.".into()),
+    });
+    ClarificationPayload {
+        question: "Which report should I use?".into(),
+        options,
+        attempt: 1,
+        source_intent,
+        allow_free_text: true,
+        is_missing_execution_parameters: false,
+    }
+}
+
 fn clarification_payload(
     plan: &RetrievalPlan,
     evidence: &[Evidence],
@@ -1639,7 +1818,7 @@ pub fn build_retrieval_trace(
     intent: &AssistantIntent,
     plan: &crate::assistant::evidence::RetrievalPlan,
     evidence: &[crate::assistant::evidence::Evidence],
-    decision: &EvidenceDecision,
+    decision: &RerankerDecision,
 ) -> serde_json::Value {
     let candidates: Vec<_> = evidence
         .iter()
@@ -1654,16 +1833,18 @@ pub fn build_retrieval_trace(
         })
         .collect();
 
-    let decision_json = match decision {
-        EvidenceDecision::Select { capability_id } => json!({
-            "kind": "select",
-            "capability_id": capability_id,
-        }),
-        EvidenceDecision::Clarify => json!({ "kind": "clarify" }),
-        EvidenceDecision::UnsupportedInDomain => json!({ "kind": "unsupported_in_domain" }),
-        EvidenceDecision::OutOfDomain => json!({ "kind": "out_of_domain" }),
-        EvidenceDecision::BlockedByPolicy => json!({ "kind": "blocked_by_policy" }),
+    let kind = match decision.decision {
+        RerankerVerdict::Select => "select",
+        RerankerVerdict::Clarify => "clarify",
+        RerankerVerdict::Unsupported => "unsupported",
     };
+    let decision_json = json!({
+        "kind": kind,
+        "capability_id": decision.capability_id,
+        "confidence": decision.confidence,
+        "alternatives": decision.alternatives,
+        "reason": decision.reason,
+    });
 
     json!({
         "router_intent": {
@@ -2448,5 +2629,51 @@ mod tests {
 
         assert!(allow_all_capabilities(&context));
         assert!(allowed_capabilities(&context).is_empty());
+    }
+
+    fn sample_candidate(
+        field: crate::assistant::extraction::PayloadField,
+    ) -> crate::assistant::extraction::PayloadCandidate {
+        crate::assistant::extraction::PayloadCandidate {
+            field,
+            value: json!("sample"),
+            source: crate::assistant::extraction::PayloadSource::UserText,
+            trust: crate::assistant::extraction::PayloadTrust::Trusted,
+        }
+    }
+
+    #[test]
+    fn prefer_current_turn_extraction_falls_back_to_source_candidates_when_current_empty() {
+        let source = DeterministicExtraction {
+            candidates: vec![sample_candidate(
+                crate::assistant::extraction::PayloadField::Metric,
+            )],
+            ..Default::default()
+        };
+        let current = DeterministicExtraction::default();
+
+        let merged = prefer_current_turn_extraction(source.clone(), current);
+
+        assert_eq!(merged.candidates, source.candidates);
+    }
+
+    #[test]
+    fn prefer_current_turn_extraction_keeps_current_candidates_when_present() {
+        let source = DeterministicExtraction {
+            candidates: vec![sample_candidate(
+                crate::assistant::extraction::PayloadField::Metric,
+            )],
+            ..Default::default()
+        };
+        let current = DeterministicExtraction {
+            candidates: vec![sample_candidate(
+                crate::assistant::extraction::PayloadField::Limit,
+            )],
+            ..Default::default()
+        };
+
+        let merged = prefer_current_turn_extraction(source, current.clone());
+
+        assert_eq!(merged.candidates, current.candidates);
     }
 }

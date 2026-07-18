@@ -308,5 +308,56 @@ fn validate_create_api_key_input(input: &CreateApiKeyInput) -> Result<()> {
         bail!("API key owner is required");
     }
 
+    // A key explicitly marked not-all-offices with no offices listed must grant
+    // NO access. An empty restricted scope reads as "unrestricted" downstream, so
+    // reject the fail-open combination at creation rather than persist the trap.
+    if !input.allow_all_offices && input.allowed_office_ids.is_empty() {
+        bail!("API key with allow_all_offices=false must list at least one allowed office");
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_input() -> CreateApiKeyInput {
+        CreateApiKeyInput {
+            name: "key".into(),
+            owner: "owner".into(),
+            expires_at: None,
+            allowed_office_ids: Vec::new(),
+            allowed_capabilities: Vec::new(),
+            allow_all_offices: false,
+            allow_all_capabilities: false,
+            can_view_pii: false,
+            user_id: None,
+        }
+    }
+
+    #[test]
+    fn rejects_restricted_key_with_empty_office_scope() {
+        // allow_all_offices=false + no offices would collapse to full tenant downstream.
+        let input = base_input();
+        assert!(validate_create_api_key_input(&input).is_err());
+    }
+
+    #[test]
+    fn accepts_restricted_key_with_offices() {
+        let input = CreateApiKeyInput {
+            allowed_office_ids: vec![1],
+            ..base_input()
+        };
+        assert!(validate_create_api_key_input(&input).is_ok());
+    }
+
+    #[test]
+    fn accepts_all_offices_key_without_offices() {
+        let input = CreateApiKeyInput {
+            allow_all_offices: true,
+            ..base_input()
+        };
+        assert!(validate_create_api_key_input(&input).is_ok());
+    }
 }

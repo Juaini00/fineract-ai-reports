@@ -1,0 +1,6 @@
+id: savings_activity_ambiguous_en
+message: "show customer savings activity this week"
+language: en
+domain: savings
+expected_decision: clarify
+expected_capability: null
