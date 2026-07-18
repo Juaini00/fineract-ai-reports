@@ -1,48 +1,88 @@
 # Chat Client Integration
 
-Base URL local: `http://127.0.0.1:3007`.
+This is the current client contract for authentication, chat sessions, same-job clarification, and live updates. Local base URL: `http://127.0.0.1:3007`.
 
-All JSON responses use the API envelope:
+## Response envelope and errors
+
+Every JSON response uses the same envelope:
 
 ```json
 { "success": true, "data": {}, "error": null }
 ```
 
-Errors use `success=false` and a sanitized `error.message`. Do not render raw backend error internals.
+An error has `success: false`, `data: null`, and an `error`. Until backend sanitization is fixed, never render `error.message` for HTTP `500`/`internal_error`; use fixed generic copy. Clients must never expose backend internals, stack traces, SQL, or prompt text.
 
-## Authentication
+| HTTP | Common code | Client action |
+| --- | --- | --- |
+| `400` | `invalid_request_body`, `validation_error` | Correct the submitted fields. |
+| `401` | `unauthorized` | Refresh once, then require login if retry fails. |
+| `403` | `role_not_authorized` | Show that administrator access is required. |
+| `404` | `not_found` | Treat the resource or current operation as unavailable. |
+| `500` | `internal_error` | Show fixed generic copy. Do not automatically retry a mutating request; reconcile durable state first. |
 
-Dashboard auth and API-key management endpoints use the user access token:
+## Authentication model
+
+All `/chat/**` endpoints require an active administrator access token:
 
 ```http
 Authorization: Bearer <ACCESS_TOKEN>
 ```
 
-Chat endpoints require both the logged-in user token and that user's API key:
+A missing or invalid token returns `401`. A valid non-admin token returns `403 role_not_authorized`.
+
+`X-API-Key` is optional. A valid key narrows the administrator's permitted office scope. An invalid, expired, or revoked key is ignored; it does not authenticate a request and never replaces the bearer token.
 
 ```http
-Authorization: Bearer <ACCESS_TOKEN>
-X-API-Key: <API_KEY>
+X-API-Key: <OPTIONAL_API_KEY>
 ```
 
-The API key must belong to the same `user_id` as the bearer token. API keys without a `user_id`, missing bearer tokens, and mismatched token/key pairs are rejected. The client should not send `owner` when creating an API key; ownership is derived from the authenticated user.
+### Refresh cookie
 
-## Endpoints
+Login and refresh use an HTTP-only refresh cookie. Defaults are:
 
-### `POST /auth/login`
+- name: `refresh_token`
+- `Secure`
+- `SameSite=Strict`
+- path `/`
+- lifetime 7 days
 
-Payload:
+Browser requests to login, refresh, and logout must use `credentials: "include"`. Local plain HTTP normally requires `AUTH_REFRESH_COOKIE_SECURE=false`; keep secure cookies enabled in production.
 
-```json
-{ "username": "admin", "password": "password123" }
+The server does not refresh access tokens automatically. Use one coordinated refresh attempt for concurrent `401` responses, retry each failed request once, and then clear local auth state. Never create an unlimited refresh loop.
+
+## Endpoint matrix
+
+| Method | Path | Auth | Success | Purpose |
+| --- | --- | --- | --- | --- |
+| `POST` | `/auth/login` | None | `200` | Login and set refresh cookie. |
+| `POST` | `/auth/refresh` | Refresh cookie | `200` | Issue a new access token. |
+| `POST` | `/auth/logout` | Cookie optional | `200` | End the refresh session and clear cookie. |
+| `GET` | `/auth/me` | Bearer | `200` | Get the current user. |
+| `POST` | `/auth/api-keys` | Admin bearer | `201` | Create a scoped API key; raw key is returned once. |
+| `GET` | `/chat/sessions` | Admin bearer, optional key | `200` | List sessions. |
+| `POST` | `/chat/sessions` | Admin bearer, optional key | `201` | Create a session. |
+| `GET` | `/chat/sessions/{id}` | Admin bearer, optional key | `200` | Get one session. |
+| `GET` | `/chat/sessions/{id}/messages` | Admin bearer, optional key | `200` | List session messages. |
+| `POST` | `/chat/jobs` | Admin bearer, optional key | `201` | Submit a prompt, optionally creating a session. |
+| `GET` | `/chat/jobs/{id}` | Admin bearer, optional key | `200` | Read durable job state. |
+| `GET` | `/chat/jobs/{id}/stream` | Admin bearer, optional key | `200` SSE | Stream the latest live state/update. |
+| `POST` | `/chat/jobs/{id}/responses` | Admin bearer, optional key | `201` | Continue the same waiting job. |
+| `GET` | `/chat/jobs/{id}/audit` | Admin bearer, optional key | `200` | Optional job diagnostics. |
+
+There is currently no client endpoint here for API-key listing or job cancellation.
+
+## Authentication endpoints
+
+### Login
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{"username":"admin","password":"password123"}
 ```
 
-Validation:
-
-- `username` is required.
-- `password` is required.
-
-Response `200`:
+Response `200` sets the refresh cookie and returns:
 
 ```json
 {
@@ -57,117 +97,23 @@ Response `200`:
 }
 ```
 
-### `GET /chat/sessions`
+### Refresh, logout, and current user
 
-Lists chat sessions owned by the API key's user. Use this to render session history.
+`POST /auth/refresh` reads the refresh cookie and returns the same access-token fields needed to replace the in-memory token. `POST /auth/logout` succeeds even when the cookie is absent. `GET /auth/me` uses the bearer token and returns the current user.
 
-Auth: bearer token + API key.
-
-Response `200`:
+### Create an API key
 
 ```json
 {
-  "success": true,
-  "data": [
-    {
-      "id": "<session_id>",
-      "api_key_id": "<api_key_id>",
-      "title": "Deposits Q3",
-      "status": "active",
-      "context_json": {},
-      "created_at": "2026-07-12T00:00:00Z",
-      "updated_at": "2026-07-12T00:00:00Z",
-      "expires_at": null,
-      "archived_at": null
-    }
-  ],
-  "error": null
+  "name": "Reporting dashboard",
+  "expires_at": null,
+  "allowed_office_ids": [1, 2],
+  "allowed_capabilities": ["savings_deposit_total"],
+  "allow_all_offices": false,
+  "allow_all_capabilities": false,
+  "can_view_pii": false
 }
 ```
-
-### `POST /chat/sessions`
-
-Creates a new chat session.
-
-Auth: bearer token + API key.
-
-Payload:
-
-```json
-{ "title": "Deposits Q3" }
-```
-
-Validation:
-
-- `title` is optional.
-- Empty or whitespace-only title is stored as `null`.
-
-Response `201`:
-
-```json
-{
-  "success": true,
-  "data": { "id": "<session_id>", "title": "Deposits Q3", "created_at": "..." },
-  "error": null
-}
-```
-
-### `GET /chat/sessions/{session_id}`
-
-Returns one session for the API-key owner.
-
-Auth: bearer token + API key.
-
-Response `200`: same session object as above.
-
-### `GET /chat/sessions/{session_id}/messages`
-
-Returns existing chat messages for a session.
-
-Auth: bearer token + API key.
-
-Response `200`:
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "<message_id>",
-      "session_id": "<session_id>",
-      "job_id": "<job_id>",
-      "role": "assistant",
-      "content": "...",
-      "metadata_json": {
-        "structured_response": {},
-        "rendered_markdown": "..."
-      },
-      "created_at": "..."
-    }
-  ],
-  "error": null
-}
-```
-
-### `POST /chat/jobs`
-
-Starts an assistant job. The HTTP response returns immediately; progress comes from SSE.
-
-Auth: bearer token + API key.
-
-Payload:
-
-```json
-{
-  "session_id": "<session_id>",
-  "message": "What is the total deposit this month?"
-}
-```
-
-Validation:
-
-- `session_id` must be a valid UUID and must belong to the API-key user.
-- `message` is required and must not be empty.
 
 Response `201`:
 
@@ -175,115 +121,108 @@ Response `201`:
 {
   "success": true,
   "data": {
-    "job_id": "<job_id>",
-    "session_id": "<session_id>",
-    "user_message_id": "<message_id>",
-    "status": "queued",
-    "current_step": "queued"
+    "id": "<api_key_id>",
+    "api_key": "<raw_key_returned_once>",
+    "message": "Store this API key securely. It will not be shown again."
   },
   "error": null
 }
 ```
 
-Immediately open `GET /chat/jobs/{job_id}/stream` with the same auth headers.
+Store the raw key immediately in an appropriate secret store. It cannot be fetched again.
 
-### `GET /chat/jobs/{job_id}/stream`
+## Sessions and messages
 
-Streams job progress with Server-Sent Events.
-
-Auth: bearer token + API key.
-
-Event names currently used:
-
-- `status`: snapshot-style live state.
-- `update`: job event emitted by the worker.
-
-Example stream:
-
-```text
-event: status
-data: {"job_id":"...","status":"queued","current_step":"queued"}
-
-event: update
-data: {"kind":"status","step":"checking_context","payload":{},"at":"..."}
-
-event: update
-data: {"kind":"clarification","step":"taking_decision","payload":{"options":[...]},"at":"..."}
-
-event: update
-data: {"kind":"final","step":"response","payload":{"status":"completed"},"at":"..."}
-```
-
-`update.data` is JSON shaped as:
+`POST /chat/sessions` accepts an optional `title` with a maximum of 120 characters. A blank or whitespace-only title is stored as `null`.
 
 ```json
-{ "kind": "status", "step": "checking_context", "payload": {}, "at": "..." }
+{ "title": "Deposits Q3" }
 ```
 
-Treat `payload` as event-specific. Known `kind` values include `status`, `clarification`, `final`, and `error`.
+Both list and detail responses use the full session shape:
 
-Common job statuses:
+```json
+{
+  "id": "<session_id>",
+  "user_id": "<user_id-or-null-for-legacy-rows>",
+  "api_key_id": "<api_key_id-or-null>",
+  "title": "Deposits Q3",
+  "status": "active",
+  "context_json": {},
+  "created_at": "2026-07-18T00:00:00Z",
+  "updated_at": "2026-07-18T00:00:00Z",
+  "expires_at": null,
+  "archived_at": null
+}
+```
 
-- `queued`
-- `running`
-- `waiting_for_user_input`
-- `completed`
-- `failed`
-- `expired`
-- `cancelled`
+`GET /chat/sessions/{id}/messages` returns messages in this shape:
 
-Common `current_step` / event `step` values and practical UI labels:
+```json
+{
+  "id": "<message_id>",
+  "session_id": "<session_id>",
+  "job_id": "<job_id-or-null>",
+  "role": "assistant",
+  "metadata_json": {
+    "type": "assistant_response",
+    "assistant_response": {}
+  },
+  "content": "# Rendered assistant markdown\n...",
+  "created_at": "2026-07-18T00:00:00Z"
+}
+```
 
-| Step | Suggested label |
-| --- | --- |
-| `queued` | Queued |
-| `checking_context` | Checking conversation context |
-| `embedding` | Finding relevant reporting knowledge |
-| `taking_decision` | Choosing the right report or asking a question |
-| `authorizing` | Checking permissions |
-| `executing_query` | Running the approved report query |
-| `shaping_result` | Shaping report data |
-| `formatting_response` | Preparing the answer |
-| `response` | Finalizing response |
+## Submit and inspect a job
 
-Terminal live states are `completed`, `failed`, `expired`, and `cancelled`. On terminal state, close SSE, fetch messages, and re-enable normal send.
+`POST /chat/jobs` accepts a nullable `session_id` and a `message` of 1-1000 characters. If `session_id` is absent or `null`, the server creates a session.
 
-### `GET /chat/jobs/{job_id}`
+```json
+{
+  "session_id": null,
+  "message": "What is the total deposit this month?"
+}
+```
 
-Fetches the latest job state, useful after reconnect or page refresh.
+Response `201`:
 
-Auth: bearer token + API key.
+```json
+{
+  "success": true,
+  "data": {
+    "session_id": "<session_id>",
+    "job_id": "<job_id>",
+    "user_message_id": "<message_id>",
+    "status": "completed",
+    "current_step": "response"
+  },
+  "error": null
+}
+```
 
-Response `200` includes `status`, `current_step`, `state_json`, `result_json`, and `error_json`.
+### Important current behavior
 
-Use this for recovery:
+The handler currently awaits the assistant graph before returning. The `201` response is therefore usually already `completed`, `waiting_for_user_input`, or `failed`, rather than an immediate `queued` background acknowledgement. Clients must branch on the returned status before deciding whether to open SSE.
 
-- `queued` or `running`: restore disabled send, show the step label, reopen SSE.
-- `waiting_for_user_input`: restore clarification UI from `state_json`/latest event when present; keep normal send disabled.
-- `completed`: fetch messages and render the latest assistant response.
-- `failed`, `expired`, `cancelled`: show the sanitized terminal state/error, then allow a new user prompt.
+`GET /chat/jobs/{id}` returns the full persisted job model, including its identifiers, `status`, `current_step`, state/result/error JSON, and timestamps. Treat it as the durable recovery source.
 
-### `POST /chat/jobs/{job_id}/responses`
+`GET /chat/jobs/{id}/audit` returns `{ "job_id": "...", "events": [...] }`. This is optional diagnostics, not a required rendering or recovery dependency.
 
-Continues the same job after a clarification. Do not create a new job.
+## Same-job clarification
 
-Auth: bearer token + API key.
+A clarification is indicated by:
 
-Request type: `RespondToChatJobRequest`.
+```text
+status = waiting_for_user_input
+current_step = taking_decision
+```
 
-Payload fields:
+Continue it with `POST /chat/jobs/{job_id}/responses`. Never create a new job for a clarification. The request is:
 
-- `message` string, required.
-- `option_id` string, optional by schema but required by the client for option-button selections.
+- `message`: required, 1-1000 characters
+- `option_id`: optional, maximum 200 characters
 
-For any returned option except `others`, send both:
-
-- `option_id`: the exact option id returned by the backend.
-- `message`: the visible option label or description for audit/display.
-
-The server uses `option_id`, not `message`, to resolve non-`others` selections. Invalid `option_id` is rejected and the job remains waiting.
-
-Non-`others` example:
+For a returned choice, send its exact `id` and useful visible text:
 
 ```json
 {
@@ -292,38 +231,196 @@ Non-`others` example:
 }
 ```
 
-For `others`, send `option_id="others"` and a user-provided message:
+For missing parameters or ordinary free-text clarification, omit `option_id`:
 
 ```json
-{
-  "option_id": "others",
-  "message": "Show deposits grouped by branch for last quarter"
+{ "message": "Use 2026-07-01 through 2026-07-31" }
+```
+
+This distinction matters: sending a capability option for parameter/free-text input can cause repeated capability-choice clarification.
+
+The handler currently awaits the same job's rerun, but its `201` data is the inserted clarification `ChatMessage` (`id`, `session_id`, `job_id`, `role`, `metadata_json`, `content`, `created_at`), not a job result. After `201`, fetch `GET /chat/jobs/{job_id}` and branch on that durable status; open SSE only if it is `queued` or `running`. A job that is inaccessible or not waiting currently returns `404`, not `409`.
+
+## SSE live updates
+
+Request:
+
+```http
+GET /chat/jobs/{job_id}/stream
+Authorization: Bearer <ACCESS_TOKEN>
+Accept: text/event-stream
+```
+
+Include `X-API-Key` only when using a valid scoped key. There are exactly two SSE event names:
+
+```text
+event: status
+data: {"job_id":"...","status":"running","current_step":"executing_query"}
+
+event: update
+data: {"kind":"clarification","step":"complete_or_wait","payload":{"response_type":"clarification","structured_response":{},"markdown":"..."},"at":"..."}
+```
+
+- `status` data is `{ job_id, status, current_step }`.
+- `update` data is `{ kind, step, payload, at }`.
+- `clarification`, `final`, and `error` are `update.kind` values, not SSE event names.
+- Other update kinds, such as `status`, should be handled defensively.
+
+### Current delivery limits
+
+Redis stores only the latest event for about one hour. The stream polls it, so the same update can arrive each second. Deduplicate identical updates (for example by a stable serialization of `kind`, `step`, `payload`, and `at`) and make rendering idempotent.
+
+This is not an ordered event log: there is no SSE `id`, `retry`, `Last-Event-ID`, or replay guarantee. Do not calculate durable state by replaying updates.
+
+- If Redis is not configured, the endpoint emits one `status` event and closes.
+- If Redis is configured but unreachable, the stream closes.
+- It stops after observing `completed` or `failed`, or after roughly 120 polling ticks.
+- `expired` and `cancelled` are not current stream termination checks.
+
+Always recover from `GET /chat/jobs/{id}`, not from assumptions about missed SSE events.
+
+### Browser transport
+
+Native `EventSource` cannot set an `Authorization` header. Use `fetch` streaming or a header-capable SSE library. Never put an access token or API key in the URL.
+
+```ts
+type ApiEnvelope<T> = { success: boolean; data: T | null; error: null | { code?: string; message: string } };
+
+let accessToken = "";
+let refreshPromise: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  refreshPromise ??= fetch("/auth/refresh", {
+    method: "POST",
+    credentials: "include",
+  }).then(async (response) => {
+    if (!response.ok) return false;
+    const body: ApiEnvelope<{ access_token: string }> = await response.json();
+    if (!body.success || !body.data) return false;
+    accessToken = body.data.access_token;
+    return true;
+  }).finally(() => { refreshPromise = null; });
+  return refreshPromise;
+}
+
+async function apiFetch(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  if (init.body) headers.set("Content-Type", "application/json");
+  let response = await fetch(path, { ...init, headers, credentials: "include" });
+  if (response.status === 401 && retry && await refreshAccessToken()) {
+    response = await apiFetch(path, init, false);
+  }
+  return response;
+}
+
+function apiErrorMessage(response: Response, body: ApiEnvelope<unknown>, fallback: string) {
+  return response.status < 500 ? body.error?.message ?? fallback : fallback;
 }
 ```
 
-If the user clicks Others before entering free text, the client may send:
+Add a valid API key with `headers.set("X-API-Key", apiKey)` when scoped access is desired.
+The single `401` refresh above is the only automatic retry. After a `500` from a mutating request such as `POST /chat/jobs`, reconcile sessions, messages, and jobs before offering a deliberate retry because persistence may have occurred before the failure.
 
-```json
-{ "option_id": "others", "message": "others" }
+Minimal streaming parser:
+
+```ts
+async function streamJob(
+  jobId: string,
+  onEvent: (name: "status" | "update", data: unknown) => void,
+  signal?: AbortSignal,
+) {
+  const response = await apiFetch(`/chat/jobs/${jobId}/stream`, {
+    headers: { Accept: "text/event-stream" },
+    signal,
+  });
+  if (!response.ok || !response.body) throw new Error("Live updates unavailable");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    buffer = buffer.replaceAll("\r\n", "\n");
+    let boundary: number;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      let name = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) name = line.slice(6).trim();
+        if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+      }
+      if ((name === "status" || name === "update") && data.length) {
+        onEvent(name, JSON.parse(data.join("\n")));
+      }
+    }
+    if (done) break;
+  }
+}
 ```
 
-Then keep the same job and prompt for free text if the server response keeps the job in `waiting_for_user_input`.
+The parser appends each decoded chunk before normalizing the whole buffer, so it handles chunk boundaries (including a CR/LF split across chunks) and multi-line `data`. Production code should catch JSON/network errors, abort stale streams, deduplicate updates, and then reconcile with `GET /chat/jobs/{id}`.
 
-Response `201`: inserted user message. Reopen or continue SSE for the same `job_id`.
+## End-to-end client algorithm
 
-## Assistant response payload
+1. Login with `credentials: "include"`; keep the access token in memory or protected application storage.
+2. Optionally create and securely retain a scoped API key. It only narrows scope.
+3. Load sessions, select or create one, then load its messages.
+4. On prompt submit, disable normal send and call `POST /chat/jobs`.
+5. Save the returned `session_id` and `job_id`; do not assume the job is queued.
+6. Branch on the returned status:
+   - `queued` or `running`: show `current_step` and open SSE.
+   - `waiting_for_user_input`: show clarification from `result_json.structured_response` or persisted assistant-message metadata.
+   - `completed`: fetch session messages and render `metadata_json.assistant_response`, falling back to markdown `content`.
+   - `failed`: show a safe error and enable normal send.
+7. For clarification, enable only the relevant choice buttons or free-text submit. Post to `/responses` with the same job ID and disable those controls while submitting. The `201` data is the inserted clarification message, so fetch the same job and branch on its durable status; open SSE only if it is `queued` or `running`.
+8. For every SSE update, deduplicate and treat it as a hint. On `kind: clarification`, reconcile the job and show clarification. On `kind: final` or `kind: error`, reconcile the job and messages.
+9. When a stream closes or the page reloads, call `GET /chat/jobs/{id}`:
+   - reopen SSE only for `queued` or `running`;
+   - restore clarification for `waiting_for_user_input`;
+   - fetch messages for `completed`;
+   - show a safe error for `failed`.
 
-Render `structured_response` as the source of truth. Use `rendered_markdown`/`markdown` only as a fallback if structured data is missing or a renderer has not implemented a shape yet.
+Do not wait for SSE before handling the initial or clarification HTTP result: current handlers may have already completed the graph.
 
-Do not assume the requested row count was returned. Always read and display the actual returned rows/cards and any warnings.
+### Clarification helper
 
-Common shape:
+```ts
+async function respondToClarification(jobId: string, message: string, optionId?: string) {
+  const response = await apiFetch(`/chat/jobs/${jobId}/responses`, {
+    method: "POST",
+    body: JSON.stringify({ message, ...(optionId ? { option_id: optionId } : {}) }),
+  });
+  const body = await response.json();
+  if (!response.ok || !body.success) throw new Error(apiErrorMessage(response, body, "Unable to continue"));
+  // The response data is the inserted clarification ChatMessage, not job state.
+  const clarificationMessage = body.data;
+  const jobResponse = await apiFetch(`/chat/jobs/${jobId}`);
+  const jobBody = await jobResponse.json();
+  if (!jobResponse.ok || !jobBody.success) throw new Error(apiErrorMessage(jobResponse, jobBody, "Unable to load job"));
+  return { clarificationMessage, job: jobBody.data }; // Open SSE only if job is queued/running.
+}
+
+// Choice button:
+await respondToClarification(jobId, option.label, option.id);
+// Missing parameter/free text:
+await respondToClarification(jobId, "Use July 2026");
+```
+
+## UI state and response rendering
+
+Disable normal prompt submission while the selected session's job is `queued`, `running`, or `waiting_for_user_input`. While waiting, enable only clarification controls. Disable a clicked choice/free-text submit until its request finishes to prevent duplicate responses. Re-enable normal input after `completed` or `failed`; for any other recovered state, follow the durable job result rather than SSE assumptions.
+
+Assistant-message `content` is rendered markdown. Its `metadata_json` is `{ "type": "assistant_response", "assistant_response": <structured response> }`; prefer `assistant_response` and use `content` only as a markdown fallback. Job `result_json` separately contains `structured_response` and `markdown`; use those for in-progress recovery, then reconcile completed rendering from persisted messages.
 
 ```json
 {
   "response_type": "table",
   "title": "Total deposits",
-  "message": "Here are the matching deposit records.",
+  "message": "Here are the matching records.",
   "sections": [],
   "table": {
     "columns": [{ "key": "client_name", "label": "Client" }],
@@ -333,82 +430,81 @@ Common shape:
   "options": [],
   "warnings": [],
   "actions": [],
-  "evidence_refs": [],
-  "rendered_markdown": "..."
+  "evidence_refs": []
 }
 ```
 
-Known `response_type` values:
+Render defensively:
 
-- `summary`: render title/message, sections, cards, warnings, actions, and evidence refs.
-- `table`: render table columns/rows exactly as returned; show zero-state if `rows=[]`.
-- `metric_cards`: render `cards` as metric tiles; do not invent missing metrics.
-- `clarification`: render `message` and `options` as selectable actions.
-- `help`: render guidance/help text.
-- `unsupported`: explain unsupported request and any suggested actions/options.
-- `out_of_domain`: explain that the request is outside approved reporting scope.
-- `policy_blocked`: show policy-safe block message and warnings/actions if present.
-- `error`: show sanitized error copy.
+- `summary`: title/message, sections, cards, warnings, actions, and safe evidence references.
+- `table`: columns in server order and exactly the returned rows; show an empty state for none.
+- `metric_cards`: only returned cards and values.
+- `clarification`: message and returned options.
+- `help`, `unsupported`, `out_of_domain`, `policy_blocked`, `error`: the server's safe copy and available warnings/actions.
+- Never invent rows, metrics, labels, or requested counts that were not returned.
+- Never expose diagnostic state, hidden prompt data, SQL, or internal errors.
 
-Field rendering notes:
+## Curl flow
 
-- `table.columns`: preserve backend order; use `label` for headers and `key` for row lookup.
-- `table.rows`: render actual row count returned; never pad or promise additional rows.
-- `cards`: render `label`, `value`, and any provided unit/trend/metadata fields defensively.
-- `options`: render buttons; submit selected `id` as `option_id`.
-- `warnings`: show near the result, not as fatal errors unless response type says so.
-- `actions`: render as follow-up suggestions/buttons when present.
-- `evidence_refs`: render in a collapsible details area if useful; do not expose hidden prompt/debug text.
-- `rendered_markdown`: fallback display only.
+Cookie jar use is shown for local development. Keep real credentials out of shell history and logs.
 
-## Deterministic extraction debug metadata
+```bash
+BASE=http://127.0.0.1:3007
 
-Verified extraction may record `deterministic_extraction` and `deterministic_extraction_conflicts` in job state, result, or message metadata. This metadata is for diagnostics; exact shape and location can evolve.
+curl -sS -c cookies.txt -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"password123"}' "$BASE/auth/login"
 
-Client rule:
+TOKEN='<access_token>'
 
-- Production UI must not depend on this metadata.
-- Development builds may show it in a debug panel for support and QA.
-- If conflicts exist, prefer server clarification/results over client-side guessing.
+curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"session_id":null,"message":"What is the total deposit this month?"}' \
+  "$BASE/chat/jobs"
 
-## Client flow
+JOB_ID='<job_id>'
 
-1. Login and store `access_token` in memory or secure storage.
-2. Create or fetch a user-owned API key from the dashboard flow. Do not send `owner`; the backend uses the logged-in `user_id`.
-3. Send both `Authorization: Bearer <ACCESS_TOKEN>` and `X-API-Key: <API_KEY>` on every chat request.
-4. Load sessions with `GET /chat/sessions`.
-5. If no session is selected, create one with `POST /chat/sessions`.
-6. Load messages with `GET /chat/sessions/{session_id}/messages`.
-7. When the user sends a prompt:
-   - Disable normal send immediately for the selected session.
-   - Append the user message optimistically or after `POST /chat/jobs` returns.
-   - Call `POST /chat/jobs`.
-   - Open `GET /chat/jobs/{job_id}/stream`.
-8. Render live state from SSE:
-   - `status` event or `kind=status`: show the mapped step label.
-   - `kind=clarification`: show returned options above the input; keep normal send disabled.
-   - `kind=final` or terminal `completed`: fetch messages, render `structured_response`, close SSE, re-enable send.
-   - `kind=error` or terminal `failed`: show sanitized error, close SSE, re-enable send.
-9. If clarification appears, render option buttons. Always include `Others` when returned. On click:
-   - For normal options, call `POST /chat/jobs/{job_id}/responses` with `option_id` and the visible label/description as `message`.
-   - For Others, collect free text and send `option_id="others"` with that text as `message`.
-   - Keep the same `job_id`.
-   - Reopen or continue SSE.
-10. If the browser refreshes mid-job, call `GET /chat/jobs/{job_id}` with both auth headers and apply the recovery rules above.
+curl -N -H "Authorization: Bearer $TOKEN" -H 'Accept: text/event-stream' \
+  "$BASE/chat/jobs/$JOB_ID/stream"
 
-## Button state
+curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"Use July 2026"}' "$BASE/chat/jobs/$JOB_ID/responses"
 
-Disable normal send when the selected session has an active job with status:
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/chat/jobs/$JOB_ID"
 
-- `queued`
-- `running`
-- `waiting_for_user_input`
+curl -sS -b cookies.txt -c cookies.txt -X POST "$BASE/auth/refresh"
+curl -sS -b cookies.txt -c cookies.txt -X POST "$BASE/auth/logout"
+```
 
-For `waiting_for_user_input`, enable only clarification option buttons and any required Others free-text submit. Re-enable normal send after:
+Add `-H 'X-API-Key: <valid_key>'` only when testing narrowed API-key scope.
 
-- `completed`
-- `failed`
-- `expired`
-- `cancelled`
+## Security and deployment checklist
 
-This prevents stacked requests in the same chat while the pipeline is still running.
+- Require HTTPS in production; keep the refresh cookie `Secure`.
+- Use `credentials: "include"` only with the intended API origin and CORS policy.
+- Current backend CORS accepts local `localhost` and `127.0.0.1` origins only. Change or configure backend CORS for the exact non-local frontend origin and verify it before deployment.
+- Never place bearer tokens or API keys in URLs, query strings, analytics, or logs.
+- Prefer an in-memory access token; protect any persistent client storage against script access.
+- Treat a raw API key as a secret and remember it is displayed only once.
+- Do not treat `X-API-Key` as authentication or broaden permissions client-side.
+- Sanitize rendered markdown/HTML. Never render HTTP `500`/`internal_error` messages; use fixed generic copy until backend sanitization is fixed.
+- Abort streams when changing account, session, or page; do not leak a previous user's updates.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| Login works but refresh cookie is absent locally | `Secure` cookie over HTTP | Set `AUTH_REFRESH_COOKIE_SECURE=false` only for local HTTP and use `credentials: "include"`. |
+| Chat returns `401` | Missing/expired bearer token | Refresh once and retry once; otherwise login again. An API key alone cannot help. |
+| Chat returns `403 role_not_authorized` | Bearer user is not an active admin | Use an authorized admin account. |
+| Invalid API key does not return an auth error | Current optional-key behavior | The key is ignored; bearer auth remains authoritative. Replace the key if narrowed scope is required. |
+| New job is already completed or waiting | Handler awaited the graph | Handle the returned status before opening SSE. |
+| Clarification repeats capability choices | `option_id` sent for free text/parameters | Omit `option_id` unless selecting a returned choice. |
+| Clarification response returns `404` | Job inaccessible or not waiting | Fetch the job/session and reconcile; current behavior is not `409`. After a `201`, also fetch the job because the response data is the inserted message. |
+| SSE repeats the same update | Latest Redis event is polled | Deduplicate and keep rendering idempotent. |
+| SSE closes after one status | Redis is not configured | Use the job response and `GET /chat/jobs/{id}` for durable state. |
+| SSE closes unexpectedly | Redis unavailable, timeout, auth/network issue, or terminal job | Fetch the job; reopen only if it is `queued` or `running`. |
+| Native `EventSource` cannot connect with auth | It cannot set bearer headers | Use fetch streaming or a header-capable library; never put tokens in the URL. |
+| Browser reports a CORS failure in deployment | Current backend CORS accepts local origins only | Change or configure backend CORS and verify the exact production origin. |
+
+## Source-of-truth caveats
+
+PostgreSQL job/session/message state and `GET /chat/jobs/{id}` are durable source of truth. Redis/SSE is only a lossy live hint. Current behavior does not promise background job acknowledgement, ordered replay, reconnect cursors, API-key-only authentication, key listing, cancellation, or automatic access-token refresh. Client implementations must feature-detect from HTTP status and returned data rather than assuming those capabilities.
