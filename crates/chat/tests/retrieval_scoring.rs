@@ -262,6 +262,130 @@ fn clarification_option_falls_back_to_humanized_id_when_display_name_missing() {
     );
 }
 
+/// Loads the real `knowledge/` + `queries/` catalog from the workspace, the
+/// same way `catalog_validation.rs` does. Using the real catalog (rather than
+/// a synthetic one) is what makes these three tests genuinely RED before the
+/// issue-03 capability YAMLs exist: the target id simply isn't in the catalog
+/// yet, so `evidence[0].capability_id` cannot equal it.
+fn load_real_catalog() -> std::sync::Arc<KnowledgeCatalog> {
+    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root");
+    let catalog = chat::knowledge::catalog::loader::KnowledgeLoader::new(
+        workspace_root.join("knowledge"),
+        workspace_root.join("queries"),
+    )
+    .load()
+    .expect("load knowledge catalog");
+    std::sync::Arc::new(catalog)
+}
+
+#[test]
+fn office_list_basic_selected_for_berikan_office_query() {
+    // Issue 03: "berikan 3 office yg ada pada system saat ini" has no ranking
+    // metric — must route to the plain browse/list capability, not a summary
+    // or top-n-by-metric capability.
+    use chat::assistant::retrieval::RetrievalEngine;
+
+    let intent = make_intent(AssistantDomain::Organization, RequestSubject::Office);
+    let mut shape = intent.request_shape.clone();
+    shape.operation = RequestOperation::List;
+    shape.output = RequestOutput::List;
+    shape.pii = RequestPii::None;
+    let mut intent = intent;
+    intent.request_shape = shape;
+
+    let plan = RetrievalPlan::new(
+        "berikan 3 office yg ada pada system saat ini",
+        &intent,
+        false,
+        vec![
+            "office_list_basic".to_string(),
+            "organization_office_summary".to_string(),
+        ],
+    );
+
+    let catalog = load_real_catalog();
+
+    let evidence = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
+            .await
+            .unwrap()
+    });
+
+    assert_eq!(evidence[0].capability_id, "office_list_basic");
+}
+
+#[test]
+fn client_list_recent_selected_for_new_clients_query() {
+    // "recently activated clients" has no ranking metric — must route to the
+    // plain browse/list capability, not a lifecycle summary or top-n capability.
+    use chat::assistant::retrieval::RetrievalEngine;
+
+    let intent = make_intent(AssistantDomain::Client, RequestSubject::Client);
+    let mut shape = intent.request_shape.clone();
+    shape.operation = RequestOperation::List;
+    shape.output = RequestOutput::List;
+    let mut intent = intent;
+    intent.request_shape = shape;
+
+    let plan = RetrievalPlan::new(
+        "show me the most recently activated clients",
+        &intent,
+        false,
+        vec![
+            "client_list_recent".to_string(),
+            "client_top_n_by_savings_account_count".to_string(),
+        ],
+    );
+
+    let catalog = load_real_catalog();
+
+    let evidence = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
+            .await
+            .unwrap()
+    });
+
+    assert_eq!(evidence[0].capability_id, "client_list_recent");
+}
+
+#[test]
+fn client_random_sample_selected_for_sembarang_query() {
+    // "coba berikan saya 5 client sembarang pada tahun ini" — "sembarang"
+    // (Indonesian for "random/arbitrary") must route to the random-sample
+    // capability, not a ranked or plain-list capability.
+    use chat::assistant::retrieval::RetrievalEngine;
+
+    let intent = make_intent(AssistantDomain::Client, RequestSubject::Client);
+    let mut shape = intent.request_shape.clone();
+    shape.operation = RequestOperation::RandomSample;
+    shape.output = RequestOutput::List;
+    let mut intent = intent;
+    intent.request_shape = shape;
+
+    let plan = RetrievalPlan::new(
+        "coba berikan saya 5 client sembarang pada tahun ini",
+        &intent,
+        false,
+        vec![
+            "client_random_sample".to_string(),
+            "client_list_recent".to_string(),
+        ],
+    );
+
+    let catalog = load_real_catalog();
+
+    let evidence = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
+            .await
+            .unwrap()
+    });
+
+    assert_eq!(evidence[0].capability_id, "client_random_sample");
+}
+
 #[test]
 fn retrieval_evidence_title_is_humanized_when_display_name_missing() {
     // Same regression, exercised through the actual production fallback
