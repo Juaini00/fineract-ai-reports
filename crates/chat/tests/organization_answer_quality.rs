@@ -71,20 +71,14 @@ async fn organization_report_answers_match_selected_capability_contracts() {
         let mut job = wait_until_not_running(&app, &key.raw, &job_id).await;
         if job["status"].as_str() == Some("waiting_for_user_input") {
             let ids = option_ids(&job["result_json"]["structured_response"]);
-            if !ids.contains(&case.capability) {
-                // Issue 01 (retrieval-pipeline-rework): shape is now a scoring
-                // signal, not a hard gate, so several same-shape office
-                // capabilities can legitimately tie at the score cap for this
-                // prompt; which 3 win clarification_payload's top-3 is issue
-                // 02's (reranker) concern. Accept the ambiguity here rather
-                // than asserting exact top-3 membership.
-                assert!(
-                    ids.iter().any(|id| id.starts_with("organization_")),
-                    "expected an organization-shaped clarification option for {}: {job}",
-                    case.capability
-                );
-                continue;
-            }
+            // Issue 02 (reranker): top-1 is deterministic, so the exact target
+            // capability must appear as a clarification option — a same-shape
+            // office sibling may no longer crowd it out of the top-3.
+            assert!(
+                ids.contains(&case.capability),
+                "expected {} as a clarification option: {job}",
+                case.capability
+            );
             let resp = app
                 .post_json(
                     &format!("/chat/jobs/{job_id}/responses"),
@@ -115,9 +109,13 @@ async fn organization_clarification_accepts_option_id_and_free_text() {
     let (job_id, first) =
         first_org_clarification_with_no_param_option(&app, &key.raw, &session_id).await;
     let ids = option_ids(&first["result_json"]["structured_response"]);
+    // Issue 02 (reranker): the helper only returns once one of these two
+    // no-parameter summaries is offered, so assert that exact pair rather than
+    // any organization_-prefixed id.
     assert!(
-        ids.iter().any(|id| id.starts_with("organization_")),
-        "missing organization options: {first}"
+        ids.contains(&"organization_office_summary")
+            || ids.contains(&"organization_hierarchy_summary"),
+        "missing expected organization summary option: {first}"
     );
     assert!(
         ids.iter().all(|id| !id.starts_with("refine_")),
@@ -166,9 +164,12 @@ async fn organization_clarification_accepts_option_id_and_free_text() {
     // equally-scored candidates is issue 02's (reranker) concern.
     if final_job["status"].as_str() == Some("waiting_for_user_input") {
         let ids = option_ids(&final_job["result_json"]["structured_response"]);
+        // Issue 02 (reranker): "rank the busiest offices by transaction count"
+        // maps to organization_office_activity_ranking, which must be the
+        // offered option if this re-classification ties into clarification.
         assert!(
-            ids.iter().any(|id| id.starts_with("organization_")),
-            "expected an organization-shaped clarification option: {final_job}"
+            ids.contains(&"organization_office_activity_ranking"),
+            "expected organization_office_activity_ranking option: {final_job}"
         );
     } else {
         assert_completed_organization_capability(&final_job);

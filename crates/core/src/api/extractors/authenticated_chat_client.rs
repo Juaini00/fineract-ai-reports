@@ -33,7 +33,9 @@ where
         // restricted key contributes its `allowed_office_ids`; the intersection
         // happens in `chat::policy::authorization::project_admin_principal`.
         let office_ids = match AuthenticatedClient::from_request_parts(parts, state).await {
-            Ok(AuthenticatedClient(client)) if !client.allow_all_offices => client.allowed_office_ids,
+            Ok(AuthenticatedClient(client)) if !client.allow_all_offices => {
+                client.allowed_office_ids
+            }
             _ => Vec::new(),
         };
 
