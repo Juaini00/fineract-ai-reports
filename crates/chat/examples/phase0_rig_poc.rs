@@ -1,4 +1,4 @@
-#[path = "../src/assistant/intent.rs"]
+#[path = "../src/assistant/understanding/intent.rs"]
 mod intent;
 
 use intent::{AssistantIntent, AssistantIntentKind, AssistantLanguage, ContextReference};

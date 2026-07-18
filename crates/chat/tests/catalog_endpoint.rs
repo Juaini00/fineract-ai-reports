@@ -72,6 +72,37 @@ async fn vector_index_status_returns_empty_before_rebuild() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn vector_index_status_returns_latest_synced_catalog_version() {
+    let app = spawn_app().await;
+    let key = app.provision_api_key(&[], vec![1], false).await;
+    let expected_id = uuid::Uuid::new_v4();
+
+    sqlx::query(
+        "INSERT INTO knowledge_catalog_versions (id, version, content_hash, status, document_count, embedding_model, embedding_dimensions, synced_at, created_at) VALUES ($1, 'older-created', 'older-created-hash', 'embedded', 7, 'voyage-3', 1024, '2026-03-01T00:00:00Z', '2026-01-01T00:00:00Z'), ($2, 'newer-created', 'newer-created-hash', 'indexed', 3, NULL, NULL, '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z')",
+    )
+    .bind(expected_id)
+    .bind(uuid::Uuid::new_v4())
+    .execute(&app.app_pool)
+    .await
+    .unwrap();
+
+    let resp = app.get("/vector-index/status", Some(&key.raw)).await;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["catalog_version_id"], expected_id.to_string());
+    assert_eq!(body["data"]["version"], "older-created");
+    assert_eq!(body["data"]["content_hash"], "older-created-hash");
+    assert_eq!(body["data"]["status"], "embedded");
+    assert_eq!(body["data"]["document_count"], 7);
+    assert_eq!(body["data"]["embedding_model"], "voyage-3");
+    assert_eq!(body["data"]["embedding_dimensions"], 1024);
+    assert_eq!(body["data"]["synced_at"], "2026-03-01T00:00:00Z");
+    assert_eq!(body["data"]["created_at"], "2026-01-01T00:00:00Z");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn capabilities_returns_approved_ids_for_bootstrap_admin() {
     let app = spawn_app().await;
 

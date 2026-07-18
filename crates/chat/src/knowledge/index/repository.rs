@@ -41,9 +41,37 @@ pub struct LatestCatalogIndex {
     pub embedding_dimensions: Option<i32>,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct LatestCatalogVersion {
+    pub id: Uuid,
+    pub version: String,
+    pub content_hash: String,
+    pub status: String,
+    pub document_count: i32,
+    pub embedding_model: Option<String>,
+    pub embedding_dimensions: Option<i32>,
+    pub synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl KnowledgeRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub(crate) async fn latest_catalog_version(&self) -> Result<Option<LatestCatalogVersion>> {
+        let row = sqlx::query_as::<_, LatestCatalogVersion>(
+            r#"
+            SELECT id, version, content_hash, status, document_count,
+                   embedding_model, embedding_dimensions, synced_at, created_at
+            FROM knowledge_catalog_versions
+            ORDER BY synced_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
     }
 
     pub async fn replace_indexed_catalog_version(

@@ -15,6 +15,7 @@ use crate::api::dto::catalog::{
 use crate::knowledge::catalog::loader::KnowledgeLoader;
 use crate::knowledge::catalog::validator::validate_runtime;
 use crate::knowledge::embedding::VoyageEmbeddingClient;
+use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::index::sync::KnowledgeSyncService;
 
 pub async fn validate(
@@ -107,40 +108,22 @@ pub async fn vector_index_status(
     AuthenticatedChatClient(_client): AuthenticatedChatClient,
     State(state): State<ChatAppState>,
 ) -> Result<Response, ApiError> {
-    let row: Option<(
-        uuid::Uuid,
-        String,
-        String,
-        String,
-        i32,
-        Option<String>,
-        Option<i32>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        chrono::DateTime<chrono::Utc>,
-    )> = sqlx::query_as(
-        r#"
-        SELECT id, version, content_hash, status, document_count,
-               embedding_model, embedding_dimensions, synced_at, created_at
-        FROM knowledge_catalog_versions
-        ORDER BY synced_at DESC NULLS LAST, created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .fetch_optional(&state.core.pools.app)
-    .await
-    .map_err(|err| ApiError::internal(anyhow::Error::from(err)))?;
+    let row = KnowledgeRepository::new(state.core.pools.app.clone())
+        .latest_catalog_version()
+        .await
+        .map_err(ApiError::internal)?;
 
     let body = match row {
-        Some((id, version, hash, status, count, model, dims, synced, created)) => json!({
-            "catalog_version_id": id,
-            "version": version,
-            "content_hash": hash,
-            "status": status,
-            "document_count": count,
-            "embedding_model": model,
-            "embedding_dimensions": dims,
-            "synced_at": synced,
-            "created_at": created,
+        Some(row) => json!({
+            "catalog_version_id": row.id,
+            "version": row.version,
+            "content_hash": row.content_hash,
+            "status": row.status,
+            "document_count": row.document_count,
+            "embedding_model": row.embedding_model,
+            "embedding_dimensions": row.embedding_dimensions,
+            "synced_at": row.synced_at,
+            "created_at": row.created_at,
         }),
         None => json!({ "status": "empty" }),
     };

@@ -1,8 +1,6 @@
 # Chat Data Model
 
-Source: `docs-old/chat-data-model.md`
-
-This is the split, readable version of the original document. Content was migrated section-by-section so no old context is dropped.
+This split document is the stable source of truth for durable chat state.
 
 ## Original introduction
 
@@ -10,6 +8,10 @@ This is the split, readable version of the original document. Content was migrat
 This document defines the data model for chat sessions, chat messages, chat jobs, checkpoints, audit events, and live progress state. Per-job clarification memory is defined in `docs/job-memory.md`. The detailed audit design is defined in `docs/audit-trail-design.md`.
 
 The system must support long-running report generation, clarification flows, SSE progress updates, and resumable jobs without relying on in-memory state as the source of truth.
+
+`conversation` owns session/message persistence and the clarification lifecycle. `job` owns jobs, checkpoints, durable events, and worker flow; `audit` owns assistant trace records. PostgreSQL is durable truth. Redis stores only live SSE coordination state. Clarification responses continue the same job through `POST /chat/jobs/{job_id}/responses`.
+
+Every chat route authenticates a bearer session JWT with `role == "admin"` and scopes ownership by `user_id`. `X-API-Key` is optional and can only voluntarily narrow office scope; it is not chat authentication. Approved SQL binds authorized office ids inside the query, PII policy remains enforced, and HTTP responses use the sanitized `{ success, data, error }` envelope.
 
 ## Sections
 

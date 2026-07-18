@@ -21,7 +21,7 @@ Read this before changing code or docs.
 ## Security and policy rules
 
 - Raw API keys are returned once and never stored.
-- API key authorization must check capability scope, office scope, and PII behavior.
+- Chat authentication is bearer session JWT plus `role == "admin"`; optional `X-API-Key` is only a voluntary office-scope opt-down and never causes a chat 401.
 - Office filtering belongs inside approved SQL using authorized office ids. Do not post-filter in Rust.
 - Client-facing errors must be sanitized.
 - User-facing language is English only until multilingual extraction, classification, and templates are implemented and tested.

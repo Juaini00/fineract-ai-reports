@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::api::ChatAppState;
 use crate::api::dto::session::CreateChatSessionRequest;
-use crate::chat::model::CreateChatSessionInput;
+use crate::conversation::model::CreateChatSessionInput;
 
 #[tracing::instrument(skip(state, client), fields(user_id = %client.user_id))]
 pub async fn list(

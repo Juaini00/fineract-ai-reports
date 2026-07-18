@@ -310,7 +310,7 @@ async fn wildcard_key_option_id_response_executes_same_job() {
     // (savings_account_count); selecting a different-metric capability here
     // (e.g. client_top_n_by_savings_balance) trips an unrelated, pre-existing
     // deterministic-extraction staleness bug in `verify_capability_metric`
-    // (crates/chat/src/assistant/tool.rs) that this task does not fix.
+    // (crates/chat/src/assistant/execution/tool/mod.rs) that this task does not fix.
     let target_option = "client_top_n_by_savings_account_count";
     let resp = app
         .post_json(

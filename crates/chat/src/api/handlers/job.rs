@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 use crate::api::ChatAppState;
 use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
-use crate::chat::model::{CreateChatJobInput, RespondToChatJobInput};
-use crate::chat::service::job::redis_url_log_value;
+use crate::job::model::{CreateChatJobInput, RespondToChatJobInput};
+use crate::job::service::redis_url_log_value;
 
 #[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
