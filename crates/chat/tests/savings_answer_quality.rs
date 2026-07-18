@@ -39,17 +39,6 @@ async fn savings_answer_matrix_selects_expected_capabilities_and_shapes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "BLOCKED by pre-existing auth-plumbing gap, NOT the reranker (issue \
-02). The reranker now correctly selects savings_deposit_total and the job \
-reaches `completed` with a table — verified by running this test. The \
-office-scope assertion fails (wide key returned 471 deposit rows vs 394 \
-expected for offices [1,2,3,4,40]) because the chat auth path never carries \
-the API key's allowed_office_ids: AuthenticatedChatClient builds \
-PrincipalContext from the JWT user session with office_ids=[] and \
-project_admin_principal then overwrites office_ids with the FULL m_office set. \
-Per-API-key office scoping does not exist in the chat pipeline; wiring it \
-through core auth extractors is out of scope for issue 02. Track as a \
-separate authorization issue."]
 async fn savings_answer_respects_narrow_office_scope() {
     let app = spawn_app().await;
     // Issue 01 (retrieval-pipeline-rework): the matrix's generic

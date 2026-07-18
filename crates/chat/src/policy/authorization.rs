@@ -21,10 +21,28 @@ pub async fn project_admin_principal(
     let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM m_office ORDER BY id")
         .fetch_all(fineract_pool)
         .await?;
-    let office_ids = rows.into_iter().map(|(id,)| id).collect();
+    let tenant_office_ids = rows.into_iter().map(|(id,)| id).collect();
+    let office_ids = intersect_office_scope(&principal.office_ids, tenant_office_ids);
     finalize_admin_projection(principal, capability_ids, office_ids)?;
 
     Ok(())
+}
+
+/// Intersect the tenant's full office set with the principal's existing scope
+/// (carried from the API key). An empty principal scope means "unrestricted",
+/// so the full tenant set is returned. A non-empty scope survives as the
+/// intersection, dropping any office the key names that the tenant does not
+/// have. An empty intersection is rejected downstream as `MissingOfficeScope`.
+fn intersect_office_scope(principal_office_ids: &[i64], tenant_office_ids: Vec<i64>) -> Vec<i64> {
+    if principal_office_ids.is_empty() {
+        return tenant_office_ids;
+    }
+
+    let allowed: HashSet<i64> = principal_office_ids.iter().copied().collect();
+    tenant_office_ids
+        .into_iter()
+        .filter(|office_id| allowed.contains(office_id))
+        .collect()
 }
 
 fn finalize_admin_projection(
@@ -215,6 +233,32 @@ mod tests {
             effective_office_scope(&client, None),
             Err(AuthorizationError::MissingOfficeScope)
         );
+    }
+
+    #[test]
+    fn intersect_office_scope_empty_principal_gets_full_tenant() {
+        assert_eq!(
+            intersect_office_scope(&[], vec![1, 2, 3, 40]),
+            vec![1, 2, 3, 40]
+        );
+    }
+
+    #[test]
+    fn intersect_office_scope_restricts_to_key_scope() {
+        assert_eq!(
+            intersect_office_scope(&[2, 40], vec![1, 2, 3, 40]),
+            vec![2, 40]
+        );
+    }
+
+    #[test]
+    fn intersect_office_scope_drops_offices_absent_from_tenant() {
+        assert_eq!(intersect_office_scope(&[2, 99], vec![1, 2, 3]), vec![2]);
+    }
+
+    #[test]
+    fn intersect_office_scope_disjoint_scope_is_empty() {
+        assert!(intersect_office_scope(&[99], vec![1, 2, 3]).is_empty());
     }
 
     #[test]

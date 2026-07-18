@@ -5,6 +5,7 @@ use axum::{
 
 use crate::{api::error::ApiError, auth::model::PrincipalContext, auth::service::AuthService};
 
+use super::authenticated_client::AuthenticatedClient;
 use super::authenticated_user::AuthenticatedUser;
 
 pub struct AuthenticatedChatClient(pub PrincipalContext);
@@ -25,11 +26,22 @@ where
             ));
         }
 
+        // Carry the API key's office restriction into the principal so downstream
+        // admin projection can intersect (not overwrite) the tenant office set.
+        // An empty scope means "unrestricted": either no API key accompanies the
+        // request (bearer-only callers) or the key sets `allow_all_offices`. A
+        // restricted key contributes its `allowed_office_ids`; the intersection
+        // happens in `chat::policy::authorization::project_admin_principal`.
+        let office_ids = match AuthenticatedClient::from_request_parts(parts, state).await {
+            Ok(AuthenticatedClient(client)) if !client.allow_all_offices => client.allowed_office_ids,
+            _ => Vec::new(),
+        };
+
         Ok(Self(PrincipalContext {
             user_id: user.user_id,
             role: user.role,
             capability_ids: Vec::new(),
-            office_ids: Vec::new(),
+            office_ids,
             can_view_pii: false,
             legacy_api_key_id: None,
         }))
