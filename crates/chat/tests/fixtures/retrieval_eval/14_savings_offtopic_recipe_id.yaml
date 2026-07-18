@@ -1,0 +1,6 @@
+id: savings_offtopic_recipe_id
+message: "resep nasi goreng kesukaan keluarga saya"
+language: id
+domain: savings
+expected_decision: unsupported
+expected_capability: null

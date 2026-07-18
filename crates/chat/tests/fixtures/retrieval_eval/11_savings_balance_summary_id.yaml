@@ -1,0 +1,6 @@
+id: savings_balance_summary_id
+message: "berapa saldo total tabungan aktif kami saat ini"
+language: id
+domain: savings
+expected_decision: select
+expected_capability: savings_balance_summary

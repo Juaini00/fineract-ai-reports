@@ -1,0 +1,6 @@
+id: org_hierarchy_summary_en
+message: "how deep is our office hierarchy"
+language: en
+domain: organization
+expected_decision: select
+expected_capability: organization_hierarchy_summary

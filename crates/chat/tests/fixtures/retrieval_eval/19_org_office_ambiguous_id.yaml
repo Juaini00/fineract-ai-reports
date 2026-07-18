@@ -1,0 +1,6 @@
+id: org_office_ambiguous_id
+message: "berikan ringkasan office"
+language: id
+domain: organization
+expected_decision: clarify
+expected_capability: null

@@ -1,0 +1,6 @@
+id: client_random_sample_id
+message: "coba berikan saya 5 client sembarang pada tahun ini"
+language: id
+domain: client
+expected_decision: select
+expected_capability: client_random_sample

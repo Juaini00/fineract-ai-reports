@@ -1,0 +1,6 @@
+id: savings_deposit_total_en
+message: "what is the total savings deposit amount this month"
+language: en
+domain: savings
+expected_decision: select
+expected_capability: savings_deposit_total

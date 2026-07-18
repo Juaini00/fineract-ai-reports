@@ -1,0 +1,6 @@
+id: savings_withdrawal_total_id
+message: "berapa total penarikan tabungan bulan ini"
+language: id
+domain: savings
+expected_decision: select
+expected_capability: savings_withdrawal_total
