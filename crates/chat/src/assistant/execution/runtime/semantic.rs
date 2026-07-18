@@ -1,0 +1,384 @@
+use super::*;
+
+pub(super) async fn complete_semantic_route(
+    mut memory: JobMemory,
+    context: ContextWindow,
+    route: anyhow::Result<AssistantIntent>,
+    llm: Option<&SharedLlmClient>,
+    knowledge: Option<&KnowledgeRepository>,
+    fineract_pool: Option<&PgPool>,
+    catalog: Option<&Arc<KnowledgeCatalog>>,
+    client: Option<&PrincipalContext>,
+    canonical: Option<&CanonicalRuntimeContext>,
+    input: RuntimeUserInput,
+) -> GraphRuntimeResult {
+    let message = input.message.as_str();
+    let mut pending_clarification = None;
+    let mut retrieval_trace: Option<serde_json::Value> = None;
+    let (terminal, reason, response) = match route {
+        Ok(mut intent) => {
+            merge_deterministic_extraction_at(
+                &mut memory,
+                &mut intent,
+                &input.source_message,
+                canonical,
+            );
+            if intent.intent == AssistantIntentKind::ClarificationReply
+                && let (Some(payload), Some(llm)) = (&context.pending_clarification, llm)
+            {
+                let resolve_text = input
+                    .selected_option_id
+                    .as_deref()
+                    .unwrap_or(&input.source_message);
+                match ClarificationResolver::resolve(resolve_text, payload, &context, llm.as_ref())
+                    .await
+                {
+                    Ok(ClarificationOutcome::SelectedOption { option_id, .. })
+                        if option_id == OTHER_CLARIFICATION_OPTION_ID =>
+                    {
+                        memory.intent = Some(intent_from_source(payload, &context, canonical));
+                        record_source_extraction_metadata(
+                            &mut memory,
+                            payload,
+                            canonical,
+                            &input.source_message,
+                        );
+                        memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
+                        pending_clarification = Some(None);
+                        return graph_result(
+                            memory,
+                            TerminalState::WaitingForUserInput,
+                            "clarification_other_selected",
+                            ResponseBuilder::free_form_other_prompt(),
+                            context.recent_messages.len(),
+                            pending_clarification,
+                            clarification_transitions(
+                                TerminalState::WaitingForUserInput,
+                                "clarification_other_selected",
+                            ),
+                        );
+                    }
+                    Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
+                        memory.intent = Some(intent_from_source(payload, &context, canonical));
+                        record_source_extraction_metadata(
+                            &mut memory,
+                            payload,
+                            canonical,
+                            &input.source_message,
+                        );
+                        memory.selected_capability = Some(option_id.clone());
+                        memory.source_intent = payload
+                            .source_intent
+                            .as_ref()
+                            .map(serde_json::to_value)
+                            .transpose()
+                            .ok()
+                            .flatten();
+                        memory.retrieval_evidence =
+                            clarification_audit("semantic", &option_id, &input, payload);
+                        pending_clarification = Some(None);
+                        return execute_selected_capability(
+                            memory,
+                            context.recent_messages.len(),
+                            option_id,
+                            catalog,
+                            client,
+                            fineract_pool,
+                            canonical,
+                            pending_clarification,
+                        )
+                        .await;
+                    }
+                    Ok(ClarificationOutcome::FreeFormOther { .. }) => {
+                        memory.intent = Some(intent_from_source(payload, &context, canonical));
+                        record_source_extraction_metadata(
+                            &mut memory,
+                            payload,
+                            canonical,
+                            &input.source_message,
+                        );
+                        memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
+                        pending_clarification = Some(None);
+                        return graph_result(
+                            memory,
+                            TerminalState::WaitingForUserInput,
+                            "clarification_other_selected",
+                            ResponseBuilder::free_form_other_prompt(),
+                            context.recent_messages.len(),
+                            pending_clarification,
+                            clarification_transitions(
+                                TerminalState::WaitingForUserInput,
+                                "clarification_other_selected",
+                            ),
+                        );
+                    }
+                    Ok(outcome) => {
+                        memory.intent = Some(intent);
+                        memory.retrieval_evidence = json!({ "clarification_outcome": outcome });
+                        return graph_result(
+                            memory,
+                            TerminalState::WaitingForUserInput,
+                            "clarification_unresolved",
+                            ResponseBuilder::clarification(payload.clone()),
+                            context.recent_messages.len(),
+                            None,
+                            clarification_transitions(
+                                TerminalState::WaitingForUserInput,
+                                "clarification_unresolved",
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        memory.warnings = json!([{ "message": error.to_string() }]);
+                    }
+                }
+            }
+            let plan = RetrievalPlan::new(
+                message,
+                &intent,
+                allow_all_capabilities(&context),
+                allowed_capabilities(&context),
+            );
+            memory.intent = Some(intent);
+            match memory.intent.as_ref().map(|intent| &intent.intent) {
+                Some(AssistantIntentKind::Greeting) => {
+                    return graph_result(
+                        memory,
+                        TerminalState::Completed,
+                        "greeting",
+                        ResponseBuilder::greeting(),
+                        context.recent_messages.len(),
+                        None,
+                        simple_intent_transitions(TerminalState::Completed, "greeting"),
+                    );
+                }
+                Some(AssistantIntentKind::Help) => {
+                    return graph_result(
+                        memory,
+                        TerminalState::Completed,
+                        "help",
+                        ResponseBuilder::help(),
+                        context.recent_messages.len(),
+                        None,
+                        simple_intent_transitions(TerminalState::Completed, "help"),
+                    );
+                }
+                Some(AssistantIntentKind::UnsafeRequest) => {
+                    return graph_result(
+                        memory,
+                        TerminalState::BlockedByPolicy,
+                        "unsafe_request",
+                        ResponseBuilder::policy_blocked("This request is blocked by policy."),
+                        context.recent_messages.len(),
+                        None,
+                        simple_intent_transitions(TerminalState::BlockedByPolicy, "unsafe_request"),
+                    );
+                }
+                Some(AssistantIntentKind::OutOfDomain) => {
+                    return graph_result(
+                        memory,
+                        TerminalState::OutOfDomain,
+                        "out_of_domain",
+                        ResponseBuilder::out_of_domain(),
+                        context.recent_messages.len(),
+                        None,
+                        simple_intent_transitions(TerminalState::OutOfDomain, "out_of_domain"),
+                    );
+                }
+                Some(AssistantIntentKind::UnsupportedInDomain) => {
+                    return graph_result(
+                        memory,
+                        TerminalState::Unsupported,
+                        "unsupported_in_domain",
+                        ResponseBuilder::unsupported(),
+                        context.recent_messages.len(),
+                        None,
+                        simple_intent_transitions(
+                            TerminalState::Unsupported,
+                            "unsupported_in_domain",
+                        ),
+                    );
+                }
+                _ => {}
+            }
+            tracing::info!(
+                target: "assistant::mapping",
+                query = %plan.query_text,
+                domain = ?plan.domain,
+                request_shape = ?plan.request_shape,
+                allow_all_capabilities = plan.allow_all_capabilities,
+                allowed_capabilities = ?plan.allowed_capabilities,
+                compatible_ids = ?catalog.map(|c| crate::assistant::retrieval::compatible_ids(&plan, c)),
+                "retrieval plan"
+            );
+            let evidence = RetrievalEngine::retrieve(&plan, llm, knowledge, catalog).await;
+            let (evidence, warning) = match evidence {
+                Ok(evidence) => (evidence, None),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            };
+            tracing::info!(
+                target: "assistant::mapping",
+                evidence_count = evidence.len(),
+                evidence = ?evidence.iter().map(|e| (&e.capability_id, e.score)).collect::<Vec<_>>(),
+                warning = ?warning,
+                "retrieval evidence"
+            );
+            let decision = LlmReranker::new(llm)
+                .rerank(&plan.query_text, &evidence)
+                .await;
+            tracing::info!(
+                target: "assistant::mapping",
+                decision = ?decision,
+                "reranker decision"
+            );
+            memory.retrieval_plan = json!(plan);
+            memory.retrieval_evidence = json!(evidence);
+            memory.evidence_decision = json!(decision);
+            if let Some(message) = warning {
+                memory.warnings = json!([{ "message": message }]);
+            }
+            if let Some(routed_intent) = memory.intent.as_ref() {
+                retrieval_trace = Some(build_retrieval_trace(
+                    routed_intent,
+                    &plan,
+                    &evidence,
+                    &decision,
+                ));
+            }
+            match decision.decision {
+                RerankerVerdict::Select => {
+                    // capability_id is required when Select; treat a missing/
+                    // unknown id as ambiguity and Clarify with alternatives.
+                    let capability_id = decision.capability_id.clone().and_then(|id| {
+                        evidence.iter().any(|e| e.capability_id == id).then_some(id)
+                    });
+                    match capability_id {
+                        Some(capability_id) => {
+                            memory.selected_capability = Some(capability_id.clone());
+                            let mut result = execute_selected_capability(
+                                memory,
+                                context.recent_messages.len(),
+                                capability_id,
+                                catalog,
+                                client,
+                                fineract_pool,
+                                canonical,
+                                None,
+                            )
+                            .await;
+                            result.retrieval_trace = retrieval_trace.clone();
+                            return result;
+                        }
+                        None => {
+                            let payload = clarification_payload_for(
+                                &plan,
+                                &evidence,
+                                &decision.alternatives,
+                                memory
+                                    .intent
+                                    .as_ref()
+                                    .map(|intent| source_intent_snapshot(intent, message)),
+                            );
+                            pending_clarification = Some(Some(payload.clone()));
+                            (
+                                TerminalState::WaitingForUserInput,
+                                "weak_retrieval_evidence",
+                                ResponseBuilder::clarification(payload),
+                            )
+                        }
+                    }
+                }
+                RerankerVerdict::Clarify => {
+                    let payload = clarification_payload_for(
+                        &plan,
+                        &evidence,
+                        &decision.alternatives,
+                        memory
+                            .intent
+                            .as_ref()
+                            .map(|intent| source_intent_snapshot(intent, message)),
+                    );
+                    pending_clarification = Some(Some(payload.clone()));
+                    (
+                        TerminalState::WaitingForUserInput,
+                        "weak_retrieval_evidence",
+                        ResponseBuilder::clarification(payload),
+                    )
+                }
+                RerankerVerdict::Unsupported => (
+                    TerminalState::Unsupported,
+                    "unsupported_in_domain",
+                    ResponseBuilder::unsupported(),
+                ),
+            }
+        }
+        Err(error) => {
+            memory.warnings = json!([{ "message": error.to_string() }]);
+            (
+                TerminalState::FailedOperational,
+                "intent_route_failed",
+                ResponseBuilder::error(),
+            )
+        }
+    };
+    memory.graph_state = "complete_or_wait".into();
+    memory.terminal_state = Some(terminal);
+    memory.execution_summary = json!({
+        "runtime": "semantic_assistant_graph",
+        "recent_message_count": context.recent_messages.len(),
+    });
+    memory.structured_response = Some(response);
+    let transitions = vec![
+        GraphTransition {
+            from: GraphState::ReceiveMessage,
+            to: Some(GraphState::BuildContextWindow),
+            terminal: None,
+            reason: "message_received".into(),
+        },
+        GraphTransition {
+            from: GraphState::BuildContextWindow,
+            to: Some(GraphState::RouteIntent),
+            terminal: None,
+            reason: "context_built".into(),
+        },
+        GraphTransition {
+            from: GraphState::RouteIntent,
+            to: Some(GraphState::PlanRetrieval),
+            terminal: None,
+            reason: "intent_routed".into(),
+        },
+        GraphTransition {
+            from: GraphState::PlanRetrieval,
+            to: Some(GraphState::RetrieveKnowledge),
+            terminal: None,
+            reason: "retrieval_planned".into(),
+        },
+        GraphTransition {
+            from: GraphState::RetrieveKnowledge,
+            to: Some(GraphState::EvaluateEvidence),
+            terminal: None,
+            reason: "knowledge_retrieved".into(),
+        },
+        GraphTransition {
+            from: GraphState::EvaluateEvidence,
+            to: Some(GraphState::CompleteOrWait),
+            terminal: None,
+            reason: "evidence_evaluated".into(),
+        },
+        GraphTransition {
+            from: GraphState::CompleteOrWait,
+            to: None,
+            terminal: Some(terminal),
+            reason: reason.into(),
+        },
+    ];
+    AssistantGraphTopology::new()
+        .validate_sequence(&transitions)
+        .expect("assistant runtime produced illegal graph transitions");
+    GraphRuntimeResult {
+        memory,
+        transitions,
+        pending_clarification,
+        retrieval_trace,
+    }
+}

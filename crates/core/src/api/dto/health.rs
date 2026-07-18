@@ -8,5 +8,5 @@ pub(crate) struct HealthResponse {
 #[derive(Serialize)]
 pub(crate) struct ReadyResponse {
     pub(crate) status: &'static str,
-    pub(crate) checks: crate::db::ReadinessChecks,
+    pub(crate) checks: crate::database::ReadinessChecks,
 }

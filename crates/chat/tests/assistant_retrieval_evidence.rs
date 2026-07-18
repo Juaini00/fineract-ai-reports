@@ -164,7 +164,7 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
 
 #[test]
 fn primary_runtime_does_not_use_legacy_prompt_shape_helpers() {
-    let runtime = include_str!("../src/assistant/runtime/mod.rs");
+    let runtime = include_str!("../src/assistant/execution/runtime/mod.rs");
     assert!(!runtime.contains("capability_matches_prompt_shape"));
     assert!(!runtime.contains("domain_terms"));
 }

@@ -4,10 +4,11 @@ use app_core::api::AppState;
 use app_core::auth::service::AuthService;
 use axum::{Router, extract::FromRef};
 
+use crate::assistant::llm::planner_client::LlmPlannerClient;
 use crate::audit::spawn_audit_worker;
-use crate::chat::llm::LlmPlannerClient;
-use crate::chat::repository::{JobRepository, MessageRepository, SessionRepository};
-use crate::chat::service::{JobService, MessageService, SessionService};
+use crate::conversation::repository::{MessageRepository, SessionRepository};
+use crate::conversation::service::{MessageService, SessionService};
+use crate::job::{JobRepository, JobService};
 use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator};
 use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::sync::KnowledgeSyncService;

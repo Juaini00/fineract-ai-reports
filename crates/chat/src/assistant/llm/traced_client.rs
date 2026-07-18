@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::assistant::llm_trace_repo::{LlmTrace, LlmTraceRepository};
+use crate::audit::llm_trace_repository::{LlmTrace, LlmTraceRepository};
 
 use super::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse};
 

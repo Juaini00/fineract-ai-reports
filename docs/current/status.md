@@ -7,7 +7,7 @@ This file is the short source of truth for the current development state. Detail
 - Rust workspace has exactly three crates: `app`, `core`, and `chat`.
 - `app` is the binary entrypoint and composition root.
 - `core` owns shared foundation: config, tracing, database pools, API primitives, auth, extractors, response envelope, validation, and `ClientContext`.
-- `chat` owns chat/reporting routes, services, repositories, job pipeline, catalog use, retrieval, planner, policy guard, executor, structured assistant responses/rendering, and checkpoint/event handling.
+- `chat` owns `api`, `conversation`, durable `job`, assistant understanding/context/retrieval/state/execution/presentation/LLM boundaries, `knowledge`, `policy`, `audit`, and the legacy approved-SQL executor.
 - Do not add `api`, `infra`, `runtime`, `knowledge`, `reporting`, or `ai_report_*` crates yet.
 
 ## Completed foundation
@@ -17,7 +17,7 @@ This file is the short source of truth for the current development state. Detail
 - App and Fineract database pools.
 - `/health` and `/ready`.
 - App database migrations.
-- User login, access-token `GET /auth/me`, refresh-token cookie flow, API key generation/hashing, and `X-API-Key` chat authentication.
+- User login, access-token `GET /auth/me`, refresh-token cookie flow, API key generation/hashing, and bearer-session JWT chat authentication requiring `role == "admin"`; optional `X-API-Key` only narrows office scope voluntarily.
 - Chat session/job durable tables and state revision.
 - Chat job endpoints, clarification response endpoint, background worker, Redis-backed SSE fallback behavior.
 - Authorization helpers for capability, office scope, and PII.
@@ -48,6 +48,6 @@ This file is the short source of truth for the current development state. Detail
 - Group/center remains conditional.
 - Loan, accounting/GL, tax, custom datatables, and audit/users/operations remain deferred until domain promotion.
 
-## Known documentation sync issue
+## Known documentation caveat
 
-Some old long-form docs referenced older catalog snapshots such as 16/16, classifier-first runtime behavior, or overstated semantic assistant completion. Current docs should treat the assistant as partial foundation plus active full-brain migration until the target architecture plan passes its acceptance gates. Deterministic extraction is partial hardening, not complete.
+Some old long-form docs still reference older catalog snapshots such as 16/16 or classifier-first runtime behavior. This current-status file and the synchronized architecture docs take precedence. Deterministic extraction remains partial hardening, not complete.

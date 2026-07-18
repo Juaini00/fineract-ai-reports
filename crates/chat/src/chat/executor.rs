@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use sqlx::{AssertSqlSafe, PgPool, Row, SqlSafeStr};
 
-use crate::chat::planner::{ExecutionPlan, PolicyDecision, PolicyDecisionStatus};
+use crate::assistant::execution::plan::{ExecutionPlan, PolicyDecision, PolicyDecisionStatus};
 use crate::knowledge::model::{KnowledgeCatalog, QueryParameter};
 
 pub async fn execute_plan(
@@ -171,7 +171,7 @@ mod tests {
     use std::path::Path;
 
     use super::{integer_param, resolve_sql_path};
-    use crate::chat::planner::{
+    use crate::assistant::execution::plan::{
         AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
     };
     use crate::knowledge::model::QueryParameter;
