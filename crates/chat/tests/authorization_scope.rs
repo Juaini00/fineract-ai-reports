@@ -106,27 +106,6 @@ async fn authorization_scope_rejects_non_admin_with_stable_code() {
     assert_eq!(body["error"]["code"], "role_not_authorized");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn authorization_scope_rejects_present_but_invalid_api_key() {
-    // A valid admin bearer passes the role gate; a present-but-invalid X-API-Key
-    // must fail closed (401), NOT silently escalate to unrestricted office scope.
-    let app = spawn_app().await;
-    let token = app.login_admin().await;
-
-    let response = app
-        .http
-        .post(format!("{}/catalog/validate", app.base_url))
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header("X-API-Key", "air_definitely-not-a-real-key")
-        .send()
-        .await
-        .expect("validate request");
-
-    assert_eq!(response.status(), 401);
-    let body: Value = response.json().await.expect("error body");
-    assert_eq!(body["success"], Value::Bool(false));
-}
-
 #[test]
 fn authorization_scope_policy_uses_only_concrete_principal_grants() {
     let mut principal = principal();

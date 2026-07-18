@@ -5,7 +5,7 @@ use axum::{
 
 use crate::{api::error::ApiError, auth::model::PrincipalContext, auth::service::AuthService};
 
-use super::authenticated_client::{AuthenticatedClient, X_API_KEY_HEADER};
+use super::authenticated_client::AuthenticatedClient;
 use super::authenticated_user::AuthenticatedUser;
 
 pub struct AuthenticatedChatClient(pub PrincipalContext);
@@ -26,24 +26,19 @@ where
             ));
         }
 
-        // Carry the API key's office restriction into the principal so downstream
-        // admin projection can intersect (not overwrite) the tenant office set.
-        // An empty scope means "unrestricted", but that is only legitimate when
-        // NO X-API-Key accompanies the request (bearer-only callers) or the key
-        // sets `allow_all_offices`. A present-but-invalid key must fail closed —
-        // propagate the auth error rather than silently escalating to full tenant.
-        // A restricted key contributes its `allowed_office_ids`; the intersection
-        // happens in `chat::policy::authorization::project_admin_principal`.
-        let office_ids = if parts.headers.contains_key(X_API_KEY_HEADER) {
-            let AuthenticatedClient(client) =
-                AuthenticatedClient::from_request_parts(parts, state).await?;
-            if client.allow_all_offices {
-                Vec::new()
-            } else {
+        // Bearer is authoritative: a valid session authenticates the request no
+        // matter what the X-API-Key is. A *valid* key may still narrow office
+        // scope, contributing its `allowed_office_ids` (intersected downstream in
+        // `chat::policy::authorization::project_admin_principal`). An absent,
+        // invalid, revoked, expired, or ownerless key contributes no restriction
+        // (empty scope = the bearer admin's full tenant reach). This cannot
+        // escalate — the bearer already grants full tenant access — so a bad key
+        // must never turn a bearer-authenticated request into a 401.
+        let office_ids = match AuthenticatedClient::from_request_parts(parts, state).await {
+            Ok(AuthenticatedClient(client)) if !client.allow_all_offices => {
                 client.allowed_office_ids
             }
-        } else {
-            Vec::new()
+            _ => Vec::new(),
         };
 
         Ok(Self(PrincipalContext {
