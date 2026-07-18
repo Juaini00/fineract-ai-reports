@@ -14,6 +14,7 @@ pub mod llm;
 pub mod llm_trace_repo;
 pub mod memory;
 pub mod renderer;
+pub mod reranker;
 pub mod response;
 pub mod response_builder;
 pub mod retrieval;
@@ -36,7 +37,7 @@ pub use context::{
 };
 pub use context_builder::ContextBuilder;
 pub use contracts::{assistant_contract_names, assistant_contract_schemas};
-pub use evidence::{Evidence, EvidenceDecision, EvidenceEvaluator, RetrievalPlan};
+pub use evidence::{Evidence, RetrievalPlan};
 pub use extraction::{
     DeterministicExtraction, PayloadCandidate, PayloadField, PayloadSource, PayloadTrust,
     TemporalProvenance, TemporalValidationError, extract_message_facts, extract_message_facts_at,
@@ -55,6 +56,7 @@ pub use llm::{FakeLlmClient, LlmClient, LlmPurpose, LlmResponse, SharedLlmClient
 pub use llm_trace_repo::{LlmTrace, LlmTraceRecord, LlmTraceRepository};
 pub use memory::{JobMemory, MemoryDelta, SessionMemory};
 pub use renderer::{MarkdownRenderer, ResponseRenderer};
+pub use reranker::{LlmReranker, RerankerDecision, RerankerVerdict};
 pub use response::{AssistantResponse, AssistantResponseType, EvidenceReference};
 pub use response_builder::ResponseBuilder;
 pub use retrieval::RetrievalEngine;

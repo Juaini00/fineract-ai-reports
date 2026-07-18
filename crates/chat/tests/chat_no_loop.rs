@@ -102,6 +102,12 @@ async fn run_scenario(app: &TestApp, api_key: &str, sc: &Scenario) {
     let after_turn1 = wait_until_not_running(app, api_key, &job_id).await;
     assert_graph_response_present(sc.label, &after_turn1);
     assert_no_legacy_empty_options_loop(sc.label, &after_turn1);
+    // Issue 02 (retrieval-pipeline-rework): reranker may now resolve a
+    // previously-ambiguous prompt on turn 1 with no clarification at all.
+    // A completed job cannot loop, so the invariant holds trivially.
+    if after_turn1["status"].as_str() == Some("completed") {
+        return;
+    }
 
     let resp = app
         .post_json(

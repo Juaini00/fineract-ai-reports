@@ -20,7 +20,7 @@ fn assistant_contracts_schemas_cover_boundary_roots() {
         "GraphTransition",
         "RetrievalPlan",
         "Evidence",
-        "EvidenceDecision",
+        "RerankerDecision",
         "ContextWindow",
         "JobMemory",
         "SessionMemory",

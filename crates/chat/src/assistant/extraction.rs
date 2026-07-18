@@ -336,6 +336,23 @@ fn resolve_temporal(
             );
         }
     }
+    // Bare "DATE to DATE" / "DATE sampai DATE" (parameter-only replies where
+    // the user drops the "from" keyword).
+    for window in tokens.windows(3) {
+        if matches!(window[1].0, "to" | "sampai")
+            && looks_like_iso_date(window[0].0)
+            && looks_like_iso_date(window[2].0)
+        {
+            let from = parse_date(window[0].0)?;
+            let to = parse_date(window[2].0)?;
+            return finish(
+                from,
+                to,
+                "inclusive_explicit_range",
+                [window[0].1, window[2].2],
+            );
+        }
+    }
 
     let relative: &[(&[&str], &str)] = &[
         (&["today"], "today"),
@@ -407,6 +424,21 @@ fn resolve_temporal(
         .filter(|token| looks_like_iso_date(token.0))
         .collect::<Vec<_>>();
     if date_tokens.len() == 1 {
+        // If the message has an explicit range keyword ("from" / "dari" /
+        // "since") before the sole ISO date, the user meant a range that is
+        // missing its upper bound. Treat as ambiguous so the executor
+        // surfaces "missing parameter to_date" instead of silently
+        // collapsing to a single-day window.
+        let has_range_lead_in = tokens
+            .iter()
+            .take_while(|token| token.0 != date_tokens[0].0)
+            .any(|token| matches!(token.0, "from" | "dari" | "since"));
+        if has_range_lead_in {
+            return Err(invalid(
+                "temporal_missing_to_date",
+                "missing parameter to_date: provide an inclusive from..to range.",
+            ));
+        }
         let date = parse_date(date_tokens[0].0)?;
         return finish(
             date,

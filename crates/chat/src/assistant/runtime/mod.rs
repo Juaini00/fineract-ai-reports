@@ -17,10 +17,11 @@ use crate::assistant::{
     JobMemory, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
     PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
     TerminalState, deterministic_observations,
-    evidence::{Evidence, EvidenceDecision, EvidenceEvaluator, RetrievalPlan},
+    evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
     merge_observations, original_request_observations,
+    reranker::{LlmReranker, RerankerDecision, RerankerVerdict},
     response::{ResponseAction, ResponseActionType},
     response_builder::finish,
     retrieval::RetrievalEngine,
@@ -555,11 +556,13 @@ impl AssistantGraphRuntime {
                     warning = ?warning,
                     "retrieval evidence"
                 );
-                let decision = EvidenceEvaluator.evaluate(&plan, &evidence);
+                let decision = LlmReranker::new(llm)
+                    .rerank(&plan.query_text, &evidence)
+                    .await;
                 tracing::info!(
                     target: "assistant::mapping",
                     decision = ?decision,
-                    "evidence decision"
+                    "reranker decision"
                 );
                 memory.retrieval_plan = json!(plan);
                 memory.retrieval_evidence = json!(evidence);
@@ -575,30 +578,54 @@ impl AssistantGraphRuntime {
                         &decision,
                     ));
                 }
-                match decision {
-                    EvidenceDecision::Select { capability_id } => {
-                        memory.selected_capability = Some(capability_id.clone());
-                        let mut result = execute_selected_capability(
-                            memory,
-                            context.recent_messages.len(),
-                            capability_id,
-                            catalog,
-                            client,
-                            fineract_pool,
-                            canonical,
-                            None,
-                        )
-                        .await;
-                        // execute_selected_capability builds its own GraphRuntimeResult
-                        // (trace: None) internally, so reattach the trace built above
-                        // from this decision's plan/evidence.
-                        result.retrieval_trace = retrieval_trace.clone();
-                        return result;
+                match decision.decision {
+                    RerankerVerdict::Select => {
+                        // capability_id is required when Select; treat a missing/
+                        // unknown id as ambiguity and Clarify with alternatives.
+                        let capability_id = decision.capability_id.clone().and_then(|id| {
+                            evidence.iter().any(|e| e.capability_id == id).then_some(id)
+                        });
+                        match capability_id {
+                            Some(capability_id) => {
+                                memory.selected_capability = Some(capability_id.clone());
+                                let mut result = execute_selected_capability(
+                                    memory,
+                                    context.recent_messages.len(),
+                                    capability_id,
+                                    catalog,
+                                    client,
+                                    fineract_pool,
+                                    canonical,
+                                    None,
+                                )
+                                .await;
+                                result.retrieval_trace = retrieval_trace.clone();
+                                return result;
+                            }
+                            None => {
+                                let payload = clarification_payload_for(
+                                    &plan,
+                                    &evidence,
+                                    &decision.alternatives,
+                                    memory
+                                        .intent
+                                        .as_ref()
+                                        .map(|intent| source_intent_snapshot(intent, message)),
+                                );
+                                pending_clarification = Some(Some(payload.clone()));
+                                (
+                                    TerminalState::WaitingForUserInput,
+                                    "weak_retrieval_evidence",
+                                    ResponseBuilder::clarification(payload),
+                                )
+                            }
+                        }
                     }
-                    EvidenceDecision::Clarify => {
-                        let payload = clarification_payload(
+                    RerankerVerdict::Clarify => {
+                        let payload = clarification_payload_for(
                             &plan,
                             &evidence,
+                            &decision.alternatives,
                             memory
                                 .intent
                                 .as_ref()
@@ -611,20 +638,10 @@ impl AssistantGraphRuntime {
                             ResponseBuilder::clarification(payload),
                         )
                     }
-                    EvidenceDecision::UnsupportedInDomain => (
+                    RerankerVerdict::Unsupported => (
                         TerminalState::Unsupported,
                         "unsupported_in_domain",
                         ResponseBuilder::unsupported(),
-                    ),
-                    EvidenceDecision::OutOfDomain => (
-                        TerminalState::OutOfDomain,
-                        "out_of_domain",
-                        ResponseBuilder::out_of_domain(),
-                    ),
-                    EvidenceDecision::BlockedByPolicy => (
-                        TerminalState::BlockedByPolicy,
-                        "unsafe_request",
-                        ResponseBuilder::policy_blocked("This request is blocked by policy."),
                     ),
                 }
             }
@@ -1607,6 +1624,56 @@ fn execution_transitions(terminal: TerminalState, reason: &str) -> Vec<GraphTran
     ]
 }
 
+/// Variant of `clarification_payload` that prefers the reranker's `alternatives`
+/// (capability ids) as the option pool, filtering evidence to those ids. Falls
+/// back to the top-3 evidence when `alternatives` is empty (parity with the
+/// pre-reranker payload builder).
+fn clarification_payload_for(
+    plan: &RetrievalPlan,
+    evidence: &[Evidence],
+    alternatives: &[String],
+    source_intent: Option<SourceIntentSnapshot>,
+) -> ClarificationPayload {
+    if alternatives.is_empty() {
+        return clarification_payload(plan, evidence, source_intent);
+    }
+    let by_id: std::collections::HashMap<&str, &Evidence> = evidence
+        .iter()
+        .map(|e| (e.capability_id.as_str(), e))
+        .collect();
+    let mut options: Vec<ClarificationOption> = alternatives
+        .iter()
+        .filter_map(|id| {
+            by_id.get(id.as_str()).map(|e| ClarificationOption {
+                id: e.capability_id.clone(),
+                label: e.title.clone(),
+                description: e
+                    .metadata
+                    .get("description")
+                    .or_else(|| e.metadata.get("summary"))
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            })
+        })
+        .collect();
+    if options.is_empty() {
+        options = fallback_clarification_options(&plan.domain);
+    }
+    options.push(ClarificationOption {
+        id: OTHER_CLARIFICATION_OPTION_ID.into(),
+        label: "Others".into(),
+        description: Some("Let me describe what I need in my own words.".into()),
+    });
+    ClarificationPayload {
+        question: "Which report should I use?".into(),
+        options,
+        attempt: 1,
+        source_intent,
+        allow_free_text: true,
+        is_missing_execution_parameters: false,
+    }
+}
+
 fn clarification_payload(
     plan: &RetrievalPlan,
     evidence: &[Evidence],
@@ -1751,7 +1818,7 @@ pub fn build_retrieval_trace(
     intent: &AssistantIntent,
     plan: &crate::assistant::evidence::RetrievalPlan,
     evidence: &[crate::assistant::evidence::Evidence],
-    decision: &EvidenceDecision,
+    decision: &RerankerDecision,
 ) -> serde_json::Value {
     let candidates: Vec<_> = evidence
         .iter()
@@ -1766,16 +1833,18 @@ pub fn build_retrieval_trace(
         })
         .collect();
 
-    let decision_json = match decision {
-        EvidenceDecision::Select { capability_id } => json!({
-            "kind": "select",
-            "capability_id": capability_id,
-        }),
-        EvidenceDecision::Clarify => json!({ "kind": "clarify" }),
-        EvidenceDecision::UnsupportedInDomain => json!({ "kind": "unsupported_in_domain" }),
-        EvidenceDecision::OutOfDomain => json!({ "kind": "out_of_domain" }),
-        EvidenceDecision::BlockedByPolicy => json!({ "kind": "blocked_by_policy" }),
+    let kind = match decision.decision {
+        RerankerVerdict::Select => "select",
+        RerankerVerdict::Clarify => "clarify",
+        RerankerVerdict::Unsupported => "unsupported",
     };
+    let decision_json = json!({
+        "kind": kind,
+        "capability_id": decision.capability_id,
+        "confidence": decision.confidence,
+        "alternatives": decision.alternatives,
+        "reason": decision.reason,
+    });
 
     json!({
         "router_intent": {

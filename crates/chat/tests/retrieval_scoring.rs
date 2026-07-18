@@ -200,7 +200,8 @@ fn top_n_by_savings_account_count_selected_for_rank_query() {
 
 #[test]
 fn build_retrieval_trace_emits_expected_top_level_keys() {
-    use chat::assistant::evidence::{Evidence, EvidenceDecision};
+    use chat::assistant::evidence::Evidence;
+    use chat::assistant::reranker::RerankerDecision;
     use chat::assistant::runtime::build_retrieval_trace;
 
     let intent = make_intent(AssistantDomain::Client, RequestSubject::Client);
@@ -213,9 +214,7 @@ fn build_retrieval_trace_emits_expected_top_level_keys() {
         metadata: serde_json::json!({}),
         conflicting: false,
     }];
-    let decision = EvidenceDecision::Select {
-        capability_id: "capability_a".into(),
-    };
+    let decision = RerankerDecision::select("capability_a", 0.9);
 
     let trace = build_retrieval_trace(&intent, &plan, &evidence, &decision);
 
