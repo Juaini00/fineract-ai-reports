@@ -57,21 +57,21 @@ Same question with `{{API_KEY}}` (offices `[1, 2, 3]`) should return a larger to
 
 ## C. PII flag
 
-`can_view_pii: false` is persisted and queryable. Queries with `pii` output fields are blocked by policy before execution unless the API key has `can_view_pii: true`; for allowed PII jobs, the formatter still receives the policy decision and omits PII fields when access is false.
+`can_view_pii: false` is persisted and queryable, **but it does not bind in the chat pipeline.** Chat is admin-only and runs an admin projection (`project_admin_principal`) that forces `can_view_pii = true` on every job, so `pii`-class columns are not hidden by `response_builder::is_hidden` regardless of the key's flag. The masking logic itself works and is unit-tested — it is simply never reached with `can_view_pii = false` on the chat path. Treat the per-key flag as advisory for chat; it would bind only on a non-admin path or if scope were attached to the bearer/user identity instead.
 
 ## D. Job ownership
 
 ```bash
-curl {{BASE_URL}}/chat/jobs/{{JOB_ID}} -H "Authorization: Bearer {{OTHER_API_KEY}}"
+curl {{BASE_URL}}/chat/jobs/{{JOB_ID}} -H "Authorization: Bearer {{OTHER_SESSION_JWT}}"
 ```
 
 ### Expected
-- HTTP 404 — `JobRepository::get_for_client` filters by `api_key_id`. Jobs are not visible across keys, even with a valid key.
+- HTTP 404 — jobs and sessions are scoped by `user_id` from the Bearer session, **not** by `api_key_id`. Jobs are not visible across users. (The older `JobRepository::get_for_client` / per-`api_key_id` filter no longer exists.)
 
 ## Failure modes
 
 | Trigger | Expected |
 | --- | --- |
-| API key with empty `allowed_capabilities` | Classification short-circuits to `unsupported` (`source: "no_allowed_capabilities"`) — no Voyage call, no Fineract query |
+| API key with empty `allowed_capabilities` | **No effect in chat** — `project_admin_principal` overwrites `capability_ids` with every `approved_mvp` capability, so classification proceeds normally. The short-circuit applies only where a non-admin projection is used |
 | Office id in request outside scope | `evaluate_policy` returns `denied` with `reason: "office_outside_scope"`; executor refuses to run |
 | `policy_decision.status = "denied"` | Executor `bail!`s; job ends `failed` with `code: "execution_failed"` |
