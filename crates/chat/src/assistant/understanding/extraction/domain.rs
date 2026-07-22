@@ -13,7 +13,9 @@ pub(super) fn extract_domain(message: &str) -> Option<AssistantDomain> {
 }
 
 pub(super) fn extract_metric(message: &str) -> Option<&'static str> {
-    if message.contains("most savings account") || message.contains("number of savings account") {
+    if (message.contains("most savings account") || message.contains("number of savings account"))
+        && !message.contains("transaction")
+    {
         Some("savings_account_count")
     } else if message.contains("highest balance") || message.contains("savings balance") {
         Some("savings_balance")

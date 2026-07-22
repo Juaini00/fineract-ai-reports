@@ -145,14 +145,16 @@ fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
     };
-    let error = params_from_verified(
+    let params = params_from_verified(
         &query,
         &intent_with_quantity(Some(Quantity::TopN { value: 20 })),
         None,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(error.to_string().contains("missing parameter limit"));
+    // The hallucinated 20 is still discarded; the run falls back to the default
+    // rather than bouncing a clarification back at the user.
+    assert_eq!(params["limit"], super::parameters::DEFAULT_REPORT_LIMIT);
 }
 
 #[test]

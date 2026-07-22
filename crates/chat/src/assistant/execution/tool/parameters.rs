@@ -1,12 +1,20 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
+/// Supplies a value for a required row-limit parameter the user did not specify.
+pub(super) const DEFAULT_REPORT_LIMIT: i64 = 10;
+
+fn default_required_parameter(parameter: &QueryParameter) -> Option<Value> {
+    (parameter.required && matches!(parameter.name.as_str(), "limit" | "top_n"))
+        .then(|| json!(DEFAULT_REPORT_LIMIT))
+}
+
 use crate::{
     assistant::{
         AssistantEntityType, AssistantIntent, ConstraintField, DeterministicExtraction,
         EffectiveConstraints, LimitMode, ListPatch, Quantity, TypedFactValue,
     },
-    knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge},
+    knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
 };
 
 pub fn approved_default_patch(
@@ -72,7 +80,8 @@ pub(super) fn normalize_effective_parameters(
         if parameter.source.as_deref() == Some("authorized_scope") {
             continue;
         }
-        let value = effective_parameter(effective, &parameter.name);
+        let value = effective_parameter(effective, &parameter.name)
+            .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
         } else if parameter.required {
@@ -245,7 +254,8 @@ pub(super) fn params_from_verified(
             "office" | "office_name" => office.map(|value| json!(value)),
             "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
             _ => None,
-        };
+        }
+        .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
         } else if parameter.required {

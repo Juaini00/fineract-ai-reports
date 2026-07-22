@@ -9,6 +9,19 @@ pub struct CreateChatSessionInput {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RenameChatSessionInput {
+    pub client: PrincipalContext,
+    pub session_id: Uuid,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteChatSessionResponse {
+    pub session_id: Uuid,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatSession {
     pub id: Uuid,

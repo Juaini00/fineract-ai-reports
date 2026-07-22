@@ -11,6 +11,7 @@ use crate::{
         AssistantResponseType, ContextReference,
         llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
     },
+    knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator},
     knowledge::model::KnowledgeCatalog,
 };
 
@@ -725,6 +726,174 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         result.memory.retrieval_evidence["clarification_outcome"],
         "unresolved"
     );
+    assert_eq!(
+        result
+            .pending_clarification
+            .as_ref()
+            .and_then(|payload| payload.as_ref())
+            .map(|payload| payload.attempt),
+        Some(2)
+    );
+}
+
+#[tokio::test]
+async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        pending_context(false, 3, "savings_deposit_top_n"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        RuntimeUserInput {
+            message: "stale option".into(),
+            source_message: "stale option".into(),
+            selected_option_id: Some("unavailable_report".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    assert_eq!(result.pending_clarification, Some(None));
+    assert_eq!(
+        result.memory.structured_response.unwrap().title.as_deref(),
+        Some("Describe your request")
+    );
+}
+
+#[tokio::test]
+async fn selected_option_with_conflicting_message_reclarifies_and_increments_attempt() {
+    let mut context = pending_context(false, 1, "client_top_n_by_deposit_volume");
+    context.active_domain = Some("client".into());
+    context
+        .pending_clarification
+        .as_mut()
+        .unwrap()
+        .source_intent
+        .as_mut()
+        .unwrap()
+        .domain = AssistantDomain::Client;
+    let catalog = Arc::new(runtime_test_catalog());
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["client_top_n_by_deposit_volume".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let message = "show 10 clients with the most savings accounts";
+
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        context,
+        None,
+        None,
+        None,
+        None,
+        Some(&catalog),
+        Some(&client),
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: Some("client_top_n_by_deposit_volume".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|payload| payload.as_ref())
+        .expect("conflict clarification");
+    assert_eq!(payload.attempt, 2);
+    assert!(payload.question.contains("requested metric"));
+    assert_eq!(
+        result.memory.terminal_state,
+        Some(TerminalState::WaitingForUserInput)
+    );
+}
+
+#[tokio::test]
+async fn source_month_survives_selection_and_limit_falls_back_to_default() {
+    let mut context = pending_context(false, 1, "organization_office_activity_ranking");
+    context.active_domain = Some("organization".into());
+    let source = context
+        .pending_clarification
+        .as_mut()
+        .unwrap()
+        .source_intent
+        .as_mut()
+        .unwrap();
+    source.prompt =
+        "give me the report with the most savings account transactions this month".into();
+    source.domain = AssistantDomain::Organization;
+    let catalog = Arc::new(runtime_test_catalog());
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["organization_office_activity_ranking".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let message = "Rank offices by savings transaction volume";
+
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        context,
+        None,
+        None,
+        None,
+        None,
+        Some(&catalog),
+        Some(&client),
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: Some("organization_office_activity_ranking".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    // An unspecified row count defaults instead of bouncing a clarification back.
+    if let Some(payload) = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|payload| payload.as_ref())
+    {
+        assert!(
+            !payload.question.contains("missing parameter limit")
+                && !payload.question.contains("from_date"),
+            "unexpected clarification: {}",
+            payload.question
+        );
+    }
+    let constraints = &result.memory.intent.as_ref().unwrap().constraints;
+    assert!(constraints.from_date.is_some());
+    assert!(constraints.to_date.is_some());
+}
+
+fn runtime_test_catalog() -> KnowledgeCatalog {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
+        .load()
+        .unwrap();
+    KnowledgeValidator::validate(&catalog).unwrap();
+    catalog
 }
 
 #[test]
@@ -753,6 +922,46 @@ fn clarification_payload_empty_evidence_uses_real_capabilities() {
             .iter()
             .any(|option| option.id == "refine_metric")
     );
+}
+
+#[test]
+fn clarification_options_show_period_already_given_in_the_request() {
+    let evidence = vec![Evidence {
+        capability_id: "savings_deposit_top_n".into(),
+        title: "Top Savings Deposits".into(),
+        score: 0.9,
+        source_type: "capability".into(),
+        metadata: json!({
+            "description": "Return the largest savings deposit transactions for a date range within the caller's authorized office scope."
+        }),
+        conflicting: false,
+    }];
+    let intent = AssistantIntent {
+        intent: AssistantIntentKind::ReportRequest,
+        domain: AssistantDomain::Savings,
+        request_shape: Default::default(),
+        language: AssistantLanguage::En,
+        entities: Vec::new(),
+        constraints: crate::assistant::AssistantConstraints {
+            from_date: Some("2026-07-01".into()),
+            to_date: Some("2026-07-31".into()),
+            ..Default::default()
+        },
+        context_reference: ContextReference::None,
+        source: None,
+        confidence: 0.9,
+        reason: "test".into(),
+    };
+    let source_intent = source_intent_snapshot(&intent, "top savings this month");
+
+    let payload = clarification_payload(&test_plan(), &evidence, Some(source_intent));
+
+    let description = payload.options[0].description.clone().unwrap();
+    assert!(
+        description.contains("2026-07-01 to 2026-07-31"),
+        "expected resolved period in option description, got: {description}"
+    );
+    assert!(!description.contains("a date range"));
 }
 
 fn test_plan() -> RetrievalPlan {
@@ -838,4 +1047,156 @@ fn prefer_current_turn_extraction_keeps_current_candidates_when_present() {
     let merged = prefer_current_turn_extraction(source, current.clone());
 
     assert_eq!(merged.candidates, current.candidates);
+}
+
+fn pending_context(missing_parameters: bool, attempt: u32, capability_id: &str) -> ContextWindow {
+    ContextWindow {
+        summary: None,
+        active_domain: Some("savings".into()),
+        selected_entities: json!({}),
+        recent_messages: Vec::new(),
+        relevant_jobs: Vec::new(),
+        pending_clarification: Some(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: Uuid::nil(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
+            question: "Please clarify".into(),
+            options: vec![
+                ClarificationOption {
+                    id: capability_id.into(),
+                    label: capability_id.into(),
+                    description: None,
+                    fields: Vec::new(),
+                },
+                ClarificationOption {
+                    id: OTHER_CLARIFICATION_OPTION_ID.into(),
+                    label: "Others".into(),
+                    description: None,
+                    fields: Vec::new(),
+                },
+            ],
+            fields: Vec::new(),
+            attempt,
+            source_intent: Some(SourceIntentSnapshot {
+                prompt: "show the largest savings deposits".into(),
+                normalized_prompt: None,
+                intent: AssistantIntentKind::ReportRequest,
+                domain: AssistantDomain::Savings,
+                request_shape: Default::default(),
+                entities: Vec::new(),
+                constraints: Default::default(),
+                context_reference: ContextReference::None,
+                confidence: 0.9,
+                reason: "test".into(),
+            }),
+            allow_free_text: true,
+            is_missing_execution_parameters: missing_parameters,
+        }),
+        source_intent: None,
+        source_snippets: Vec::new(),
+        client_scope: json!({ "allow_all_capabilities": true }),
+        warnings: Vec::new(),
+    }
+}
+
+#[test]
+fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
+    let context = pending_context(false, 1, "savings_deposit_top_n");
+    let payload = context.pending_clarification.as_ref().unwrap();
+    let message = "Rank offices by savings transaction volume this month";
+
+    let outcome = resolve_pending_clarification(
+        &RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: Some("others".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+        payload,
+        &empty_memory(),
+        &context,
+    );
+
+    assert_eq!(
+        outcome,
+        Some(ClarificationOutcome::NewRequest {
+            message: message.into(),
+            confidence: 1.0,
+        })
+    );
+}
+
+#[tokio::test]
+async fn others_continues_missing_parameters_with_message_facts() {
+    let message = "this month";
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        pending_context(true, 1, "savings_deposit_top_n"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: Some("others".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        result.memory.selected_capability.as_deref(),
+        Some("savings_deposit_top_n")
+    );
+    assert!(
+        result
+            .memory
+            .intent
+            .as_ref()
+            .unwrap()
+            .constraints
+            .from_date
+            .is_some()
+    );
+    assert_eq!(result.pending_clarification, Some(None));
+}
+
+#[tokio::test]
+async fn long_message_continues_missing_parameters() {
+    let message = "Please use every transaction from this current month for the report";
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        pending_context(true, 1, "savings_deposit_top_n"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        result.memory.selected_capability.as_deref(),
+        Some("savings_deposit_top_n")
+    );
+    assert_eq!(result.pending_clarification, Some(None));
 }

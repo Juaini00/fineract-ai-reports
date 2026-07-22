@@ -101,6 +101,30 @@ impl TestApp {
             .expect("http post bearer")
     }
 
+    pub async fn patch_json_bearer(
+        &self,
+        path: &str,
+        token: &str,
+        body: &Value,
+    ) -> reqwest::Response {
+        self.http
+            .patch(format!("{}{path}", self.base_url))
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await
+            .expect("http patch bearer")
+    }
+
+    pub async fn delete_bearer(&self, path: &str, token: &str) -> reqwest::Response {
+        self.http
+            .delete(format!("{}{path}", self.base_url))
+            .bearer_auth(token)
+            .send()
+            .await
+            .expect("http delete bearer")
+    }
+
     /// POST JSON with an optional `X-API-Key`.
     pub async fn post_json(
         &self,

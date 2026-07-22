@@ -119,6 +119,24 @@ pub(super) fn planned_clarification(
     }
 }
 
+pub(super) const MAX_CLARIFICATION_ATTEMPTS: u32 = 3;
+
+pub(super) fn incremented_clarification(payload: &ClarificationPayload) -> ClarificationPayload {
+    let mut next = payload.clone();
+    next.attempt = next.attempt.saturating_add(1);
+    next.revision = next.revision.saturating_add(1);
+    next
+}
+
+pub(super) fn is_meaningful_free_text(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    !normalized.is_empty()
+        && normalized != OTHER_CLARIFICATION_OPTION_ID
+        && normalized != "other"
+        && !normalized.starts_with("let me describe")
+        && !normalized.starts_with("i'll describe")
+}
+
 pub(super) fn pending_clarification_intent(context: &ContextWindow) -> AssistantIntent {
     let quantity = pending_clarification_quantity(context);
     AssistantIntent {
@@ -164,10 +182,6 @@ pub(super) fn first_standalone_limit(content: &str) -> Option<i64> {
         })
 }
 
-pub(super) fn is_parameter_reply(message: &str) -> bool {
-    message.split_whitespace().count() <= 6
-}
-
 pub(super) fn resolve_pending_clarification(
     input: &RuntimeUserInput,
     payload: &ClarificationPayload,
@@ -179,9 +193,24 @@ pub(super) fn resolve_pending_clarification(
         .as_deref()
         .map(|id| {
             if id.eq_ignore_ascii_case(OTHER_CLARIFICATION_OPTION_ID) {
-                ClarificationOutcome::FreeFormOther {
-                    text: String::new(),
-                    confidence: 1.0,
+                if !payload
+                    .options
+                    .iter()
+                    .any(|option| option.id.eq_ignore_ascii_case(id))
+                {
+                    ClarificationOutcome::Unresolved {
+                        reason: "selected option is not available".into(),
+                    }
+                } else if is_meaningful_free_text(&input.source_message) {
+                    ClarificationOutcome::NewRequest {
+                        message: input.source_message.clone(),
+                        confidence: 1.0,
+                    }
+                } else {
+                    ClarificationOutcome::FreeFormOther {
+                        text: String::new(),
+                        confidence: 1.0,
+                    }
                 }
             } else if clarification_candidate_allowed(id, payload, memory, context) {
                 ClarificationOutcome::SelectedOption {
@@ -337,12 +366,13 @@ pub(super) fn clarification_payload_for(
             by_id.get(id.as_str()).map(|e| ClarificationOption {
                 id: e.capability_id.clone(),
                 label: e.title.clone(),
-                description: e
-                    .metadata
-                    .get("description")
-                    .or_else(|| e.metadata.get("summary"))
-                    .and_then(|value| value.as_str())
-                    .map(ToOwned::to_owned),
+                description: clarification_option_description(
+                    e.metadata
+                        .get("description")
+                        .or_else(|| e.metadata.get("summary"))
+                        .and_then(|value| value.as_str()),
+                    source_intent.as_ref(),
+                ),
                 fields: Vec::new(),
             })
         })
@@ -382,12 +412,13 @@ pub(super) fn clarification_payload(
         .map(|item| ClarificationOption {
             id: item.capability_id.clone(),
             label: item.title.clone(),
-            description: item
-                .metadata
-                .get("description")
-                .or_else(|| item.metadata.get("summary"))
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned),
+            description: clarification_option_description(
+                item.metadata
+                    .get("description")
+                    .or_else(|| item.metadata.get("summary"))
+                    .and_then(|value| value.as_str()),
+                source_intent.as_ref(),
+            ),
             fields: Vec::new(),
         })
         .collect();
@@ -413,6 +444,23 @@ pub(super) fn clarification_payload(
         allow_free_text: true,
         is_missing_execution_parameters: false,
     }
+}
+
+fn clarification_option_description(
+    description: Option<&str>,
+    source_intent: Option<&SourceIntentSnapshot>,
+) -> Option<String> {
+    let period = source_intent.and_then(|intent| {
+        Some(format!(
+            "{} to {}",
+            intent.constraints.from_date.as_ref()?,
+            intent.constraints.to_date.as_ref()?,
+        ))
+    });
+    description.map(|description| match period {
+        Some(period) => description.replace("a date range", &period),
+        None => description.to_owned(),
+    })
 }
 
 pub(super) fn fallback_clarification_options(domain: &AssistantDomain) -> Vec<ClarificationOption> {

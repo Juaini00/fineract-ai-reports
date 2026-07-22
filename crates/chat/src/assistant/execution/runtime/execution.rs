@@ -63,6 +63,9 @@ pub(super) async fn execute_selected_capability(
             ClarificationPlanResult::Clarify { mut payload, .. } => {
                 // The payload carries stable field metadata; do not expose parser errors.
                 payload.question = error.message.clone();
+                if let Some(active_payload) = active_payload {
+                    payload.attempt = active_payload.attempt.saturating_add(1);
+                }
                 payload
             }
             ClarificationPlanResult::Complete { .. } => ClarificationPayload {
@@ -131,7 +134,13 @@ pub(super) async fn execute_selected_capability(
                         Some(source_intent_snapshot(intent, &intent.reason)),
                         active_payload,
                     ) {
-                        ClarificationPlanResult::Clarify { payload, .. } => payload,
+                        ClarificationPlanResult::Clarify { mut payload, .. } => {
+                            payload.question = error.to_string();
+                            if let Some(active_payload) = active_payload {
+                                payload.attempt = active_payload.attempt.saturating_add(1);
+                            }
+                            payload
+                        }
                         ClarificationPlanResult::Complete { .. } => {
                             tracing::error!(target: "assistant::execute_selected_capability", capability_id = %capability_id, "planner reported complete after missing parameters");
                             return graph_result(

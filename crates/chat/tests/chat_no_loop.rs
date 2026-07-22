@@ -108,12 +108,21 @@ async fn run_scenario(app: &TestApp, api_key: &str, sc: &Scenario) {
     if after_turn1["status"].as_str() == Some("completed") {
         return;
     }
+    let before_response = after_turn1["result_json"]["structured_response"].clone();
+    assert!(
+        before_response["options"]
+            .as_array()
+            .is_some_and(|options| options.iter().any(|option| option["id"] == "others")),
+        "[{}] clarification must expose Others: {}",
+        sc.label,
+        after_turn1
+    );
 
     let resp = app
         .post_json(
             &format!("/chat/jobs/{job_id}/responses"),
             Some(api_key),
-            &json!({ "message": sc.free_text_reply }),
+            &json!({ "option_id": "others", "message": sc.free_text_reply }),
         )
         .await;
     assert!(
@@ -129,6 +138,11 @@ async fn run_scenario(app: &TestApp, api_key: &str, sc: &Scenario) {
     let after_turn2 = fetch_job(app, api_key, &job_id).await;
     assert_graph_response_present(sc.label, &after_turn2);
     assert_no_legacy_empty_options_loop(sc.label, &after_turn2);
+    assert_ne!(
+        after_turn2["result_json"]["structured_response"], before_response,
+        "[{}] dual-field Others response repeated the identical clarification",
+        sc.label
+    );
     assert_eq!(
         after_turn2["id"], job_id,
         "[{}] response changed job",

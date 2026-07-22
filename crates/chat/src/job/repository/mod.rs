@@ -150,33 +150,59 @@ impl JobRepository {
         let row = sqlx::query_as::<_, ChatJobRow>(
             r#"
             SELECT
-                id,
-                session_id,
-                user_id,
-                api_key_id,
-                user_message_id,
-                status,
-                current_step,
-                resume_from_step,
-                message,
-                state_json,
-                state_revision,
-                result_json,
-                error_json,
-                created_at,
-                updated_at,
-                expires_at,
-                completed_at,
-                failed_at,
-                cancelled_at
-            FROM chat_jobs
-            WHERE id = $1
-              AND (user_id = $2 OR ($3 AND user_id IS NULL))
+                cj.id,
+                cj.session_id,
+                cj.user_id,
+                cj.api_key_id,
+                cj.user_message_id,
+                cj.status,
+                cj.current_step,
+                cj.resume_from_step,
+                cj.message,
+                cj.state_json,
+                cj.state_revision,
+                cj.result_json,
+                cj.error_json,
+                cj.created_at,
+                cj.updated_at,
+                cj.expires_at,
+                cj.completed_at,
+                cj.failed_at,
+                cj.cancelled_at
+            FROM chat_jobs cj
+            JOIN chat_sessions cs ON cs.id = cj.session_id
+            WHERE cj.id = $1
+              AND (cj.user_id = $2 OR ($3 AND cj.user_id IS NULL))
+              AND cs.archived_at IS NULL
             "#,
         )
         .bind(job_id)
         .bind(user_id)
         .bind(include_legacy)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(Into::into))
+    }
+
+    pub async fn get_internal_for_user(
+        &self,
+        job_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<ChatJob>> {
+        let row = sqlx::query_as::<_, ChatJobRow>(
+            r#"
+            SELECT cj.id, cj.session_id, cj.user_id, cj.api_key_id, cj.user_message_id, cj.status,
+                   cj.current_step, cj.resume_from_step, cj.message, cj.state_json, cj.state_revision,
+                   cj.result_json, cj.error_json, cj.created_at, cj.updated_at, cj.expires_at,
+                   cj.completed_at, cj.failed_at, cj.cancelled_at
+            FROM chat_jobs cj
+            JOIN chat_sessions cs ON cs.id = cj.session_id
+            WHERE cj.id = $1 AND cj.user_id = $2 AND cs.archived_at IS NULL
+            "#,
+        )
+        .bind(job_id)
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -326,11 +352,13 @@ impl JobRepository {
 
         let Some(target) = sqlx::query_as::<_, JobResponseTargetRow>(
             r#"
-            SELECT session_id, current_step, status
-            FROM chat_jobs
-            WHERE id = $1
-              AND user_id = $2
-            FOR UPDATE
+            SELECT cj.session_id, cj.current_step, cj.status
+            FROM chat_jobs cj
+            JOIN chat_sessions cs ON cs.id = cj.session_id
+            WHERE cj.id = $1
+              AND cj.user_id = $2
+              AND cs.archived_at IS NULL
+            FOR UPDATE OF cj, cs
             "#,
         )
         .bind(job_id)

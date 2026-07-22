@@ -116,6 +116,58 @@ impl SessionRepository {
 
         Ok(row.map(Into::into))
     }
+
+    pub async fn rename_for_user(
+        &self,
+        session_id: Uuid,
+        user_id: Uuid,
+        include_legacy: bool,
+        title: &str,
+    ) -> Result<Option<ChatSession>> {
+        let row = sqlx::query_as::<_, ChatSessionRow>(
+            r#"
+            UPDATE chat_sessions
+            SET title = $4, updated_at = now()
+            WHERE id = $1
+              AND (user_id = $2 OR ($3 AND user_id IS NULL))
+              AND archived_at IS NULL
+            RETURNING id, user_id, api_key_id, title, status, context_json,
+                      created_at, updated_at, expires_at, archived_at
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(include_legacy)
+        .bind(title)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(Into::into))
+    }
+
+    pub async fn archive_for_user(
+        &self,
+        session_id: Uuid,
+        user_id: Uuid,
+        include_legacy: bool,
+    ) -> Result<Option<Uuid>> {
+        sqlx::query_scalar(
+            r#"
+            UPDATE chat_sessions
+            SET status = 'archived', archived_at = now(), updated_at = now()
+            WHERE id = $1
+              AND (user_id = $2 OR ($3 AND user_id IS NULL))
+              AND archived_at IS NULL
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(include_legacy)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
 }
 
 #[derive(Debug, FromRow)]

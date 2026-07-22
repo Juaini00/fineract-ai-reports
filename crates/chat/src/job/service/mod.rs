@@ -157,7 +157,7 @@ impl JobService {
             .await?;
         let job_created_at = self
             .jobs
-            .get_for_user(created.job_id, client.user_id, false)
+            .get_internal_for_user(created.job_id, client.user_id)
             .await?
             .expect("newly created job exists")
             .created_at;
@@ -218,8 +218,6 @@ impl JobService {
 
     #[tracing::instrument(skip(self, input), fields(user_id = %input.client.user_id, job_id = %input.job_id))]
     pub async fn respond(&self, input: RespondToChatJobInput) -> Result<RespondToChatJobOutcome> {
-        let mut client = input.client;
-        project_admin_principal(&mut client, &self.catalog, &self.fineract_pool).await?;
         let structured = input.clarification_id.is_some()
             || input.clarification_revision.is_some()
             || !input.answers.is_empty();
@@ -232,6 +230,17 @@ impl JobService {
                 "clarification_revision"
             };
             return Ok(RespondToChatJobOutcome::Validation(vec![field.to_owned()]));
+        }
+
+        let mut client = input.client;
+        project_admin_principal(&mut client, &self.catalog, &self.fineract_pool).await?;
+        if self
+            .jobs
+            .get_internal_for_user(input.job_id, client.user_id)
+            .await?
+            .is_none()
+        {
+            return Ok(RespondToChatJobOutcome::NotFound);
         }
         let payload = if structured {
             match self.job_memory.get(input.job_id, client.user_id).await? {
@@ -286,7 +295,7 @@ impl JobService {
         };
         let reference_instant = self
             .jobs
-            .get_for_user(input.job_id, client.user_id, false)
+            .get_internal_for_user(input.job_id, client.user_id)
             .await?
             .expect("responded job exists")
             .created_at;
