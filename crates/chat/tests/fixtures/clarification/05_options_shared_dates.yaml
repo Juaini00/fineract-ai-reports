@@ -1,0 +1,13 @@
+id: options_shared_dates
+bucket: options_shared_fields
+candidate_capabilities: [savings_deposit_total, savings_deposit_top_n]
+expected:
+  direct_execution: false
+  kind: select_option
+  option_ids: [savings_deposit_total, savings_deposit_top_n, others]
+  shared_field_keys: [date_range]
+  conditional_field_keys:
+    savings_deposit_total: []
+    savings_deposit_top_n: [limit]
+    others: []
+  must_not_ask: [search]

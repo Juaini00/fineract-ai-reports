@@ -1,0 +1,5 @@
+id: parallel_job_isolation_is_runtime_coverage
+bucket: parallel_job_isolation
+scenario_kind: runtime_state
+planner_assertion: false
+candidate_capabilities: [savings_deposit_total]

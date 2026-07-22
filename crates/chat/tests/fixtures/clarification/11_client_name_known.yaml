@@ -1,0 +1,12 @@
+id: client_name_known
+bucket: known_values
+candidate_capabilities: [client_name_lookup]
+known_facts:
+  person_name: { type: person_name, value: "Ada Lovelace" }
+coverage_inputs:
+  - key: search
+    state: positive
+expected:
+  direct_execution: true
+  capability_id: client_name_lookup
+  must_not_ask: [date_range, limit, search]

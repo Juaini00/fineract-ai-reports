@@ -1,0 +1,13 @@
+id: invalid_limit_value
+bucket: invalid_value
+scenario_kind: runtime_state
+planner_assertion: false
+candidate_capabilities: [savings_deposit_top_n]
+known_facts:
+  from_date: { type: date, value: "2026-01-01" }
+  to_date: { type: date, value: "2026-01-31" }
+  limit_mode: { type: limit_mode, value: top_n }
+  limit_value: { type: integer, value: 0 }
+coverage_inputs:
+  - key: limit
+    state: invalid

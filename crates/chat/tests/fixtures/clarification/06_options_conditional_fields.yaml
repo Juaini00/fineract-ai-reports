@@ -1,0 +1,22 @@
+id: options_conditional_fields
+bucket: options_conditional_fields
+candidate_capabilities: [savings_deposit_top_n, client_name_lookup]
+known_facts:
+  from_date: { type: date, value: "2026-01-01" }
+  to_date: { type: date, value: "2026-01-31" }
+coverage_inputs:
+  - key: date_range
+    state: positive
+  - key: limit
+    state: missing
+  - key: search
+    state: missing
+expected:
+  direct_execution: false
+  kind: select_option
+  option_ids: [savings_deposit_top_n, client_name_lookup, others]
+  conditional_field_keys:
+    savings_deposit_top_n: [limit]
+    client_name_lookup: [search]
+    others: []
+  must_not_ask: [date_range]

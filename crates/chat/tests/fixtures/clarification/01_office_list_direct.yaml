@@ -1,0 +1,7 @@
+id: office_summary_direct
+bucket: direct_execution
+candidate_capabilities: [organization_office_summary]
+expected:
+  direct_execution: true
+  capability_id: organization_office_summary
+  must_not_ask: [date_range, limit, search]
