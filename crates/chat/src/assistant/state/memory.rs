@@ -35,6 +35,7 @@ pub struct JobMemory {
     pub execution_summary: serde_json::Value,
     pub structured_response: Option<AssistantResponse>,
     #[serde(default)]
+    pub pending_clarification: Option<ClarificationPayload>,
     #[schemars(with = "Option<String>")]
     pub planner_snapshot_id: Option<Uuid>,
     #[serde(default)]

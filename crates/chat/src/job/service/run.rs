@@ -9,7 +9,6 @@ impl JobService {
         input: RuntimeUserInput,
         canonical_turn: CanonicalTurn,
     ) -> Result<Option<JobRunOutcome>> {
-        let context = self.context_builder.build(session_id, client).await?;
         let memory = match self.job_memory.get(job_id, client.user_id).await? {
             Some(memory) => memory,
             None => {
@@ -18,6 +17,19 @@ impl JobService {
                     .await?
             }
         };
+        let context = self
+            .context_builder
+            .build_with_pending(
+                session_id,
+                client,
+                memory.pending_clarification.clone(),
+                memory.pending_clarification.is_none()
+                    && matches!(
+                        memory.terminal_state,
+                        Some(TerminalState::WaitingForUserInput)
+                    ),
+            )
+            .await?;
         let expected_revision = memory.revision;
         let runtime_llm = self.llm.as_ref().map(|llm| {
             Arc::new(TracedLlmClient::new(
@@ -87,10 +99,14 @@ impl JobService {
                 .ok();
         }
         AssistantGraphTopology::new().validate_sequence(&result.transitions)?;
+        if let Some(pending_clarification) = result.pending_clarification.clone() {
+            result.memory.pending_clarification = pending_clarification;
+        }
         let memory = self
             .job_memory
             .save(&result.memory, expected_revision)
             .await?;
+        // The session value remains a temporary projection for legacy consumers; job memory is authoritative.
         self.session_memory
             .update_after_job(
                 session_id,

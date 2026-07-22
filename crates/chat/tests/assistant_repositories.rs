@@ -7,38 +7,64 @@ use chat::assistant::{
     LlmTraceRepository, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
     SessionMemoryRepository,
 };
+use chat::conversation::repository::SessionRepository;
+use chat::job::repository::JobRepository;
 use chrono::Utc;
 use common::spawn_app;
 use serde_json::json;
 use uuid::Uuid;
 
 async fn insert_session_and_job(app: &common::TestApp, user_id: Uuid) -> (Uuid, Uuid) {
-    let session_id = Uuid::new_v4();
-    let job_id = Uuid::new_v4();
-    sqlx::query(
-        r#"
-        INSERT INTO chat_sessions (id, user_id, status)
-        VALUES ($1, $2, 'active')
-        "#,
-    )
-    .bind(session_id)
-    .bind(user_id)
-    .execute(&app.app_pool)
-    .await
-    .expect("insert chat session");
-    sqlx::query(
-        r#"
-        INSERT INTO chat_jobs (id, session_id, user_id, status, current_step, message, expires_at)
-        VALUES ($1, $2, $3, 'queued', 'queued', 'show savings', now() + interval '1 hour')
-        "#,
-    )
-    .bind(job_id)
-    .bind(session_id)
-    .bind(user_id)
-    .execute(&app.app_pool)
-    .await
-    .expect("insert chat job");
-    (session_id, job_id)
+    let sessions = SessionRepository::new(app.app_pool.clone());
+    let jobs = JobRepository::new(app.app_pool.clone(), sessions);
+    let created = jobs
+        .create(
+            user_id,
+            None,
+            "show savings".into(),
+            json!({}),
+            json!({}),
+            json!({}),
+            json!({}),
+        )
+        .await
+        .expect("create chat job")
+        .expect("owned session");
+    (created.session_id, created.job_id)
+}
+
+async fn insert_job_for_session(app: &common::TestApp, user_id: Uuid, session_id: Uuid) -> Uuid {
+    let sessions = SessionRepository::new(app.app_pool.clone());
+    JobRepository::new(app.app_pool.clone(), sessions)
+        .create(
+            user_id,
+            Some(session_id),
+            "show savings".into(),
+            json!({}),
+            json!({}),
+            json!({}),
+            json!({}),
+        )
+        .await
+        .expect("create chat job")
+        .expect("owned session")
+        .job_id
+}
+
+fn pending_clarification(id: Uuid) -> ClarificationPayload {
+    ClarificationPayload {
+        version: CLARIFICATION_VERSION_1,
+        id,
+        revision: 0,
+        kind: ClarificationKind::SelectOption,
+        question: "Which savings report?".into(),
+        options: vec![],
+        fields: vec![],
+        attempt: 1,
+        source_intent: None,
+        allow_free_text: true,
+        is_missing_execution_parameters: false,
+    }
 }
 
 #[tokio::test]
@@ -62,18 +88,62 @@ async fn job_memory_create_read_update_and_revision_conflict() {
     memory.tool_params = json!({ "office_ids": [1] });
     memory.policy_decision = json!({ "allowed": true });
     memory.execution_summary = json!({ "rows": 1 });
+    memory.pending_clarification = Some(pending_clarification(Uuid::new_v4()));
     memory.warnings = json!(["none"]);
 
     let saved = repo.save(&memory, 0).await.unwrap();
     assert_eq!(saved.revision, 1);
     assert_eq!(saved.source_intent, Some(json!({ "domain": "savings" })));
     assert_eq!(saved.tool_params["office_ids"], json!([1]));
+    assert_eq!(saved.pending_clarification, memory.pending_clarification);
     assert!(repo.save(&memory, 0).await.is_err());
 
     let read = repo.get(job_id, user_id).await.unwrap().unwrap();
     assert_eq!(
         read.selected_capability.as_deref(),
         Some("savings_deposit_total")
+    );
+    assert_eq!(read.pending_clarification, memory.pending_clarification);
+}
+
+#[tokio::test]
+async fn job_memory_keeps_pending_clarifications_isolated_between_jobs() {
+    let app = spawn_app().await;
+    let user_id = app.admin_user_id().await;
+    let (session_id, first_job_id) = insert_session_and_job(&app, user_id).await;
+    let second_job_id = insert_job_for_session(&app, user_id, session_id).await;
+    let repo = JobMemoryRepository::new(app.app_pool.clone());
+
+    let mut first = repo
+        .create(first_job_id, user_id, "receive_message")
+        .await
+        .unwrap();
+    let mut second = repo
+        .create(second_job_id, user_id, "receive_message")
+        .await
+        .unwrap();
+    let first_pending = pending_clarification(Uuid::new_v4());
+    let second_pending = pending_clarification(Uuid::new_v4());
+    first.pending_clarification = Some(first_pending.clone());
+    second.pending_clarification = Some(second_pending.clone());
+
+    tokio::try_join!(repo.save(&first, 0), repo.save(&second, 0)).unwrap();
+
+    assert_eq!(
+        repo.get(first_job_id, user_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .pending_clarification,
+        Some(first_pending)
+    );
+    assert_eq!(
+        repo.get(second_job_id, user_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .pending_clarification,
+        Some(second_pending)
     );
 }
 

@@ -175,6 +175,7 @@ fn assistant_contracts_representative_round_trip() {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 1,
