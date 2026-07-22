@@ -8,9 +8,9 @@ Resolved:
 
 ## Implementation note (2026-07-22)
 
-Implementation landed in `4238389..526369e` (versioned contract through structured-clarification lifecycle tests). The series includes catalog input contracts, job-scoped pending clarification, typed response validation/provenance, bundled fields, delivery projections, behavior corpus, and lifecycle coverage. Documentation now describes the published client contract.
+Implementation landed in `4238389..7b14fa6` (versioned contract through structured-clarification lifecycle tests and documentation). The series includes catalog input contracts, job-scoped pending clarification, typed response validation/provenance, bundled fields, delivery projections, behavior corpus, and lifecycle coverage. Documentation now describes the published client contract.
 
-This issue remains active: final acceptance-gate verification and user acceptance are still required, and deprecated top-level options plus the non-authoritative session-projection compatibility path still need cleanup. Focused clarification suites now pass, including `savings_clarification_keeps_selected_capability_for_parameter_only_reply`, which was updated to assert the V1 `collect_fields` contract rather than obsolete top-level capability options. No completion claim is made from commit messages alone.
+Final offline acceptance verification passed: formatting, workspace check/clippy, the full `chat` test suite, and focused contract/catalog/corpus/no-loop suites. Migration `20260722120000_add_job_scoped_clarification` was applied and verified against the local development database with `sqlx migrate info` and the migration smoke test. This issue remains active for user acceptance and explicit cleanup of deprecated top-level options plus the non-authoritative session-projection compatibility path. No completion claim is made from commit messages alone.
 
 ## Problem
 
