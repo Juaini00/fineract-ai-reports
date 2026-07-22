@@ -14,8 +14,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::api::ChatAppState;
-use crate::api::dto::session::CreateChatSessionRequest;
-use crate::conversation::model::CreateChatSessionInput;
+use crate::api::dto::session::{CreateChatSessionRequest, RenameChatSessionRequest};
+use crate::conversation::model::{CreateChatSessionInput, RenameChatSessionInput};
 
 #[tracing::instrument(skip(state, client), fields(user_id = %client.user_id))]
 pub async fn list(
@@ -98,4 +98,47 @@ pub async fn list_messages(
     );
 
     Ok(response::success(StatusCode::OK, messages).into_response())
+}
+
+#[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id, session_id = %session_id))]
+pub async fn rename(
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    State(state): State<ChatAppState>,
+    Path(session_id): Path<Uuid>,
+    ValidatedJson(request): ValidatedJson<RenameChatSessionRequest>,
+) -> Result<Response, ApiError> {
+    let Some(session) = state
+        .chat
+        .sessions
+        .rename(RenameChatSessionInput {
+            client,
+            session_id,
+            title: request.title,
+        })
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found("chat session not found"));
+    };
+
+    Ok(response::success(StatusCode::OK, session).into_response())
+}
+
+#[tracing::instrument(skip(state, client), fields(user_id = %client.user_id, session_id = %session_id))]
+pub async fn archive(
+    AuthenticatedChatClient(client): AuthenticatedChatClient,
+    State(state): State<ChatAppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let Some(result) = state
+        .chat
+        .sessions
+        .archive(client, session_id)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found("chat session not found"));
+    };
+
+    Ok(response::success(StatusCode::OK, result).into_response())
 }

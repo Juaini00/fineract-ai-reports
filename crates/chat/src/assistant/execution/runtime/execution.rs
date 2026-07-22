@@ -8,6 +8,7 @@ pub(super) async fn execute_selected_capability(
     client: Option<&PrincipalContext>,
     fineract_pool: Option<&PgPool>,
     canonical: Option<&CanonicalRuntimeContext>,
+    clarification_attempt: u32,
     pending_clarification: Option<Option<ClarificationPayload>>,
 ) -> GraphRuntimeResult {
     let (Some(catalog), Some(client)) = (catalog, client) else {
@@ -56,7 +57,7 @@ pub(super) async fn execute_selected_capability(
                 label: capability_id.clone(),
                 description: Some("Retry this report after providing a valid date range.".into()),
             }],
-            attempt: 1,
+            attempt: clarification_attempt,
             source_intent: intent
                 .as_ref()
                 .map(|intent| source_intent_snapshot(intent, &intent.reason)),
@@ -121,7 +122,7 @@ pub(super) async fn execute_selected_capability(
                                 ),
                             },
                         ],
-                        attempt: 1,
+                        attempt: clarification_attempt,
                         source_intent: Some(source_intent_snapshot(intent, &intent.reason)),
                         allow_free_text: true,
                         is_missing_execution_parameters: true,

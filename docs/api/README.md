@@ -9,3 +9,4 @@ Use scenario docs for executable request flows. This directory is the lightweigh
 - Catalog validation: `POST /catalog/validate` — see [`scenarios/03-catalog-validate.md`](../scenarios/03-catalog-validate.md)
 - Vector index: `POST /vector-index/rebuild`, `GET /vector-index/status` — see [`scenarios/04-vector-index.md`](../scenarios/04-vector-index.md)
 - Chat: sessions, jobs, SSE, clarification responses — see [`scenarios/05-chat-session-and-job.md`](../scenarios/05-chat-session-and-job.md)
+- Frontend session management: payloads, response types, rename/delete behavior, and TypeScript examples — see [`current/frontend-session-management.md`](../current/frontend-session-management.md)

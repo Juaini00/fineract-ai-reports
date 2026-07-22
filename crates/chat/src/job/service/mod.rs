@@ -153,7 +153,7 @@ impl JobService {
             .await?;
         let job_created_at = self
             .jobs
-            .get_for_user(created.job_id, client.user_id, false)
+            .get_internal_for_user(created.job_id, client.user_id)
             .await?
             .expect("newly created job exists")
             .created_at;
@@ -230,7 +230,7 @@ impl JobService {
         };
         let reference_instant = self
             .jobs
-            .get_for_user(input.job_id, client.user_id, false)
+            .get_internal_for_user(input.job_id, client.user_id)
             .await?
             .expect("responded job exists")
             .created_at;

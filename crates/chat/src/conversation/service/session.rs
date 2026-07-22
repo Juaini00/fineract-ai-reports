@@ -2,7 +2,9 @@ use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
 use uuid::Uuid;
 
-use crate::conversation::model::{ChatSession, CreateChatSessionInput};
+use crate::conversation::model::{
+    ChatSession, CreateChatSessionInput, DeleteChatSessionResponse, RenameChatSessionInput,
+};
 use crate::conversation::repository::SessionRepository;
 
 #[derive(Clone)]
@@ -41,5 +43,34 @@ impl SessionService {
         self.sessions
             .get_for_user(session_id, client.user_id, client.role == "admin")
             .await
+    }
+
+    #[tracing::instrument(skip(self, input), fields(user_id = %input.client.user_id, session_id = %input.session_id))]
+    pub async fn rename(&self, input: RenameChatSessionInput) -> Result<Option<ChatSession>> {
+        self.sessions
+            .rename_for_user(
+                input.session_id,
+                input.client.user_id,
+                input.client.role == "admin",
+                input.title.trim(),
+            )
+            .await
+    }
+
+    #[tracing::instrument(skip(self, client), fields(user_id = %client.user_id, session_id = %session_id))]
+    pub async fn archive(
+        &self,
+        client: PrincipalContext,
+        session_id: Uuid,
+    ) -> Result<Option<DeleteChatSessionResponse>> {
+        self.sessions
+            .archive_for_user(session_id, client.user_id, client.role == "admin")
+            .await
+            .map(|archived| {
+                archived.map(|session_id| DeleteChatSessionResponse {
+                    session_id,
+                    deleted: true,
+                })
+            })
     }
 }

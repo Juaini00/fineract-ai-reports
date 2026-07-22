@@ -194,9 +194,7 @@ pub async fn respond(
         .map(|option_id| option_id.trim().to_owned())
         .filter(|option_id| !option_id.is_empty());
     let source_message = request.message;
-    let message = selected_option_id
-        .clone()
-        .unwrap_or_else(|| source_message.clone());
+    let message = source_message.clone();
 
     let Some(message) = state
         .chat

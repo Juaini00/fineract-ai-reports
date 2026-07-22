@@ -2,6 +2,10 @@
 
 This is the current client contract for authentication, chat sessions, same-job clarification, and live updates. Local base URL: `http://127.0.0.1:3007`.
 
+For a focused frontend contract covering all session payloads, mutation rules,
+cache behavior, and TypeScript examples, see
+[`frontend-session-management.md`](./frontend-session-management.md).
+
 ## Response envelope and errors
 
 Every JSON response uses the same envelope:
@@ -62,6 +66,8 @@ The server does not refresh access tokens automatically. Use one coordinated ref
 | `GET` | `/chat/sessions` | Admin bearer, optional key | `200` | List sessions. |
 | `POST` | `/chat/sessions` | Admin bearer, optional key | `201` | Create a session. |
 | `GET` | `/chat/sessions/{id}` | Admin bearer, optional key | `200` | Get one session. |
+| `PATCH` | `/chat/sessions/{id}` | Admin bearer, optional key | `200` | Rename an active session. |
+| `DELETE` | `/chat/sessions/{id}` | Admin bearer, optional key | `200` | Soft-delete an active session. |
 | `GET` | `/chat/sessions/{id}/messages` | Admin bearer, optional key | `200` | List session messages. |
 | `POST` | `/chat/jobs` | Admin bearer, optional key | `201` | Submit a prompt, optionally creating a session. |
 | `GET` | `/chat/jobs/{id}` | Admin bearer, optional key | `200` | Read durable job state. |
@@ -156,6 +162,28 @@ Both list and detail responses use the full session shape:
 }
 ```
 
+Rename an active session with `PATCH /chat/sessions/{id}`. The body requires a
+`title`; the server trims it and accepts 1-120 Unicode characters. Missing,
+`null`, blank, or overlong titles return the standard `400` validation envelope.
+The `200` response contains the updated full session shape above.
+
+```json
+{ "title": " Deposits Q4 " }
+```
+
+Delete a session with `DELETE /chat/sessions/{id}`. This immediately archives
+the session and returns `200`:
+
+```json
+{ "session_id": "<session_id>", "deleted": true }
+```
+
+Archived sessions disappear from session lists, detail, and messages. They also
+reject new jobs, job detail/audit/new SSE connections, and clarification
+responses with the same sanitized `404` used for missing or foreign resources.
+An already-running synchronous job may finish internally. Deletion does not
+purge PostgreSQL history, cancel work, restore sessions, or clean Redis state.
+
 `GET /chat/sessions/{id}/messages` returns messages in this shape:
 
 ```json
@@ -231,13 +259,31 @@ For a returned choice, send its exact `id` and useful visible text:
 }
 ```
 
-For missing parameters or ordinary free-text clarification, omit `option_id`:
+For missing parameters or ordinary free-text clarification, clients may omit `option_id`:
 
 ```json
 { "message": "Use 2026-07-01 through 2026-07-31" }
 ```
 
-This distinction matters: sending a capability option for parameter/free-text input can cause repeated capability-choice clarification.
+Clients that always send both fields may use `option_id: "others"` with the user's
+actual text in `message`:
+
+```json
+{ "option_id": "others", "message": "Use 2026-07-01 through 2026-07-31" }
+```
+
+The server always treats `message` as the authoritative user text and
+`option_id` only as a routing discriminator. During missing-parameter
+clarification, `others` continues the selected capability and merges facts from
+`message`. During capability-choice clarification, a meaningful `message`
+reroutes immediately as a new request on the same job. An empty or boilerplate
+Others message alone produces the separate “Describe your request” prompt.
+
+A regular capability `option_id` must be one of the active options. Its
+`message` may add parameters; if deterministic extraction recognizes a
+conflicting metric or domain, the server re-clarifies instead of executing the
+conflicting choice. Invalid/stale options never execute, and repeated unresolved
+responses eventually enter bounded free-text recovery.
 
 The handler currently awaits the same job's rerun, but its `201` data is the inserted clarification `ChatMessage` (`id`, `session_id`, `job_id`, `role`, `metadata_json`, `content`, `created_at`), not a job result. After `201`, fetch `GET /chat/jobs/{job_id}` and branch on that durable status; open SSE only if it is `queued` or `running`. A job that is inaccessible or not waiting currently returns `404`, not `409`.
 
@@ -406,8 +452,10 @@ async function respondToClarification(jobId: string, message: string, optionId?:
 
 // Choice button:
 await respondToClarification(jobId, option.label, option.id);
-// Missing parameter/free text:
+// Missing parameter/free text (optionId may be omitted):
 await respondToClarification(jobId, "Use July 2026");
+// Client implementations that always send both fields:
+await respondToClarification(jobId, "Use July 2026", "others");
 ```
 
 ## UI state and response rendering
@@ -497,7 +545,7 @@ Add `-H 'X-API-Key: <valid_key>'` only when testing narrowed API-key scope.
 | Chat returns `403 role_not_authorized` | Bearer user is not an active admin | Use an authorized admin account. |
 | Invalid API key does not return an auth error | Current optional-key behavior | The key is ignored; bearer auth remains authoritative. Replace the key if narrowed scope is required. |
 | New job is already completed or waiting | Handler awaited the graph | Handle the returned status before opening SSE. |
-| Clarification repeats capability choices | `option_id` sent for free text/parameters | Omit `option_id` unless selecting a returned choice. |
+| Clarification repeats capability choices | Stale/unavailable option or unresolved request text | Send an active option id, or send `option_id: "others"` with meaningful user text; fetch the durable job state after each response. |
 | Clarification response returns `404` | Job inaccessible or not waiting | Fetch the job/session and reconcile; current behavior is not `409`. After a `201`, also fetch the job because the response data is the inserted message. |
 | SSE repeats the same update | Latest Redis event is polled | Deduplicate and keep rendering idempotent. |
 | SSE closes after one status | Redis is not configured | Use the job response and `GET /chat/jobs/{id}` for durable state. |

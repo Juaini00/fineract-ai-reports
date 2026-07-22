@@ -1,5 +1,13 @@
 use super::*;
 
+pub(super) const MAX_CLARIFICATION_ATTEMPTS: u32 = 3;
+
+pub(super) fn incremented_clarification(payload: &ClarificationPayload) -> ClarificationPayload {
+    let mut next = payload.clone();
+    next.attempt = next.attempt.saturating_add(1);
+    next
+}
+
 pub(super) fn pending_clarification_intent(context: &ContextWindow) -> AssistantIntent {
     let quantity = pending_clarification_quantity(context);
     AssistantIntent {
@@ -45,8 +53,13 @@ pub(super) fn first_standalone_limit(content: &str) -> Option<i64> {
         })
 }
 
-pub(super) fn is_parameter_reply(message: &str) -> bool {
-    message.split_whitespace().count() <= 6
+pub(super) fn is_meaningful_free_text(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    !normalized.is_empty()
+        && normalized != OTHER_CLARIFICATION_OPTION_ID
+        && normalized != "other"
+        && !normalized.starts_with("let me describe")
+        && !normalized.starts_with("i'll describe")
 }
 
 pub(super) fn resolve_pending_clarification(
@@ -60,9 +73,24 @@ pub(super) fn resolve_pending_clarification(
         .as_deref()
         .map(|id| {
             if id.eq_ignore_ascii_case(OTHER_CLARIFICATION_OPTION_ID) {
-                ClarificationOutcome::FreeFormOther {
-                    text: String::new(),
-                    confidence: 1.0,
+                if !payload
+                    .options
+                    .iter()
+                    .any(|option| option.id.eq_ignore_ascii_case(id))
+                {
+                    ClarificationOutcome::Unresolved {
+                        reason: "selected option is not available".into(),
+                    }
+                } else if is_meaningful_free_text(&input.source_message) {
+                    ClarificationOutcome::NewRequest {
+                        message: input.source_message.clone(),
+                        confidence: 1.0,
+                    }
+                } else {
+                    ClarificationOutcome::FreeFormOther {
+                        text: String::new(),
+                        confidence: 1.0,
+                    }
                 }
             } else if clarification_candidate_allowed(id, payload, memory, context) {
                 ClarificationOutcome::SelectedOption {
@@ -193,6 +221,27 @@ pub(super) fn allow_all_capabilities(context: &ContextWindow) -> bool {
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
 }
+/// Capability descriptions are authored generically ("... for a date range ...").
+/// When the original request already pinned a period, substitute it so the
+/// options don't read as if the range is still unknown.
+fn resolved_period(source_intent: Option<&SourceIntentSnapshot>) -> Option<String> {
+    let constraints = &source_intent?.constraints;
+    Some(format!(
+        "{} to {}",
+        constraints.from_date.clone()?,
+        constraints.to_date.clone()?
+    ))
+}
+
+fn with_resolved_period(description: Option<String>, period: Option<&String>) -> Option<String> {
+    let (text, period) = (description?, period?);
+    Some(
+        text.replace("a given date range", period)
+            .replace("a date range", period)
+            .replace("the date range", period),
+    )
+}
+
 /// Variant of `clarification_payload` that prefers the reranker's `alternatives`
 /// (capability ids) as the option pool, filtering evidence to those ids. Falls
 /// back to the top-3 evidence when `alternatives` is empty (parity with the
@@ -210,18 +259,21 @@ pub(super) fn clarification_payload_for(
         .iter()
         .map(|e| (e.capability_id.as_str(), e))
         .collect();
+    let period = resolved_period(source_intent.as_ref());
     let mut options: Vec<ClarificationOption> = alternatives
         .iter()
         .filter_map(|id| {
             by_id.get(id.as_str()).map(|e| ClarificationOption {
                 id: e.capability_id.clone(),
                 label: e.title.clone(),
-                description: e
-                    .metadata
-                    .get("description")
-                    .or_else(|| e.metadata.get("summary"))
-                    .and_then(|value| value.as_str())
-                    .map(ToOwned::to_owned),
+                description: with_resolved_period(
+                    e.metadata
+                        .get("description")
+                        .or_else(|| e.metadata.get("summary"))
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned),
+                    period.as_ref(),
+                ),
             })
         })
         .collect();
@@ -248,18 +300,21 @@ pub(super) fn clarification_payload(
     evidence: &[Evidence],
     source_intent: Option<SourceIntentSnapshot>,
 ) -> ClarificationPayload {
+    let period = resolved_period(source_intent.as_ref());
     let mut options: Vec<ClarificationOption> = evidence
         .iter()
         .take(3)
         .map(|item| ClarificationOption {
             id: item.capability_id.clone(),
             label: item.title.clone(),
-            description: item
-                .metadata
-                .get("description")
-                .or_else(|| item.metadata.get("summary"))
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned),
+            description: with_resolved_period(
+                item.metadata
+                    .get("description")
+                    .or_else(|| item.metadata.get("summary"))
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                period.as_ref(),
+            ),
         })
         .collect();
     if options.is_empty() {

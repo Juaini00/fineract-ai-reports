@@ -85,6 +85,7 @@ pub(super) async fn complete_semantic_route(
                             client,
                             fineract_pool,
                             canonical,
+                            payload.attempt.saturating_add(1),
                             pending_clarification,
                         )
                         .await;
@@ -263,6 +264,7 @@ pub(super) async fn complete_semantic_route(
                                 client,
                                 fineract_pool,
                                 canonical,
+                                1,
                                 None,
                             )
                             .await;

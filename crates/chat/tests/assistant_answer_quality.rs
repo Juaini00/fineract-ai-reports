@@ -197,13 +197,19 @@ fn assert_sanitized(job: &Value) {
         "m_client",
         "m_savings",
         "```",
-        "|---",
         "stack backtrace",
         "panic",
         "routing failed",
     ] {
         assert!(!body.contains(forbidden), "leaked {forbidden}: {job}");
     }
+    // Table separators are legitimate inside the rendered markdown fields, but
+    // must never bleed into the plain-text message.
+    let message = structured_response(job)["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!message.contains("|---"), "leaked markdown table: {job}");
 }
 
 fn assert_no_table(job: &Value) {

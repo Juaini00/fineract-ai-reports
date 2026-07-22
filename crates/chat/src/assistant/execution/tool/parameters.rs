@@ -6,8 +6,21 @@ use crate::{
         AssistantEntityType, AssistantIntent, ConstraintField, DeterministicExtraction,
         EffectiveConstraints, LimitMode, ListPatch, Quantity, TypedFactValue,
     },
-    knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge},
+    knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
 };
+
+/// Reports rank "top" rows; asking the user for a row count they never thought
+/// about is worse UX than picking a sane page size.
+/// ponytail: one global default — move it into the capability YAML only when a
+/// report genuinely needs a different one.
+pub(super) const DEFAULT_REPORT_LIMIT: i64 = 10;
+
+/// Supplies a value for a required parameter the user never specified, so the
+/// run continues instead of bouncing back a clarification.
+fn default_required_parameter(parameter: &QueryParameter) -> Option<Value> {
+    (parameter.required && matches!(parameter.name.as_str(), "limit" | "top_n"))
+        .then(|| json!(DEFAULT_REPORT_LIMIT))
+}
 
 pub(super) fn normalize_effective_parameters(
     catalog: &KnowledgeCatalog,
@@ -36,7 +49,8 @@ pub(super) fn normalize_effective_parameters(
         if parameter.source.as_deref() == Some("authorized_scope") {
             continue;
         }
-        let value = effective_parameter(effective, &parameter.name);
+        let value = effective_parameter(effective, &parameter.name)
+            .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
         } else if parameter.required {
@@ -210,6 +224,7 @@ pub(super) fn params_from_verified(
             "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
             _ => None,
         };
+        let value = value.or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
         } else if parameter.required {

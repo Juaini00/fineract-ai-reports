@@ -12,6 +12,8 @@ This file is the short source of truth for the current development state. Detail
 
 ## Completed foundation
 
+- Chat sessions support owner-scoped rename and immediate soft archive; archived sessions and their job surfaces are hidden with sanitized `404` responses while persisted history is retained.
+
 - Baseline Rust workspace.
 - HTTP bootstrap, typed config, tracing, graceful startup.
 - App and Fineract database pools.
@@ -20,6 +22,7 @@ This file is the short source of truth for the current development state. Detail
 - User login, access-token `GET /auth/me`, refresh-token cookie flow, API key generation/hashing, and bearer-session JWT chat authentication requiring `role == "admin"`; optional `X-API-Key` only narrows office scope voluntarily.
 - Chat session/job durable tables and state revision.
 - Chat job endpoints, clarification response endpoint, background worker, Redis-backed SSE fallback behavior.
+- Clarification continuation treats `message` as authoritative when clients send both fields: `others` now continues missing parameters or reroutes meaningful new requests without discarding source constraints; recognized option/message conflicts re-clarify and unresolved retries are bounded.
 - Authorization helpers for capability, office scope, and PII.
 
 ## Catalog, retrieval, and assistant state

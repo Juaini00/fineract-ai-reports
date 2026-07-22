@@ -6,7 +6,12 @@ use crate::api::handlers::session;
 pub fn router() -> Router<ChatAppState> {
     Router::new()
         .route("/chat/sessions", get(session::list).post(session::create))
-        .route("/chat/sessions/{session_id}", get(session::get))
+        .route(
+            "/chat/sessions/{session_id}",
+            get(session::get)
+                .patch(session::rename)
+                .delete(session::archive),
+        )
         .route(
             "/chat/sessions/{session_id}/messages",
             get(session::list_messages),

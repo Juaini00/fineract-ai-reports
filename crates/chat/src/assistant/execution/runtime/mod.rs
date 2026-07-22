@@ -169,6 +169,7 @@ impl AssistantGraphRuntime {
     ) -> GraphRuntimeResult {
         let input = input.into();
         let message = input.message.as_str();
+        let mut clear_pending_after_reroute = false;
         if context
             .warnings
             .iter()
@@ -196,6 +197,44 @@ impl AssistantGraphRuntime {
                     },
                 ],
             );
+        }
+        if let Some(payload) = &context.pending_clarification
+            && payload.is_missing_execution_parameters
+            && input
+                .selected_option_id
+                .as_deref()
+                .is_none_or(|id| id.eq_ignore_ascii_case(OTHER_CLARIFICATION_OPTION_ID))
+            && let Some(capability_id) = continuation_capability(payload)
+        {
+            let mut intent = intent_from_source(payload, &context, canonical);
+            merge_deterministic_extraction_at(
+                &mut memory,
+                &mut intent,
+                &input.source_message,
+                canonical,
+            );
+            memory.intent = Some(intent);
+            record_source_extraction_metadata(
+                &mut memory,
+                payload,
+                canonical,
+                &input.source_message,
+            );
+            memory.selected_capability = Some(capability_id.clone());
+            memory.retrieval_evidence =
+                clarification_audit("missing_parameters", &capability_id, &input, payload);
+            return execute_selected_capability(
+                memory,
+                context.recent_messages.len(),
+                capability_id,
+                catalog,
+                client,
+                fineract_pool,
+                canonical,
+                payload.attempt.saturating_add(1),
+                Some(None),
+            )
+            .await;
         }
         if let Some(payload) = &context.pending_clarification
             && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
@@ -235,6 +274,7 @@ impl AssistantGraphRuntime {
                         client,
                         fineract_pool,
                         canonical,
+                        payload.attempt.saturating_add(1),
                         Some(None),
                     )
                     .await;
@@ -254,15 +294,34 @@ impl AssistantGraphRuntime {
                         ),
                     );
                 }
+                ClarificationOutcome::NewRequest { .. } => {
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "new_request", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    clear_pending_after_reroute = true;
+                }
                 ClarificationOutcome::Unresolved { .. } => {
                     memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    if payload.attempt >= MAX_CLARIFICATION_ATTEMPTS {
+                        return graph_result(
+                            memory,
+                            TerminalState::WaitingForUserInput,
+                            "clarification_recovery",
+                            ResponseBuilder::free_form_other_prompt(),
+                            context.recent_messages.len(),
+                            Some(None),
+                            clarification_transitions(
+                                TerminalState::WaitingForUserInput,
+                                "clarification_recovery",
+                            ),
+                        );
+                    }
+                    let next_payload = incremented_clarification(payload);
                     return graph_result(
                         memory,
                         TerminalState::WaitingForUserInput,
                         "clarification_unresolved",
-                        ResponseBuilder::clarification(payload.clone()),
+                        ResponseBuilder::clarification(next_payload.clone()),
                         context.recent_messages.len(),
-                        None,
+                        Some(Some(next_payload)),
                         clarification_transitions(
                             TerminalState::WaitingForUserInput,
                             "clarification_unresolved",
@@ -271,41 +330,6 @@ impl AssistantGraphRuntime {
                 }
                 _ => {}
             }
-        }
-        if let Some(payload) = &context.pending_clarification
-            && payload.is_missing_execution_parameters
-            && input.selected_option_id.is_none()
-            && is_parameter_reply(&input.source_message)
-            && let Some(capability_id) = continuation_capability(payload)
-        {
-            let mut intent = intent_from_source(payload, &context, canonical);
-            merge_deterministic_extraction_at(
-                &mut memory,
-                &mut intent,
-                &input.source_message,
-                canonical,
-            );
-            memory.intent = Some(intent);
-            record_source_extraction_metadata(
-                &mut memory,
-                payload,
-                canonical,
-                &input.source_message,
-            );
-            memory.selected_capability = Some(capability_id.clone());
-            memory.retrieval_evidence =
-                clarification_audit("missing_parameters", &capability_id, &input, payload);
-            return execute_selected_capability(
-                memory,
-                context.recent_messages.len(),
-                capability_id,
-                catalog,
-                client,
-                fineract_pool,
-                canonical,
-                Some(None),
-            )
-            .await;
         }
         if let Some((intent_kind, response)) = deterministic_simple_response(message) {
             memory.intent = Some(deterministic_intent(intent_kind.clone(), message));
@@ -356,7 +380,7 @@ impl AssistantGraphRuntime {
                 "router failed"
             ),
         }
-        complete_semantic_route(
+        let mut result = complete_semantic_route(
             memory,
             context,
             route,
@@ -368,6 +392,10 @@ impl AssistantGraphRuntime {
             canonical,
             input,
         )
-        .await
+        .await;
+        if clear_pending_after_reroute && result.pending_clarification.is_none() {
+            result.pending_clarification = Some(None);
+        }
+        result
     }
 }
