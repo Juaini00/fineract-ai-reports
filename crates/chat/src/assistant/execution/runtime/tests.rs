@@ -603,6 +603,9 @@ async fn exact_pending_option_id_resolves_before_router() {
             message: "client_top_n_by_savings_balance".into(),
             source_message: "please use the balance option".into(),
             selected_option_id: Some("client_top_n_by_savings_balance".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -708,6 +711,9 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
             message: "client_summary".into(),
             source_message: "client summary".into(),
             selected_option_id: Some("client_summary".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;

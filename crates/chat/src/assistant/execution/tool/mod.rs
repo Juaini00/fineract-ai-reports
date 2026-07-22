@@ -108,6 +108,13 @@ pub fn plan_selected_capability_verified(
     )
 }
 
+pub fn approved_default_patch(
+    catalog: &KnowledgeCatalog,
+    capability_id: &str,
+) -> Result<crate::assistant::ConstraintPatch> {
+    parameters::approved_default_patch(catalog, capability_id)
+}
+
 pub fn normalize_effective_parameters(
     catalog: &KnowledgeCatalog,
     capability_id: &str,

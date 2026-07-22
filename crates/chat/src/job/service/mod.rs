@@ -298,6 +298,9 @@ impl JobService {
                 message: submission.display_message,
                 source_message: message.content.clone(),
                 selected_option_id: submission.selected_option_id,
+                clarification_id: submission.clarification_id,
+                clarification_revision: submission.clarification_revision,
+                constraint_patch: submission.constraint_patch,
             },
             CanonicalTurn {
                 message_id: message.id,

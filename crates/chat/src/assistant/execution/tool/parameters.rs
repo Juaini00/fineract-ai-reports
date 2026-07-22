@@ -9,6 +9,42 @@ use crate::{
     knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge},
 };
 
+pub fn approved_default_patch(
+    catalog: &KnowledgeCatalog,
+    capability_id: &str,
+) -> Result<crate::assistant::ConstraintPatch> {
+    let capability = executable_capability(catalog, capability_id)?;
+    let Some(limit) = capability.defaults.default_limit else {
+        return Ok(Default::default());
+    };
+    let query = catalog
+        .queries
+        .iter()
+        .find(|item| item.id == capability.query_id)
+        .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
+    let mode = if query
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name == "top_n")
+    {
+        LimitMode::TopN
+    } else if query
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name == "limit")
+    {
+        LimitMode::Limit
+    } else {
+        return Ok(Default::default());
+    };
+    Ok([
+        (ConstraintField::LimitMode, TypedFactValue::LimitMode(mode)),
+        (ConstraintField::LimitValue, TypedFactValue::Integer(limit)),
+    ]
+    .into_iter()
+    .collect())
+}
+
 pub(super) fn normalize_effective_parameters(
     catalog: &KnowledgeCatalog,
     capability_id: &str,

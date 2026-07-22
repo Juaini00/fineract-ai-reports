@@ -34,7 +34,6 @@ use crate::assistant::{
     ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory,
     OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
     Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState,
-    deterministic_observations,
     evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
@@ -65,6 +64,9 @@ pub struct RuntimeUserInput {
     pub message: String,
     pub source_message: String,
     pub selected_option_id: Option<String>,
+    pub clarification_id: Option<Uuid>,
+    pub clarification_revision: Option<u32>,
+    pub constraint_patch: crate::assistant::ConstraintPatch,
 }
 
 #[derive(Clone)]
@@ -86,6 +88,9 @@ impl From<&str> for RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
             selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         }
     }
 }
@@ -96,6 +101,9 @@ impl From<String> for RuntimeUserInput {
             source_message: message.clone(),
             message,
             selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         }
     }
 }
@@ -155,6 +163,19 @@ impl AssistantGraphRuntime {
         input: impl Into<RuntimeUserInput>,
     ) -> GraphRuntimeResult {
         let input = input.into();
+        // This input is constructed from the validated service submission; canonical
+        // planning consumes the patch directly rather than re-parsing user text.
+        if input.clarification_id.is_some() {
+            memory.current_user_message_metadata["validated_constraint_patch"] =
+                serde_json::to_value(&input.constraint_patch).unwrap_or_else(|_| json!({}));
+            memory.current_user_message_metadata["clarification_id"] =
+                json!(input.clarification_id);
+            memory.current_user_message_metadata["clarification_revision"] =
+                json!(input.clarification_revision);
+            memory.current_user_message_metadata["structured_deterministic_extraction"] =
+                serde_json::to_value(extract_for_context(&input.source_message, canonical))
+                    .unwrap_or_else(|_| json!({}));
+        }
         let message = input.message.as_str();
         if context
             .warnings

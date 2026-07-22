@@ -1,4 +1,9 @@
 use super::*;
+use crate::assistant::execution::tool::approved_default_patch;
+use crate::assistant::{
+    approved_default_observations, deterministic_observations_excluding_fields,
+    observations_from_patch,
+};
 
 pub(super) async fn authoritative_plan(
     context: &CanonicalRuntimeContext,
@@ -42,6 +47,32 @@ pub(super) async fn authoritative_plan(
         .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok())
         .unwrap_or_default();
     let source_id = context.message_id.to_string();
+    let structured_patch = memory
+        .current_user_message_metadata
+        .get("validated_constraint_patch")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    let extraction = memory
+        .current_user_message_metadata
+        .get("structured_deterministic_extraction")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok())
+        .unwrap_or(extraction);
+    let clarification_source_id = memory
+        .current_user_message_metadata
+        .get("clarification_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|id| {
+            let revision = memory
+                .current_user_message_metadata
+                .get("clarification_revision")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            format!("clarification:{id}:{revision}")
+        })
+        .unwrap_or_else(|| source_id.clone());
+    let approved_defaults = approved_default_patch(catalog, capability_id)?;
     let effective = if context.initial {
         let intent = memory
             .intent
@@ -82,13 +113,21 @@ pub(super) async fn authoritative_plan(
                 timezone: Some(provenance.timezone.clone()),
             });
         }
-        let observations = original_request_observations(
+        let mut observations = original_request_observations(
             memory.job_id,
             &source_id,
             intent,
             &extraction,
             context.observed_at,
         );
+        observations.extend(approved_default_observations(
+            memory.job_id,
+            &format!("approved_default:{capability_id}"),
+            observations.len() as i64 + 1,
+            &approved_defaults,
+            context.observed_at,
+            &executable_constraint_contracts(),
+        )?);
         let mut effective = merge_observations(
             memory.job_id,
             context.revision,
@@ -103,20 +142,43 @@ pub(super) async fn authoritative_plan(
             .await?
             .2
     } else {
-        let first_sequence = context
-            .repository
-            .list_observations(memory.job_id)
-            .await?
-            .len() as i64
-            + 1;
-        let observations = deterministic_observations(
+        let existing = context.repository.list_observations(memory.job_id).await?;
+        let first_sequence = existing.len() as i64 + 1;
+        let contracts = executable_constraint_contracts();
+        let mut observations = observations_from_patch(
+            memory.job_id,
+            &clarification_source_id,
+            first_sequence,
+            &structured_patch,
+            context.observed_at,
+            &contracts,
+        )?;
+        let patch_fields = structured_patch.keys().cloned().collect();
+        observations.extend(deterministic_observations_excluding_fields(
             memory.job_id,
             &source_id,
-            first_sequence,
+            first_sequence + observations.len() as i64,
             FactSourceKind::Clarification,
             &extraction,
+            &patch_fields,
             context.observed_at,
-        );
+        ));
+        observations.extend(approved_default_observations(
+            memory.job_id,
+            &format!("approved_default:{capability_id}"),
+            first_sequence + observations.len() as i64,
+            &approved_defaults,
+            context.observed_at,
+            &contracts,
+        )?);
+        observations.retain(|candidate| {
+            !existing.iter().any(|existing| {
+                existing.source_kind == candidate.source_kind
+                    && existing.source_id == candidate.source_id
+                    && existing.field_path == candidate.field_path
+                    && existing.typed_value == candidate.typed_value
+            })
+        });
         context
             .repository
             .append_observations(memory.job_id, &observations)

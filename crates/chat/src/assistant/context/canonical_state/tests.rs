@@ -146,3 +146,59 @@ fn replay_clear_and_patch_contracts() {
         1
     );
 }
+
+#[test]
+fn approved_defaults_are_explicit_and_clarifications_override_them() {
+    let contracts = executable_constraint_contracts();
+    let defaults = BTreeMap::from([(ConstraintField::LimitValue, TypedFactValue::Integer(10))]);
+    let clarification = BTreeMap::from([
+        (
+            ConstraintField::FromDate,
+            TypedFactValue::Date("2026-01-01".into()),
+        ),
+        (ConstraintField::LimitValue, TypedFactValue::Integer(25)),
+    ]);
+    let defaults = approved_default_observations(
+        Uuid::nil(),
+        "approved_default:client_top_n",
+        1,
+        &defaults,
+        Utc::now(),
+        &contracts,
+    )
+    .unwrap();
+    assert_eq!(defaults[0].source_kind, FactSourceKind::ApprovedDefault);
+    let clarification = observations_from_patch(
+        Uuid::nil(),
+        "clarification:answer",
+        2,
+        &clarification,
+        Utc::now(),
+        &contracts,
+    )
+    .unwrap();
+    let effective = merge_observations(
+        Uuid::nil(),
+        1,
+        &[
+            defaults[0].clone(),
+            clarification[0].clone(),
+            clarification[1].clone(),
+        ],
+        &contracts,
+    )
+    .unwrap();
+    assert!(
+        clarification
+            .iter()
+            .all(|observation| observation.source_kind == FactSourceKind::Clarification)
+    );
+    assert_eq!(
+        effective.values[&ConstraintField::LimitValue],
+        TypedFactValue::Integer(25)
+    );
+    assert_eq!(
+        effective.values[&ConstraintField::FromDate],
+        TypedFactValue::Date("2026-01-01".into())
+    );
+}
