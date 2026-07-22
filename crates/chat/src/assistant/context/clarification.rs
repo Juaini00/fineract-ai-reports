@@ -38,11 +38,22 @@ pub struct ClarificationValidation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ClarificationField {
-    pub id: String,
+    #[serde(alias = "id")]
+    pub key: String,
     pub label: String,
     pub field_type: ClarificationFieldType,
     #[serde(default)]
     pub required: bool,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub default_value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub help_text: Option<String>,
+    #[serde(default)]
+    pub validation: ClarificationValidation,
+    #[serde(default)]
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -9,7 +9,7 @@ pub mod understanding;
 
 pub use context::{
     builder as context_builder, canonical_state,
-    canonical_state_repository as canonical_state_repo, clarification,
+    canonical_state_repository as canonical_state_repo, clarification, clarification_planner,
 };
 pub use execution::{runtime, tool};
 pub use llm::router;
@@ -36,8 +36,9 @@ pub use context::builder::ContextBuilder;
 pub use context::canonical_state::*;
 pub use context::canonical_state_repository::*;
 pub use context::{
-    ContextMessage, ContextSourceSnippet, ContextWarning, ContextWarningCode, ContextWindow,
-    ContextWindowPolicy, RelevantJobSummary,
+    ClarificationFacts, ClarificationPlanResult, ClarificationPlanner, ContextMessage,
+    ContextSourceSnippet, ContextWarning, ContextWarningCode, ContextWindow, ContextWindowPolicy,
+    RelevantJobSummary,
 };
 pub use evidence::{Evidence, RetrievalPlan};
 pub use execution::tool::{

@@ -208,10 +208,15 @@ fn clarification_view_select_option_round_trips_conditional_fields() {
             label: "Monthly report".into(),
             description: None,
             fields: vec![ClarificationField {
-                id: "date_range".into(),
+                key: "date_range".into(),
                 label: "Date range".into(),
                 field_type: ClarificationFieldType::DateRange,
                 required: true,
+                value: None,
+                default_value: None,
+                help_text: None,
+                validation: Default::default(),
+                errors: Vec::new(),
             }],
         }],
         fields: Vec::new(),
@@ -255,10 +260,15 @@ fn clarification_view_validation_rejects_invalid_shapes() {
     let free_text = ClarificationView {
         kind: ClarificationKind::FreeText,
         fields: vec![ClarificationField {
-            id: "text".into(),
+            key: "text".into(),
             label: "Text".into(),
             field_type: ClarificationFieldType::Text,
             required: true,
+            value: None,
+            default_value: None,
+            help_text: None,
+            validation: Default::default(),
+            errors: Vec::new(),
         }],
         ..base
     };
