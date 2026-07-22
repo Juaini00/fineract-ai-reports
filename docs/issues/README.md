@@ -28,5 +28,8 @@ Resolved: YYYY-MM-DD or blank
 
 ## Active issues
 
-- [Clarification response matching must be semantic](./active/001-clarification-response-matching-must-be-semantic.md)
+- [Semantic assistant platform major refactor](./active/002-semantic-assistant-platform-major-refactor.md)
+- [Robust verified payload extraction](./active/003-verified-payload-extraction.md)
+- [API key/session ownership model mismatch](./active/004-api-key-session-ownership.md)
+- [Unified agentic clarification contract and job-scoped workflow](./active/005-unified-agentic-clarification-contract.md)
 - [Hardcode cleanup issues](./active/hardcode-cleanup-issues.md)
