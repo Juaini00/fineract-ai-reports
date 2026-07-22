@@ -1,6 +1,6 @@
 # 005 — Unified agentic clarification contract and job-scoped workflow
 
-Status: active — design required before implementation
+Status: active — design complete, implementation planned
 Severity: blocker
 Area: chat | jobs | assistant | clarification | API | catalog | client integration | tests
 Created: 2026-07-22
@@ -767,28 +767,24 @@ crash or silently submit incomplete data.
   covers dual `option_id`/`message` semantics and bounded recovery. It is a
   prerequisite/compatibility input, not a replacement for this broader issue.
 
-## Required follow-up design document
+## Design and implementation plan
 
-After issue review, create a dedicated design spec under
-`docs/superpowers/specs/` covering:
+The reviewed source-of-truth documents are:
 
-- exact Rust and TypeScript discriminated contracts;
-- authoritative job-state storage and migration;
-- catalog parameter/input schema;
-- clarification planning/minimization algorithm;
-- structured submission validation and HTTP semantics;
-- canonical observation/default integration;
-- compatibility and rollout;
-- complete scenario fixture schema and initial matrix.
+- [`2026-07-22-unified-agentic-clarification-contract-design.md`](../../superpowers/specs/2026-07-22-unified-agentic-clarification-contract-design.md)
+- [`2026-07-22-unified-agentic-clarification-contract.md`](../../superpowers/plans/2026-07-22-unified-agentic-clarification-contract.md)
 
-Implementation must not begin from the illustrative JSON in this issue alone.
+They define the exact discriminated contracts, authoritative job-state storage,
+catalog parameter schema, planning algorithm, structured submission semantics,
+canonical provenance integration, compatibility rollout, and scenario fixture
+matrix. Implementation must follow those documents rather than the illustrative
+JSON in this issue alone.
 
 ## Links
 
 - `docs/issues/active/003-verified-payload-extraction.md`
 - `docs/issues/resolved/001-clarification-response-matching-must-be-semantic.md`
 - `docs/issues/retrieval-pipeline-rework/08-clarification-reply-routing-failed.md`
-- `docs/superpowers/specs/2026-07-19-clarification-continuation-correctness-design.md`
 - `docs/current/chat-client-integration.md`
 - `docs/architecture/chat-data-model/10-9-clarification-flow-state.md`
 - `crates/chat/src/assistant/context/clarification.rs`
