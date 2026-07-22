@@ -11,10 +11,12 @@ templates:
   ambiguous_activity_report: "Which report would you like? Reply with the option number, or choose Others to describe it in your own words."
   others_prompt: "Please describe what you would like to know."
 rules:
+  - The typed clarification contract and catalog input contracts, not template prose, are authoritative for interaction kind, fields, options, defaults, and validation.
   - Clarification must continue the same chat job.
   - Do not create a new job for clarification answers.
   - Ask only for parameters required by an approved capability.
-  - Keep clarification text safe and business-facing.
+  - Others is a report/request escape, not a field fallback or help action.
+  - Keep clarification text safe, business-facing, and English-only.
 checks:
   - id: required_parameters_have_templates
     rule: missing required parameters for approved_mvp capabilities should map to a clarification template.

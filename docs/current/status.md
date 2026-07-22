@@ -20,6 +20,7 @@ This file is the short source of truth for the current development state. Detail
 - User login, access-token `GET /auth/me`, refresh-token cookie flow, API key generation/hashing, and bearer-session JWT chat authentication requiring `role == "admin"`; optional `X-API-Key` only narrows office scope voluntarily.
 - Chat session/job durable tables and state revision.
 - Chat job endpoints, clarification response endpoint, background worker, Redis-backed SSE fallback behavior.
+- Structured clarification contract v1 is implemented: job-scoped pending authority, UUID/revision-bound typed responses, durable job/message recovery, and matching SSE hints. Deprecated top-level options and non-authoritative session projection compatibility cleanup remain.
 - Authorization helpers for capability, office scope, and PII.
 
 ## Catalog, retrieval, and assistant state
