@@ -6,6 +6,16 @@ For a focused frontend contract covering all session payloads, mutation rules,
 cache behavior, and TypeScript examples, see
 [`frontend-session-management.md`](./frontend-session-management.md).
 
+## Structured clarification contract (v1)
+
+For `response_type: "clarification"`, render the public `clarification` object from waiting-job `result_json.structured_response`, SSE `update.payload.structured_response`, or assistant-message `metadata_json.assistant_response`; do not infer controls from markdown or the deprecated top-level `options` projection. It has `version: 1`, UUID `id`, `revision`, `kind` (`select_option`, `collect_fields`, or `free_text`), `question`, `fields`, `options`, and `allow_free_text`. Fields use `date_range`, `integer`, or `text` types with server validation metadata.
+
+Submit the active id and revision with `option_id`, typed `answers`, and optional `message`:
+```json
+{ "clarification_id": "<uuid>", "clarification_revision": 1, "option_id": "total_deposits", "answers": {} }
+```
+Legacy submissions requiring `message` and permitting `option_id` remain supported. Keep historical controls read-only. On `400 clarification_validation_error`, display only safe field errors; on `409 clarification_stale` or `409 clarification_not_active`, reconcile `GET /chat/jobs/{id}`. Archived sessions and their job surfaces return sanitized `404`.
+
 ## Response envelope and errors
 
 Every JSON response uses the same envelope:
@@ -247,8 +257,8 @@ current_step = taking_decision
 
 Continue it with `POST /chat/jobs/{job_id}/responses`. Never create a new job for a clarification. The request is:
 
-- `message`: required, 1-1000 characters
-- `option_id`: optional, maximum 200 characters
+- Structured v1: `clarification_id`, `clarification_revision`, optional `option_id`, typed `answers`, and optional `message`
+- Legacy mode: `message` is required (1-1000 characters) and `option_id` is optional (maximum 200 characters)
 
 For a returned choice, send its exact `id` and useful visible text:
 

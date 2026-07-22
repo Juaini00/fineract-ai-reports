@@ -1,0 +1,12 @@
+id: partial_date_prefill
+bucket: partial_values
+candidate_capabilities: [savings_deposit_total]
+known_facts:
+  from_date: { type: date, value: "2026-01-01" }
+expected:
+  direct_execution: false
+  kind: collect_fields
+  shared_field_keys: [date_range]
+  shared_field_values:
+    date_range: { from: "2026-01-01", to: null }
+  must_not_ask: [limit, search]

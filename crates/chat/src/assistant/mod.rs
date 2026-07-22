@@ -9,7 +9,7 @@ pub mod understanding;
 
 pub use context::{
     builder as context_builder, canonical_state,
-    canonical_state_repository as canonical_state_repo, clarification,
+    canonical_state_repository as canonical_state_repo, clarification, clarification_planner,
 };
 pub use execution::{runtime, tool};
 pub use llm::router;
@@ -27,15 +27,18 @@ pub use crate::job::repository::assistant_memory::{GraphCheckpoint, JobMemoryRep
 pub use crate::knowledge::index::swiftide as swiftide_index;
 pub use crate::knowledge::index::swiftide::{SwiftideIndexPipeline, SwiftideKnowledgeDocument};
 pub use clarification::{
-    ClarificationOption, ClarificationOutcome, ClarificationPayload, OTHER_CLARIFICATION_OPTION_ID,
+    CLARIFICATION_VERSION_1, ClarificationChoice, ClarificationField, ClarificationFieldType,
+    ClarificationKind, ClarificationOption, ClarificationOutcome, ClarificationPayload,
+    ClarificationValidation, ClarificationView, OTHER_CLARIFICATION_OPTION_ID,
     PendingClarification,
 };
 pub use context::builder::ContextBuilder;
 pub use context::canonical_state::*;
 pub use context::canonical_state_repository::*;
 pub use context::{
-    ContextMessage, ContextSourceSnippet, ContextWarning, ContextWarningCode, ContextWindow,
-    ContextWindowPolicy, RelevantJobSummary,
+    ClarificationFacts, ClarificationPlanResult, ClarificationPlanner, ContextMessage,
+    ContextSourceSnippet, ContextWarning, ContextWarningCode, ContextWindow, ContextWindowPolicy,
+    RelevantJobSummary,
 };
 pub use evidence::{Evidence, RetrievalPlan};
 pub use execution::tool::{

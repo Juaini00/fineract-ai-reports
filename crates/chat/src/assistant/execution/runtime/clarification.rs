@@ -1,11 +1,140 @@
 use super::*;
 
+pub(super) fn apply_constraint_patch(
+    intent: &mut AssistantIntent,
+    patch: &crate::assistant::ConstraintPatch,
+) {
+    for (field, value) in patch {
+        match (field, value) {
+            (ConstraintField::FromDate, TypedFactValue::Date(value)) => {
+                intent.constraints.from_date = Some(value.clone())
+            }
+            (ConstraintField::ToDate, TypedFactValue::Date(value)) => {
+                intent.constraints.to_date = Some(value.clone())
+            }
+            (ConstraintField::LimitValue, TypedFactValue::Integer(value)) => {
+                match intent.constraints.quantity {
+                    Some(Quantity::TopN { .. }) => {
+                        intent.constraints.quantity = Some(Quantity::TopN { value: *value })
+                    }
+                    _ => intent.constraints.quantity = Some(Quantity::Limit { value: *value }),
+                }
+            }
+            (ConstraintField::LimitMode, TypedFactValue::LimitMode(mode)) => match mode {
+                LimitMode::TopN => {
+                    intent.constraints.quantity = Some(Quantity::TopN {
+                        value: patch
+                            .get(&ConstraintField::LimitValue)
+                            .and_then(|v| match v {
+                                TypedFactValue::Integer(v) => Some(*v),
+                                _ => None,
+                            })
+                            .unwrap_or(1),
+                    })
+                }
+                LimitMode::Limit => {
+                    intent.constraints.quantity = Some(Quantity::Limit {
+                        value: patch
+                            .get(&ConstraintField::LimitValue)
+                            .and_then(|v| match v {
+                                TypedFactValue::Integer(v) => Some(*v),
+                                _ => None,
+                            })
+                            .unwrap_or(1),
+                    })
+                }
+                LimitMode::All => intent.constraints.quantity = Some(Quantity::All),
+                LimitMode::Default => intent.constraints.quantity = Some(Quantity::Default),
+            },
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn clarification_facts(
+    intent: Option<&AssistantIntent>,
+    patch: &crate::assistant::ConstraintPatch,
+) -> ClarificationFacts {
+    let mut values = patch.clone();
+    if let Some(intent) = intent {
+        if let Some(value) = &intent.constraints.from_date {
+            values
+                .entry(ConstraintField::FromDate)
+                .or_insert_with(|| TypedFactValue::Date(value.clone()));
+        }
+        if let Some(value) = &intent.constraints.to_date {
+            values
+                .entry(ConstraintField::ToDate)
+                .or_insert_with(|| TypedFactValue::Date(value.clone()));
+        }
+        if let Some(quantity) = &intent.constraints.quantity {
+            let (mode, value) = match quantity {
+                Quantity::TopN { value } => (LimitMode::TopN, Some(*value)),
+                Quantity::Limit { value } => (LimitMode::Limit, Some(*value)),
+                Quantity::All => (LimitMode::All, None),
+                Quantity::Default => (LimitMode::Default, None),
+            };
+            values
+                .entry(ConstraintField::LimitMode)
+                .or_insert(TypedFactValue::LimitMode(mode));
+            if let Some(value) = value {
+                values
+                    .entry(ConstraintField::LimitValue)
+                    .or_insert(TypedFactValue::Integer(value));
+            }
+        }
+    }
+    ClarificationFacts { values }
+}
+
+pub(super) fn planned_clarification(
+    catalog: &KnowledgeCatalog,
+    candidate_ids: &[String],
+    intent: Option<&AssistantIntent>,
+    patch: &crate::assistant::ConstraintPatch,
+    source_intent: Option<SourceIntentSnapshot>,
+    existing: Option<&ClarificationPayload>,
+) -> ClarificationPlanResult {
+    let id = existing
+        .map(|payload| payload.id)
+        .unwrap_or_else(uuid::Uuid::new_v4);
+    match ClarificationPlanner::new(catalog).plan(
+        candidate_ids,
+        &clarification_facts(intent, patch),
+        id,
+    ) {
+        ClarificationPlanResult::Clarify {
+            mut payload,
+            approved_defaults,
+        } => {
+            payload.revision = existing.map(|payload| payload.revision + 1).unwrap_or(1);
+            payload.attempt = existing.map(|payload| payload.attempt).unwrap_or(1);
+            payload.source_intent = source_intent;
+            ClarificationPlanResult::Clarify {
+                payload,
+                approved_defaults,
+            }
+        }
+        complete => complete,
+    }
+}
+
 pub(super) const MAX_CLARIFICATION_ATTEMPTS: u32 = 3;
 
 pub(super) fn incremented_clarification(payload: &ClarificationPayload) -> ClarificationPayload {
     let mut next = payload.clone();
     next.attempt = next.attempt.saturating_add(1);
+    next.revision = next.revision.saturating_add(1);
     next
+}
+
+pub(super) fn is_meaningful_free_text(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    !normalized.is_empty()
+        && normalized != OTHER_CLARIFICATION_OPTION_ID
+        && normalized != "other"
+        && !normalized.starts_with("let me describe")
+        && !normalized.starts_with("i'll describe")
 }
 
 pub(super) fn pending_clarification_intent(context: &ContextWindow) -> AssistantIntent {
@@ -51,15 +180,6 @@ pub(super) fn first_standalone_limit(content: &str) -> Option<i64> {
                 .ok()
                 .filter(|value| (1..=100).contains(value))
         })
-}
-
-pub(super) fn is_meaningful_free_text(message: &str) -> bool {
-    let normalized = message.trim().to_ascii_lowercase();
-    !normalized.is_empty()
-        && normalized != OTHER_CLARIFICATION_OPTION_ID
-        && normalized != "other"
-        && !normalized.starts_with("let me describe")
-        && !normalized.starts_with("i'll describe")
 }
 
 pub(super) fn resolve_pending_clarification(
@@ -197,9 +317,11 @@ pub(super) fn clarification_audit(
     json!({
         "clarification_outcome": "selected_option",
         "option_id": option_id,
-        "source_message": input.source_message,
+        "clarification_id": payload.id,
+        "clarification_revision": payload.revision,
+        "clarification_kind": payload.kind,
         "source": source,
-        "source_intent": payload.source_intent,
+        "structured": input.clarification_id.is_some(),
     })
 }
 
@@ -221,27 +343,6 @@ pub(super) fn allow_all_capabilities(context: &ContextWindow) -> bool {
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
 }
-/// Capability descriptions are authored generically ("... for a date range ...").
-/// When the original request already pinned a period, substitute it so the
-/// options don't read as if the range is still unknown.
-fn resolved_period(source_intent: Option<&SourceIntentSnapshot>) -> Option<String> {
-    let constraints = &source_intent?.constraints;
-    Some(format!(
-        "{} to {}",
-        constraints.from_date.clone()?,
-        constraints.to_date.clone()?
-    ))
-}
-
-fn with_resolved_period(description: Option<String>, period: Option<&String>) -> Option<String> {
-    let (text, period) = (description?, period?);
-    Some(
-        text.replace("a given date range", period)
-            .replace("a date range", period)
-            .replace("the date range", period),
-    )
-}
-
 /// Variant of `clarification_payload` that prefers the reranker's `alternatives`
 /// (capability ids) as the option pool, filtering evidence to those ids. Falls
 /// back to the top-3 evidence when `alternatives` is empty (parity with the
@@ -259,21 +360,20 @@ pub(super) fn clarification_payload_for(
         .iter()
         .map(|e| (e.capability_id.as_str(), e))
         .collect();
-    let period = resolved_period(source_intent.as_ref());
     let mut options: Vec<ClarificationOption> = alternatives
         .iter()
         .filter_map(|id| {
             by_id.get(id.as_str()).map(|e| ClarificationOption {
                 id: e.capability_id.clone(),
                 label: e.title.clone(),
-                description: with_resolved_period(
+                description: clarification_option_description(
                     e.metadata
                         .get("description")
                         .or_else(|| e.metadata.get("summary"))
-                        .and_then(|value| value.as_str())
-                        .map(ToOwned::to_owned),
-                    period.as_ref(),
+                        .and_then(|value| value.as_str()),
+                    source_intent.as_ref(),
                 ),
+                fields: Vec::new(),
             })
         })
         .collect();
@@ -284,10 +384,16 @@ pub(super) fn clarification_payload_for(
         id: OTHER_CLARIFICATION_OPTION_ID.into(),
         label: "Others".into(),
         description: Some("Let me describe what I need in my own words.".into()),
+        fields: Vec::new(),
     });
     ClarificationPayload {
+        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which report should I use?".into(),
         options,
+        fields: Vec::new(),
         attempt: 1,
         source_intent,
         allow_free_text: true,
@@ -300,21 +406,20 @@ pub(super) fn clarification_payload(
     evidence: &[Evidence],
     source_intent: Option<SourceIntentSnapshot>,
 ) -> ClarificationPayload {
-    let period = resolved_period(source_intent.as_ref());
     let mut options: Vec<ClarificationOption> = evidence
         .iter()
         .take(3)
         .map(|item| ClarificationOption {
             id: item.capability_id.clone(),
             label: item.title.clone(),
-            description: with_resolved_period(
+            description: clarification_option_description(
                 item.metadata
                     .get("description")
                     .or_else(|| item.metadata.get("summary"))
-                    .and_then(|value| value.as_str())
-                    .map(ToOwned::to_owned),
-                period.as_ref(),
+                    .and_then(|value| value.as_str()),
+                source_intent.as_ref(),
             ),
+            fields: Vec::new(),
         })
         .collect();
     if options.is_empty() {
@@ -324,15 +429,38 @@ pub(super) fn clarification_payload(
         id: OTHER_CLARIFICATION_OPTION_ID.into(),
         label: "Others".into(),
         description: Some("Let me describe what I need in my own words.".into()),
+        fields: Vec::new(),
     });
     ClarificationPayload {
+        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which report should I use?".into(),
         options,
+        fields: Vec::new(),
         attempt: 1,
         source_intent,
         allow_free_text: true,
         is_missing_execution_parameters: false,
     }
+}
+
+fn clarification_option_description(
+    description: Option<&str>,
+    source_intent: Option<&SourceIntentSnapshot>,
+) -> Option<String> {
+    let period = source_intent.and_then(|intent| {
+        Some(format!(
+            "{} to {}",
+            intent.constraints.from_date.as_ref()?,
+            intent.constraints.to_date.as_ref()?,
+        ))
+    });
+    description.map(|description| match period {
+        Some(period) => description.replace("a date range", &period),
+        None => description.to_owned(),
+    })
 }
 
 pub(super) fn fallback_clarification_options(domain: &AssistantDomain) -> Vec<ClarificationOption> {
@@ -396,6 +524,7 @@ pub(super) fn fallback_clarification_options(domain: &AssistantDomain) -> Vec<Cl
             id: id.into(),
             label: label.into(),
             description: Some(description.into()),
+            fields: Vec::new(),
         })
         .collect()
 }

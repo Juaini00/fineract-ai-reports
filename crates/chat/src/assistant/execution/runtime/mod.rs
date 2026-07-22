@@ -28,20 +28,19 @@ use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
 use crate::assistant::{
     AssistantConstraints, AssistantDomain, AssistantGraphTopology, AssistantIntent,
-    AssistantIntentKind, AssistantLanguage, AssistantResponse, AssistantResponseType,
-    CanonicalStateRepository, ClarificationOption, ClarificationOutcome, ClarificationPayload,
-    ClarificationResolver, ContextReference, ContextWarningCode, ContextWindow,
-    DeterministicExtraction, ExtractionProvenance, FactSourceKind, GraphState, GraphTransition,
-    JobMemory, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
-    PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
-    TerminalState, deterministic_observations,
+    AssistantIntentKind, AssistantLanguage, AssistantResponse, CanonicalStateRepository,
+    ClarificationFacts, ClarificationOption, ClarificationOutcome, ClarificationPayload,
+    ClarificationPlanResult, ClarificationPlanner, ClarificationResolver, ConstraintField,
+    ContextReference, ContextWarningCode, ContextWindow, DeterministicExtraction,
+    ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory, LimitMode,
+    OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
+    Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState, TypedFactValue,
     evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
     merge_observations, original_request_observations,
     presentation::builder::finish,
     reranker::{LlmReranker, RerankerDecision, RerankerVerdict},
-    response::{ResponseAction, ResponseActionType},
     retrieval::RetrievalEngine,
     stable_uuid,
 };
@@ -66,6 +65,9 @@ pub struct RuntimeUserInput {
     pub message: String,
     pub source_message: String,
     pub selected_option_id: Option<String>,
+    pub clarification_id: Option<Uuid>,
+    pub clarification_revision: Option<u32>,
+    pub constraint_patch: crate::assistant::ConstraintPatch,
 }
 
 #[derive(Clone)]
@@ -87,6 +89,9 @@ impl From<&str> for RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
             selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         }
     }
 }
@@ -97,6 +102,9 @@ impl From<String> for RuntimeUserInput {
             source_message: message.clone(),
             message,
             selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         }
     }
 }
@@ -131,19 +139,7 @@ impl AssistantGraphRuntime {
             "runtime": "semantic_assistant_graph",
             "recent_message_count": context.recent_messages.len(),
         });
-        memory.structured_response = Some(AssistantResponse {
-            response_type: AssistantResponseType::Clarification,
-            title: Some("Assistant runtime is ready".into()),
-            message: "I saved your message and built the conversation context. Semantic routing is not wired yet, so please try again after routing is enabled.".into(),
-            sections: Vec::new(),
-            table: None,
-            cards: Vec::new(),
-            options: Vec::new(),
-            warnings: Vec::new(),
-            actions: vec![ResponseAction { action_type: ResponseActionType::AskFollowUp, label: "Ask a follow-up".into() }],
-            evidence_refs: Vec::new(),
-            rendered_markdown: None,
-        });
+        memory.structured_response = Some(ResponseBuilder::error());
         AssistantGraphTopology::new()
             .validate_sequence(&transitions)
             .expect("assistant runtime produced illegal graph transitions");
@@ -168,6 +164,19 @@ impl AssistantGraphRuntime {
         input: impl Into<RuntimeUserInput>,
     ) -> GraphRuntimeResult {
         let input = input.into();
+        // This input is constructed from the validated service submission; canonical
+        // planning consumes the patch directly rather than re-parsing user text.
+        if input.clarification_id.is_some() {
+            memory.current_user_message_metadata["validated_constraint_patch"] =
+                serde_json::to_value(&input.constraint_patch).unwrap_or_else(|_| json!({}));
+            memory.current_user_message_metadata["clarification_id"] =
+                json!(input.clarification_id);
+            memory.current_user_message_metadata["clarification_revision"] =
+                json!(input.clarification_revision);
+            memory.current_user_message_metadata["structured_deterministic_extraction"] =
+                serde_json::to_value(extract_for_context(&input.source_message, canonical))
+                    .unwrap_or_else(|_| json!({}));
+        }
         let message = input.message.as_str();
         let mut clear_pending_after_reroute = false;
         if context
@@ -198,6 +207,9 @@ impl AssistantGraphRuntime {
                 ],
             );
         }
+        // A missing-parameter clarification already identifies one capability. Treat
+        // any free-text reply (including an explicit "Others") as facts for that
+        // capability rather than routing it as a fresh request.
         if let Some(payload) = &context.pending_clarification
             && payload.is_missing_execution_parameters
             && input
@@ -213,6 +225,7 @@ impl AssistantGraphRuntime {
                 &input.source_message,
                 canonical,
             );
+            apply_constraint_patch(&mut intent, &input.constraint_patch);
             memory.intent = Some(intent);
             record_source_extraction_metadata(
                 &mut memory,
@@ -231,7 +244,7 @@ impl AssistantGraphRuntime {
                 client,
                 fineract_pool,
                 canonical,
-                payload.attempt.saturating_add(1),
+                Some(payload),
                 Some(None),
             )
             .await;
@@ -239,7 +252,15 @@ impl AssistantGraphRuntime {
         if let Some(payload) = &context.pending_clarification
             && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
         {
-            memory.intent = Some(intent_from_source(payload, &context, canonical));
+            let mut continuation_intent = intent_from_source(payload, &context, canonical);
+            merge_deterministic_extraction_at(
+                &mut memory,
+                &mut continuation_intent,
+                &input.source_message,
+                canonical,
+            );
+            apply_constraint_patch(&mut continuation_intent, &input.constraint_patch);
+            memory.intent = Some(continuation_intent);
             record_source_extraction_metadata(
                 &mut memory,
                 payload,
@@ -274,13 +295,13 @@ impl AssistantGraphRuntime {
                         client,
                         fineract_pool,
                         canonical,
-                        payload.attempt.saturating_add(1),
+                        Some(payload),
                         Some(None),
                     )
                     .await;
                 }
                 ClarificationOutcome::FreeFormOther { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                     return graph_result(
                         memory,
                         TerminalState::WaitingForUserInput,
@@ -295,17 +316,21 @@ impl AssistantGraphRuntime {
                     );
                 }
                 ClarificationOutcome::NewRequest { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "new_request", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "new_request", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                     clear_pending_after_reroute = true;
                 }
                 ClarificationOutcome::Unresolved { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                     if payload.attempt >= MAX_CLARIFICATION_ATTEMPTS {
                         return graph_result(
                             memory,
                             TerminalState::WaitingForUserInput,
                             "clarification_recovery",
-                            ResponseBuilder::free_form_other_prompt(),
+                            {
+                                let mut response = ResponseBuilder::free_form_other_prompt();
+                                response.title = Some("Describe your request".into());
+                                response
+                            },
                             context.recent_messages.len(),
                             Some(None),
                             clarification_transitions(

@@ -70,4 +70,3 @@
 - [ ] Add coverage showing the original `this month` range survives capability selection and only missing limit is requested.
 - [ ] Run the integration regression, then `cargo test -p chat --lib`, `cargo test -p chat`, `cargo check`, and `cargo fmt --check`.
 - [ ] Update integration and current-status documentation with the verified behavior.
-

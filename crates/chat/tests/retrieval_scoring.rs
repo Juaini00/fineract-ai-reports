@@ -49,6 +49,8 @@ fn make_capability(id: &str, domain: &str, subject: RequestSubject) -> Capabilit
         examples: vec![],
         required_parameters: vec![],
         optional_parameters: vec![],
+        defaults: Default::default(),
+        guards: Default::default(),
     }
 }
 
@@ -64,6 +66,7 @@ fn catalog_with(capability: CapabilityKnowledge) -> KnowledgeCatalog {
         queries: vec![],
         policies: vec![],
         responses: vec![],
+        parameter_inputs: Vec::new(),
         classification: Default::default(),
     }
 }
@@ -252,6 +255,7 @@ fn clarification_option_falls_back_to_humanized_id_when_display_name_missing() {
             .clone()
             .unwrap_or_else(|| humanize_id(&cap.id)),
         description: cap.description.clone(),
+        fields: Vec::new(),
     };
 
     assert_eq!(option.label, "Organization Office Summary");

@@ -1,5 +1,91 @@
 use super::*;
 
+async fn clarify_retrieval_candidates(
+    mut memory: JobMemory,
+    context: &ContextWindow,
+    _plan: &RetrievalPlan,
+    evidence: &[Evidence],
+    alternatives: &[String],
+    catalog: Option<&Arc<KnowledgeCatalog>>,
+    client: Option<&PrincipalContext>,
+    fineract_pool: Option<&PgPool>,
+    canonical: Option<&CanonicalRuntimeContext>,
+    input: &RuntimeUserInput,
+) -> GraphRuntimeResult {
+    let candidate_ids: Vec<String> = if alternatives.is_empty() {
+        evidence
+            .iter()
+            .take(3)
+            .map(|item| item.capability_id.clone())
+            .collect()
+    } else {
+        // Alternatives are only accepted when backed by current authorized evidence.
+        alternatives
+            .iter()
+            .filter(|id| evidence.iter().any(|item| &item.capability_id == *id))
+            .cloned()
+            .collect()
+    };
+    let source = memory
+        .intent
+        .as_ref()
+        .map(|intent| source_intent_snapshot(intent, &input.source_message));
+    if let Some(catalog) = catalog {
+        match planned_clarification(
+            catalog,
+            &candidate_ids,
+            memory.intent.as_ref(),
+            &input.constraint_patch,
+            source,
+            None,
+        ) {
+            ClarificationPlanResult::Complete { capability_id, .. } => {
+                memory.selected_capability = Some(capability_id.clone());
+                return execute_selected_capability(
+                    memory,
+                    context.recent_messages.len(),
+                    capability_id,
+                    Some(catalog),
+                    client,
+                    fineract_pool,
+                    canonical,
+                    None,
+                    None,
+                )
+                .await;
+            }
+            ClarificationPlanResult::Clarify { payload, .. } => {
+                return graph_result(
+                    memory,
+                    TerminalState::WaitingForUserInput,
+                    "weak_retrieval_evidence",
+                    ResponseBuilder::clarification(payload.clone()),
+                    context.recent_messages.len(),
+                    Some(Some(payload)),
+                    clarification_transitions(
+                        TerminalState::WaitingForUserInput,
+                        "weak_retrieval_evidence",
+                    ),
+                );
+            }
+        }
+    }
+    // Catalog-less test/runtime mode retains the legacy evidence projection.
+    let payload = clarification_payload_for(_plan, evidence, alternatives, source);
+    graph_result(
+        memory,
+        TerminalState::WaitingForUserInput,
+        "weak_retrieval_evidence",
+        ResponseBuilder::clarification(payload.clone()),
+        context.recent_messages.len(),
+        Some(Some(payload)),
+        clarification_transitions(
+            TerminalState::WaitingForUserInput,
+            "weak_retrieval_evidence",
+        ),
+    )
+}
+
 pub(super) async fn complete_semantic_route(
     mut memory: JobMemory,
     context: ContextWindow,
@@ -43,7 +129,7 @@ pub(super) async fn complete_semantic_route(
                             canonical,
                             &input.source_message,
                         );
-                        memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
+                        memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                         pending_clarification = Some(None);
                         return graph_result(
                             memory,
@@ -85,7 +171,7 @@ pub(super) async fn complete_semantic_route(
                             client,
                             fineract_pool,
                             canonical,
-                            payload.attempt.saturating_add(1),
+                            Some(payload),
                             pending_clarification,
                         )
                         .await;
@@ -98,7 +184,7 @@ pub(super) async fn complete_semantic_route(
                             canonical,
                             &input.source_message,
                         );
-                        memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
+                        memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                         pending_clarification = Some(None);
                         return graph_result(
                             memory,
@@ -264,7 +350,7 @@ pub(super) async fn complete_semantic_route(
                                 client,
                                 fineract_pool,
                                 canonical,
-                                1,
+                                None,
                                 None,
                             )
                             .await;
@@ -272,40 +358,36 @@ pub(super) async fn complete_semantic_route(
                             return result;
                         }
                         None => {
-                            let payload = clarification_payload_for(
+                            return clarify_retrieval_candidates(
+                                memory,
+                                &context,
                                 &plan,
                                 &evidence,
                                 &decision.alternatives,
-                                memory
-                                    .intent
-                                    .as_ref()
-                                    .map(|intent| source_intent_snapshot(intent, message)),
-                            );
-                            pending_clarification = Some(Some(payload.clone()));
-                            (
-                                TerminalState::WaitingForUserInput,
-                                "weak_retrieval_evidence",
-                                ResponseBuilder::clarification(payload),
+                                catalog,
+                                client,
+                                fineract_pool,
+                                canonical,
+                                &input,
                             )
+                            .await;
                         }
                     }
                 }
                 RerankerVerdict::Clarify => {
-                    let payload = clarification_payload_for(
+                    return clarify_retrieval_candidates(
+                        memory,
+                        &context,
                         &plan,
                         &evidence,
                         &decision.alternatives,
-                        memory
-                            .intent
-                            .as_ref()
-                            .map(|intent| source_intent_snapshot(intent, message)),
-                    );
-                    pending_clarification = Some(Some(payload.clone()));
-                    (
-                        TerminalState::WaitingForUserInput,
-                        "weak_retrieval_evidence",
-                        ResponseBuilder::clarification(payload),
+                        catalog,
+                        client,
+                        fineract_pool,
+                        canonical,
+                        &input,
                     )
+                    .await;
                 }
                 RerankerVerdict::Unsupported => (
                     TerminalState::Unsupported,

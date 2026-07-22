@@ -1,6 +1,11 @@
+use std::collections::BTreeMap;
+
 use app_core::auth::model::PrincipalContext;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
+
+use crate::assistant::ConstraintPatch;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -14,9 +19,22 @@ pub struct CreateChatJobInput {
 pub struct RespondToChatJobInput {
     pub client: PrincipalContext,
     pub job_id: Uuid,
-    pub source_message: String,
+    pub clarification_id: Option<Uuid>,
+    pub clarification_revision: Option<u32>,
     pub selected_option_id: Option<String>,
-    pub message: String,
+    pub source_message: Option<String>,
+    pub answers: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidatedClarificationSubmission {
+    pub clarification_id: Option<Uuid>,
+    pub clarification_revision: Option<u32>,
+    pub selected_option_id: Option<String>,
+    pub source_message: String,
+    pub display_message: String,
+    pub answers: BTreeMap<String, Value>,
+    pub constraint_patch: ConstraintPatch,
 }
 
 #[derive(Debug, Clone, Serialize)]

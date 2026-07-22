@@ -162,12 +162,18 @@ mod tests {
         let outcome = ClarificationResolver::resolve(
             "others",
             &ClarificationPayload {
+                version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 0,
+                kind: crate::assistant::clarification::ClarificationKind::SelectOption,
                 question: "Which report?".into(),
                 options: vec![ClarificationOption {
                     id: OTHER_CLARIFICATION_OPTION_ID.into(),
                     label: "Others".into(),
                     description: None,
+                    fields: Vec::new(),
                 }],
+                fields: Vec::new(),
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
@@ -204,12 +210,18 @@ mod tests {
         let outcome = ClarificationResolver::resolve(
             " client_top_n_by_savings_balance ",
             &ClarificationPayload {
+                version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 0,
+                kind: crate::assistant::clarification::ClarificationKind::SelectOption,
                 question: "Which report?".into(),
                 options: vec![ClarificationOption {
                     id: "client_top_n_by_savings_balance".into(),
                     label: "Top clients by savings balance".into(),
                     description: None,
+                    fields: Vec::new(),
                 }],
+                fields: Vec::new(),
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,

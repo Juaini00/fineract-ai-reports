@@ -7,7 +7,8 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     assistant::{
-        AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, ContextReference,
+        AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
+        AssistantResponseType, ContextReference,
         llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
     },
     knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator},
@@ -31,6 +32,7 @@ fn empty_memory() -> JobMemory {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 0,
@@ -70,6 +72,7 @@ fn traverses_three_state_skeleton() {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 0,
@@ -141,8 +144,13 @@ fn preserves_limit_when_source_intent_quantity_defaults() {
         warnings: Vec::new(),
     };
     let payload = ClarificationPayload {
+        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which report?".into(),
         options: Vec::new(),
+        fields: Vec::new(),
         attempt: 1,
         source_intent: Some(SourceIntentSnapshot {
             prompt: "show 10 clients with the most savings accounts".into(),
@@ -361,6 +369,7 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 0,
@@ -388,6 +397,7 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         queries: Vec::new(),
         policies: Vec::new(),
         responses: Vec::new(),
+        parameter_inputs: Vec::new(),
         classification: Default::default(),
     };
     let llm = Arc::new(FakeLlm) as SharedLlmClient;
@@ -433,6 +443,7 @@ async fn semantic_router_unavailable_fails_closed() {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 0,
@@ -516,6 +527,7 @@ async fn exact_pending_option_id_resolves_before_router() {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 0,
@@ -527,19 +539,26 @@ async fn exact_pending_option_id_resolves_before_router() {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: Some(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
             question: "Which report?".into(),
             options: vec![
                 ClarificationOption {
                     id: "client_top_n_by_deposit_volume".into(),
                     label: "Top clients by deposit volume".into(),
                     description: None,
+                    fields: Vec::new(),
                 },
                 ClarificationOption {
                     id: "client_top_n_by_savings_balance".into(),
                     label: "Top clients by savings balance".into(),
                     description: None,
+                    fields: Vec::new(),
                 },
             ],
+            fields: Vec::new(),
             attempt: 1,
             source_intent: Some(SourceIntentSnapshot {
                 prompt: "show 10 clients in USD".into(),
@@ -585,6 +604,9 @@ async fn exact_pending_option_id_resolves_before_router() {
             message: "client_top_n_by_savings_balance".into(),
             source_message: "please use the balance option".into(),
             selected_option_id: Some("client_top_n_by_savings_balance".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -609,10 +631,7 @@ async fn exact_pending_option_id_resolves_before_router() {
             .as_deref(),
         Some("USD")
     );
-    assert_eq!(
-        result.memory.retrieval_evidence["source_message"],
-        "please use the balance option"
-    );
+    assert_eq!(result.memory.retrieval_evidence["structured"], false);
     assert_eq!(
         result.memory.retrieval_evidence["source"],
         "explicit_option_id"
@@ -641,6 +660,7 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         policy_decision: json!({}),
         execution_summary: json!({}),
         structured_response: None,
+        pending_clarification: None,
         planner_snapshot_id: None,
         warnings: json!([]),
         revision: 0,
@@ -652,12 +672,18 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: Some(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
             question: "Which report?".into(),
             options: vec![ClarificationOption {
                 id: "client_top_n_by_deposit_volume".into(),
                 label: "Top clients by deposit volume".into(),
                 description: None,
+                fields: Vec::new(),
             }],
+            fields: Vec::new(),
             attempt: 1,
             source_intent: None,
             allow_free_text: true,
@@ -683,6 +709,9 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
             message: "client_summary".into(),
             source_message: "client summary".into(),
             selected_option_id: Some("client_summary".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -723,6 +752,9 @@ async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
             message: "stale option".into(),
             source_message: "stale option".into(),
             selected_option_id: Some("unavailable_report".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -771,6 +803,9 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
             message: message.into(),
             source_message: message.into(),
             selected_option_id: Some("client_top_n_by_deposit_volume".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -827,6 +862,9 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
             message: message.into(),
             source_message: message.into(),
             selected_option_id: Some("organization_office_activity_ranking".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -1019,19 +1057,26 @@ fn pending_context(missing_parameters: bool, attempt: u32, capability_id: &str) 
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: Some(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: Uuid::nil(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
             question: "Please clarify".into(),
             options: vec![
                 ClarificationOption {
                     id: capability_id.into(),
                     label: capability_id.into(),
                     description: None,
+                    fields: Vec::new(),
                 },
                 ClarificationOption {
                     id: OTHER_CLARIFICATION_OPTION_ID.into(),
                     label: "Others".into(),
                     description: None,
+                    fields: Vec::new(),
                 },
             ],
+            fields: Vec::new(),
             attempt,
             source_intent: Some(SourceIntentSnapshot {
                 prompt: "show the largest savings deposits".into(),
@@ -1066,6 +1111,9 @@ fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
             message: message.into(),
             source_message: message.into(),
             selected_option_id: Some("others".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
         payload,
         &empty_memory(),
@@ -1098,6 +1146,9 @@ async fn others_continues_missing_parameters_with_message_facts() {
             message: message.into(),
             source_message: message.into(),
             selected_option_id: Some("others".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;
@@ -1136,6 +1187,9 @@ async fn long_message_continues_missing_parameters() {
             message: message.into(),
             source_message: message.into(),
             selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
         },
     )
     .await;

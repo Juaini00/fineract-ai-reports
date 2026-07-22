@@ -19,6 +19,45 @@ pub fn observations_from_patch(
     observed_at: DateTime<Utc>,
     contracts: &ConstraintContracts,
 ) -> Result<Vec<FactObservation>, MergeError> {
+    observations_from_patch_with_source_kind(
+        job_id,
+        source_id,
+        first_sequence,
+        FactSourceKind::Clarification,
+        patch,
+        observed_at,
+        contracts,
+    )
+}
+
+pub fn approved_default_observations(
+    job_id: Uuid,
+    source_id: &str,
+    first_sequence: i64,
+    patch: &ConstraintPatch,
+    observed_at: DateTime<Utc>,
+    contracts: &ConstraintContracts,
+) -> Result<Vec<FactObservation>, MergeError> {
+    observations_from_patch_with_source_kind(
+        job_id,
+        source_id,
+        first_sequence,
+        FactSourceKind::ApprovedDefault,
+        patch,
+        observed_at,
+        contracts,
+    )
+}
+
+pub fn observations_from_patch_with_source_kind(
+    job_id: Uuid,
+    source_id: &str,
+    first_sequence: i64,
+    source_kind: FactSourceKind,
+    patch: &ConstraintPatch,
+    observed_at: DateTime<Utc>,
+    contracts: &ConstraintContracts,
+) -> Result<Vec<FactObservation>, MergeError> {
     patch
         .iter()
         .enumerate()
@@ -28,15 +67,20 @@ pub fn observations_from_patch(
                 .ok_or_else(|| MergeError::MissingContract(field.clone()))?;
             validate(field, value, contract)?;
             Ok(FactObservation {
-                id: Uuid::new_v4(),
+                id: Uuid::new_v3(&job_id, format!("{source_id}:{field:?}").as_bytes()),
                 job_id,
                 sequence: first_sequence + offset as i64,
-                source_kind: FactSourceKind::Clarification,
+                source_kind,
                 source_id: source_id.into(),
                 field_path: field.clone(),
                 typed_value: value.clone(),
                 confidence: None,
-                extractor_version: "clarification_patch_v1".into(),
+                extractor_version: match source_kind {
+                    FactSourceKind::Clarification => "clarification_patch_v1",
+                    FactSourceKind::ApprovedDefault => "approved_default_v1",
+                    _ => "constraint_patch_v1",
+                }
+                .into(),
                 observed_at,
             })
         })
@@ -119,6 +163,30 @@ pub fn original_request_observations(
             observed_at,
         })
         .collect()
+}
+
+pub fn deterministic_observations_excluding_fields(
+    job_id: Uuid,
+    source_id: &str,
+    first_sequence: i64,
+    source_kind: FactSourceKind,
+    extraction: &DeterministicExtraction,
+    excluded_fields: &std::collections::BTreeSet<ConstraintField>,
+    observed_at: DateTime<Utc>,
+) -> Vec<FactObservation> {
+    let mut filtered = extraction.clone();
+    filtered.candidates.retain(|candidate| {
+        candidate_fact(&candidate.field, &candidate.value)
+            .is_none_or(|(field, _)| !excluded_fields.contains(&field))
+    });
+    deterministic_observations(
+        job_id,
+        source_id,
+        first_sequence,
+        source_kind,
+        &filtered,
+        observed_at,
+    )
 }
 
 pub fn deterministic_observations(

@@ -30,9 +30,9 @@ supported_intents:
 required_parameters:
   - from_date
   - to_date
-  - limit
 optional_parameters:
   - office_ids
+  - limit
   - currency_code
   - product_ids
 defaults:

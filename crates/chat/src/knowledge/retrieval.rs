@@ -325,6 +325,8 @@ mod tests {
             examples: Vec::new(),
             required_parameters: Vec::new(),
             optional_parameters: Vec::new(),
+            defaults: Default::default(),
+            guards: Default::default(),
         }
     }
 

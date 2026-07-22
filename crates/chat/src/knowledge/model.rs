@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use crate::assistant::intent::RequestShape;
+use crate::assistant::{ClarificationFieldType, ClarificationValidation};
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeCatalog {
@@ -16,6 +17,7 @@ pub struct KnowledgeCatalog {
     pub queries: Vec<QueryKnowledge>,
     pub policies: Vec<GenericKnowledge>,
     pub responses: Vec<GenericKnowledge>,
+    pub parameter_inputs: Vec<ParameterInputKnowledge>,
     pub classification: ClassificationPolicy,
 }
 
@@ -173,6 +175,35 @@ pub struct DomainConcept {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ParameterInputKnowledge {
+    pub id: String,
+    pub parameters: Vec<String>,
+    #[serde(rename = "type")]
+    pub field_type: ClarificationFieldType,
+    pub label: String,
+    #[serde(default)]
+    pub help_text: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub validation: ClarificationValidation,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CapabilityDefaults {
+    #[serde(default)]
+    pub default_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CapabilityGuards {
+    #[serde(default)]
+    pub max_limit: Option<i64>,
+    #[serde(default)]
+    pub max_date_range_days: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct CapabilityKnowledge {
     pub id: String,
     pub status: String,
@@ -201,6 +232,12 @@ pub struct CapabilityKnowledge {
 
     #[serde(default)]
     pub optional_parameters: Vec<String>,
+
+    #[serde(default)]
+    pub defaults: CapabilityDefaults,
+
+    #[serde(default)]
+    pub guards: CapabilityGuards,
 }
 
 #[derive(Debug, Clone, Deserialize)]

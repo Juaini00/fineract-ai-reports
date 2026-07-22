@@ -1,0 +1,8 @@
+id: limit
+parameters:
+  - limit
+type: integer
+label: Number of records
+required: true
+validation:
+  min_integer: 1

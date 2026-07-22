@@ -4,7 +4,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    conversation::repository::MessageRepository,
+    assistant::clarification::ClarificationPayload, conversation::repository::MessageRepository,
     conversation::repository::assistant_memory::SessionMemoryRepository,
 };
 
@@ -38,6 +38,17 @@ impl ContextBuilder {
         session_id: Uuid,
         client: &PrincipalContext,
     ) -> Result<ContextWindow> {
+        self.build_with_pending(session_id, client, None, true)
+            .await
+    }
+
+    pub async fn build_with_pending(
+        &self,
+        session_id: Uuid,
+        client: &PrincipalContext,
+        pending_clarification: Option<ClarificationPayload>,
+        allow_legacy_session_pending: bool,
+    ) -> Result<ContextWindow> {
         let memory = self
             .sessions
             .get_or_create(session_id, client.user_id)
@@ -69,13 +80,19 @@ impl ContextBuilder {
                 .await?,
         );
         relevant_jobs.truncate(self.policy.max_relevant_jobs);
-        let source_intent = memory
-            .pending_clarification
+        let pending_clarification = pending_clarification.or_else(|| {
+            // Remove once all waiting jobs have job-scoped clarification memory.
+            allow_legacy_session_pending.then_some(memory.pending_clarification.clone())?
+        });
+        let source_intent = pending_clarification
             .as_ref()
             .and_then(|payload| payload.source_intent.as_ref())
             .map(serde_json::to_value)
             .transpose()?
-            .or(memory.pending_clarification_source_intent.clone());
+            .or_else(|| {
+                allow_legacy_session_pending
+                    .then_some(memory.pending_clarification_source_intent.clone())?
+            });
         let client_scope = json!({
             "user_id": client.user_id,
             "role": client.role,
@@ -91,8 +108,7 @@ impl ContextBuilder {
             + estimate_tokens(&memory.entities.to_string())
             + estimate_tokens(&memory.relevant_jobs.to_string())
             + estimate_tokens(
-                &memory
-                    .pending_clarification
+                &pending_clarification
                     .as_ref()
                     .map(serde_json::to_string)
                     .transpose()?
@@ -134,7 +150,7 @@ impl ContextBuilder {
             selected_entities: memory.entities.clone(),
             recent_messages: messages,
             relevant_jobs,
-            pending_clarification: memory.pending_clarification,
+            pending_clarification,
             source_intent,
             source_snippets: Vec::new(),
             client_scope,

@@ -1,6 +1,14 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
+/// Supplies a value for a required row-limit parameter the user did not specify.
+pub(super) const DEFAULT_REPORT_LIMIT: i64 = 10;
+
+fn default_required_parameter(parameter: &QueryParameter) -> Option<Value> {
+    (parameter.required && matches!(parameter.name.as_str(), "limit" | "top_n"))
+        .then(|| json!(DEFAULT_REPORT_LIMIT))
+}
+
 use crate::{
     assistant::{
         AssistantEntityType, AssistantIntent, ConstraintField, DeterministicExtraction,
@@ -9,17 +17,40 @@ use crate::{
     knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
 };
 
-/// Reports rank "top" rows; asking the user for a row count they never thought
-/// about is worse UX than picking a sane page size.
-/// ponytail: one global default — move it into the capability YAML only when a
-/// report genuinely needs a different one.
-pub(super) const DEFAULT_REPORT_LIMIT: i64 = 10;
-
-/// Supplies a value for a required parameter the user never specified, so the
-/// run continues instead of bouncing back a clarification.
-fn default_required_parameter(parameter: &QueryParameter) -> Option<Value> {
-    (parameter.required && matches!(parameter.name.as_str(), "limit" | "top_n"))
-        .then(|| json!(DEFAULT_REPORT_LIMIT))
+pub fn approved_default_patch(
+    catalog: &KnowledgeCatalog,
+    capability_id: &str,
+) -> Result<crate::assistant::ConstraintPatch> {
+    let capability = executable_capability(catalog, capability_id)?;
+    let Some(limit) = capability.defaults.default_limit else {
+        return Ok(Default::default());
+    };
+    let query = catalog
+        .queries
+        .iter()
+        .find(|item| item.id == capability.query_id)
+        .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
+    let mode = if query
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name == "top_n")
+    {
+        LimitMode::TopN
+    } else if query
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name == "limit")
+    {
+        LimitMode::Limit
+    } else {
+        return Ok(Default::default());
+    };
+    Ok([
+        (ConstraintField::LimitMode, TypedFactValue::LimitMode(mode)),
+        (ConstraintField::LimitValue, TypedFactValue::Integer(limit)),
+    ]
+    .into_iter()
+    .collect())
 }
 
 pub(super) fn normalize_effective_parameters(
@@ -223,8 +254,8 @@ pub(super) fn params_from_verified(
             "office" | "office_name" => office.map(|value| json!(value)),
             "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
             _ => None,
-        };
-        let value = value.or_else(|| default_required_parameter(parameter));
+        }
+        .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
         } else if parameter.required {

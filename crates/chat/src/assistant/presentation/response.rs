@@ -2,6 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::assistant::clarification::ClarificationView;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssistantResponse {
     pub response_type: AssistantResponseType,
@@ -12,8 +14,12 @@ pub struct AssistantResponse {
     pub table: Option<ResponseTable>,
     #[serde(default)]
     pub cards: Vec<ResponseCard>,
+    /// Deprecated compatibility projection of clarification options.
     #[serde(default)]
     pub options: Vec<ResponseOption>,
+    /// Versioned client-safe clarification contract.
+    #[serde(default)]
+    pub clarification: Option<ClarificationView>,
     #[serde(default)]
     pub warnings: Vec<ResponseWarning>,
     #[serde(default)]
@@ -117,7 +123,12 @@ pub enum ResponseActionType {
 mod tests {
     use super::super::renderer::{MarkdownRenderer, ResponseRenderer};
     use super::*;
+    use crate::assistant::clarification::{
+        ClarificationField, ClarificationFieldType, ClarificationKind, ClarificationValidation,
+        ClarificationView,
+    };
     use serde_json::json;
+    use uuid::Uuid;
 
     fn base_response() -> AssistantResponse {
         AssistantResponse {
@@ -128,6 +139,7 @@ mod tests {
             table: None,
             cards: vec![],
             options: vec![],
+            clarification: None,
             warnings: vec![],
             actions: vec![],
             evidence_refs: vec![],
@@ -159,6 +171,38 @@ mod tests {
         assert!(rendered.contains("|Name|"));
         assert!(!rendered.contains("National ID"));
         assert!(!rendered.contains("SECRET"));
+    }
+
+    #[test]
+    fn renders_clarification_question_fields_and_safe_label_fallback() {
+        let mut response = base_response();
+        response.response_type = AssistantResponseType::Clarification;
+        response.clarification = Some(ClarificationView {
+            version: 1,
+            id: Uuid::nil(),
+            revision: 2,
+            kind: ClarificationKind::CollectFields,
+            question: "Which period should I use?".into(),
+            options: vec![],
+            fields: vec![ClarificationField {
+                key: "date_range".into(),
+                label: "".into(),
+                field_type: ClarificationFieldType::DateRange,
+                required: true,
+                value: None,
+                default_value: None,
+                help_text: Some("Use ISO dates.".into()),
+                validation: ClarificationValidation::default(),
+                errors: vec!["Choose a range of 31 days or fewer.".into()],
+            }],
+            allow_free_text: false,
+        });
+
+        let rendered = MarkdownRenderer.render(&response);
+        assert!(rendered.contains("## Question\nWhich period should I use?"));
+        assert!(rendered.contains("date_range (required): Use ISO dates."));
+        assert!(rendered.contains("Error: Choose a range of 31 days or fewer."));
+        assert!(!rendered.contains("00000000-0000-0000-0000-000000000000"));
     }
 
     #[test]

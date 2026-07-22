@@ -1,10 +1,16 @@
 # 005 — Unified agentic clarification contract and job-scoped workflow
 
-Status: active — design complete, implementation planned
+Status: active — implementation landed; final verification, compatibility cleanup, and user acceptance remain
 Severity: blocker
 Area: chat | jobs | assistant | clarification | API | catalog | client integration | tests
 Created: 2026-07-22
 Resolved:
+
+## Implementation note (2026-07-22)
+
+Implementation landed in `4238389..7b14fa6` (versioned contract through structured-clarification lifecycle tests and documentation). The series includes catalog input contracts, job-scoped pending clarification, typed response validation/provenance, bundled fields, delivery projections, behavior corpus, and lifecycle coverage. Documentation now describes the published client contract.
+
+Final offline acceptance verification passed: formatting, workspace check/clippy, the full `chat` test suite, and focused contract/catalog/corpus/no-loop suites. Migration `20260722120000_add_job_scoped_clarification` was applied and verified against the local development database with `sqlx migrate info` and the migration smoke test. This issue remains active for user acceptance and explicit cleanup of deprecated top-level options plus the non-authoritative session-projection compatibility path. No completion claim is made from commit messages alone.
 
 ## Problem
 
@@ -42,7 +48,7 @@ and scenario coverage.
 - A date picker or numeric control must currently serialize its value back into
   natural-language `message` and rely on extraction to recover the same fact.
 
-## Current design and evidence
+## Pre-implementation design and evidence
 
 ### Internal clarification state
 

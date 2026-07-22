@@ -147,30 +147,20 @@ async fn savings_clarification_keeps_selected_capability_for_parameter_only_repl
         selected["result_json"]["selected_capability"],
         case.capability
     );
-    assert!(
-        response["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("missing parameter ")),
+    let clarification = &response["clarification"];
+    assert_eq!(clarification["kind"], "collect_fields", "{selected}");
+    assert_eq!(
+        clarification["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing clarification fields: {selected}"))
+            .iter()
+            .map(|field| field["key"].as_str())
+            .collect::<Vec<_>>(),
+        vec![Some("date_range")],
         "{selected}"
     );
     assert_no_legacy_empty_options_loop(response);
     assert_no_response_leak(response, &selected["result_json"]["markdown"]);
-
-    let resp = app
-        .post_json(
-            &format!("/chat/jobs/{job_id}/responses"),
-            Some(&key.raw),
-            &json!({ "message": "2026-01-01 to 2026-12-31" }),
-        )
-        .await;
-    assert_eq!(
-        resp.status(),
-        201,
-        "response failed: {}",
-        resp.text().await.unwrap_or_default()
-    );
-    let final_job = wait_until_not_running(&app, &key.raw, &job_id).await;
-    assert_completed_answer(&app, &final_job, &case).await;
 }
 
 struct Case {

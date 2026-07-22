@@ -138,6 +138,7 @@ mod tests {
             queries: Vec::new(),
             policies: Vec::new(),
             responses: Vec::new(),
+            parameter_inputs: Vec::new(),
             classification: Default::default(),
         }
     }

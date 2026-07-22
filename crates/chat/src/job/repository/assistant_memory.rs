@@ -31,7 +31,7 @@ impl JobMemoryRepository {
                 intent_json, source_intent_json, retrieval_plan_json, retrieval_evidence_json,
                 evidence_decision_json, selected_capability, selected_tool, tool_params_json,
                 policy_decision_json, execution_summary_json, structured_response_json,
-                warnings_json, revision
+                pending_clarification_json, warnings_json, revision
             "#,
         )
         .bind(job_id)
@@ -49,7 +49,7 @@ impl JobMemoryRepository {
                 intent_json, source_intent_json, retrieval_plan_json, retrieval_evidence_json,
                 evidence_decision_json, selected_capability, selected_tool, tool_params_json,
                 policy_decision_json, execution_summary_json, structured_response_json,
-                warnings_json, revision
+                pending_clarification_json, warnings_json, revision
             FROM assistant_job_memory
             WHERE job_id = $1
               AND EXISTS (SELECT 1 FROM chat_jobs WHERE id = $1 AND user_id = $2)
@@ -73,14 +73,14 @@ impl JobMemoryRepository {
                 retrieval_evidence_json = $7, evidence_decision_json = $8,
                 selected_capability = $9, selected_tool = $10, tool_params_json = $11,
                 policy_decision_json = $12, execution_summary_json = $13,
-                structured_response_json = $14, warnings_json = $15,
-                revision = revision + 1, updated_at = now()
-            WHERE job_id = $16 AND revision = $17
+                structured_response_json = $14, pending_clarification_json = $15,
+                warnings_json = $16, revision = revision + 1, updated_at = now()
+            WHERE job_id = $17 AND revision = $18
             RETURNING job_id, graph_state, terminal_state, current_user_message_metadata_json,
                 intent_json, source_intent_json, retrieval_plan_json, retrieval_evidence_json,
                 evidence_decision_json, selected_capability, selected_tool, tool_params_json,
                 policy_decision_json, execution_summary_json, structured_response_json,
-                warnings_json, revision
+                pending_clarification_json, warnings_json, revision
             "#,
         )
         .bind(&memory.graph_state)
@@ -111,6 +111,13 @@ impl JobMemoryRepository {
         .bind(
             memory
                 .structured_response
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?,
+        )
+        .bind(
+            memory
+                .pending_clarification
                 .as_ref()
                 .map(serde_json::to_value)
                 .transpose()?,
@@ -252,6 +259,7 @@ struct JobMemoryRow {
     policy_decision_json: serde_json::Value,
     execution_summary_json: serde_json::Value,
     structured_response_json: Option<serde_json::Value>,
+    pending_clarification_json: Option<serde_json::Value>,
     warnings_json: serde_json::Value,
     revision: i64,
 }
@@ -283,6 +291,9 @@ impl From<JobMemoryRow> for JobMemory {
             policy_decision: row.policy_decision_json,
             execution_summary: row.execution_summary_json,
             structured_response,
+            pending_clarification: row
+                .pending_clarification_json
+                .and_then(|value| serde_json::from_value(value).ok()),
             planner_snapshot_id: row
                 .current_user_message_metadata_json
                 .get("planner_snapshot_id")

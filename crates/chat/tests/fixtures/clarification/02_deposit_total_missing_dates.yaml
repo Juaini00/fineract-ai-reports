@@ -1,0 +1,11 @@
+id: deposit_total_missing_dates
+bucket: collect_one
+candidate_capabilities: [savings_deposit_total]
+coverage_inputs:
+  - key: date_range
+    state: missing
+expected:
+  direct_execution: false
+  kind: collect_fields
+  shared_field_keys: [date_range]
+  must_not_ask: [limit, search]

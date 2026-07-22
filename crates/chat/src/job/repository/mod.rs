@@ -11,7 +11,17 @@ use uuid::Uuid;
 use crate::conversation::model::ChatMessage;
 use crate::conversation::repository::SessionRepository;
 use crate::conversation::repository::message::ChatMessageRow;
-use crate::job::model::{ChatJob, ChatJobAuditEvent, CreatedChatJob};
+use crate::job::model::{
+    ChatJob, ChatJobAuditEvent, CreatedChatJob, ValidatedClarificationSubmission,
+};
+
+#[derive(Debug)]
+pub enum PersistResponseOutcome {
+    Inserted(ChatMessage),
+    NotFound,
+    NotActive,
+    Stale,
+}
 
 #[derive(Clone)]
 pub struct JobRepository {
@@ -36,9 +46,19 @@ impl JobRepository {
         execution_plan_json: serde_json::Value,
         policy_decision_json: serde_json::Value,
     ) -> Result<Option<CreatedChatJob>> {
-        let new_session_id = match session_id {
-            Some(_) => None,
-            None => Some(self.sessions.create(user_id, None).await?.id),
+        let session_id = match session_id {
+            Some(session_id) => {
+                if self
+                    .sessions
+                    .get_for_user(session_id, user_id, false)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                session_id
+            }
+            None => self.sessions.create(user_id, None).await?.id,
         };
 
         let user_message_id = Uuid::new_v4();
@@ -52,26 +72,6 @@ impl JobRepository {
             "policy_decision": policy_decision_json,
         });
         let mut tx = self.pool.begin().await?;
-        let session_id = match session_id {
-            Some(session_id) => {
-                let active = sqlx::query_scalar::<_, Uuid>(
-                    r#"
-                    SELECT id FROM chat_sessions
-                    WHERE id = $1 AND user_id = $2 AND archived_at IS NULL
-                    FOR UPDATE
-                    "#,
-                )
-                .bind(session_id)
-                .bind(user_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-                let Some(session_id) = active else {
-                    return Ok(None);
-                };
-                session_id
-            }
-            None => new_session_id.expect("new session was created"),
-        };
 
         sqlx::query(
             r#"
@@ -192,12 +192,13 @@ impl JobRepository {
     ) -> Result<Option<ChatJob>> {
         let row = sqlx::query_as::<_, ChatJobRow>(
             r#"
-            SELECT id, session_id, user_id, api_key_id, user_message_id, status,
-                   current_step, resume_from_step, message, state_json, state_revision,
-                   result_json, error_json, created_at, updated_at, expires_at,
-                   completed_at, failed_at, cancelled_at
-            FROM chat_jobs
-            WHERE id = $1 AND user_id = $2
+            SELECT cj.id, cj.session_id, cj.user_id, cj.api_key_id, cj.user_message_id, cj.status,
+                   cj.current_step, cj.resume_from_step, cj.message, cj.state_json, cj.state_revision,
+                   cj.result_json, cj.error_json, cj.created_at, cj.updated_at, cj.expires_at,
+                   cj.completed_at, cj.failed_at, cj.cancelled_at
+            FROM chat_jobs cj
+            JOIN chat_sessions cs ON cs.id = cj.session_id
+            WHERE cj.id = $1 AND cj.user_id = $2 AND cs.archived_at IS NULL
             "#,
         )
         .bind(job_id)
@@ -345,19 +346,17 @@ impl JobRepository {
         &self,
         job_id: Uuid,
         user_id: Uuid,
-        source_message: String,
-        selected_option_id: Option<String>,
-    ) -> Result<Option<ChatMessage>> {
+        submission: ValidatedClarificationSubmission,
+    ) -> Result<PersistResponseOutcome> {
         let mut tx = self.pool.begin().await?;
 
         let Some(target) = sqlx::query_as::<_, JobResponseTargetRow>(
             r#"
-            SELECT cj.session_id, cj.current_step
+            SELECT cj.session_id, cj.current_step, cj.status
             FROM chat_jobs cj
             JOIN chat_sessions cs ON cs.id = cj.session_id
             WHERE cj.id = $1
               AND cj.user_id = $2
-              AND cj.status = 'waiting_for_user_input'
               AND cs.archived_at IS NULL
             FOR UPDATE OF cj, cs
             "#,
@@ -367,20 +366,40 @@ impl JobRepository {
         .fetch_optional(&mut *tx)
         .await?
         else {
-            return Ok(None);
+            return Ok(PersistResponseOutcome::NotFound);
         };
+        if target.status != "waiting_for_user_input" {
+            return Ok(PersistResponseOutcome::NotActive);
+        }
+        if let (Some(id), Some(revision)) = (
+            submission.clarification_id,
+            submission.clarification_revision,
+        ) {
+            let pending: Option<serde_json::Value> = sqlx::query_scalar(
+                "SELECT pending_clarification_json FROM assistant_job_memory WHERE job_id = $1 FOR UPDATE",
+            ).bind(job_id).fetch_optional(&mut *tx).await?.flatten();
+            let matches = pending
+                .and_then(|value| {
+                    serde_json::from_value::<crate::assistant::ClarificationPayload>(value).ok()
+                })
+                .is_some_and(|payload| payload.id == id && payload.revision == revision);
+            if !matches {
+                return Ok(PersistResponseOutcome::Stale);
+            }
+        }
 
         let message_id = Uuid::new_v4();
         let checkpoint_id = Uuid::new_v4();
         let event_id = Uuid::new_v4();
-        let metadata = match &selected_option_id {
-            Some(option_id) => json!({
-                "type": "clarification_response",
-                "selected_option_id": option_id,
-                "source_message": source_message.clone(),
-            }),
-            None => json!({ "type": "clarification_response" }),
-        };
+        let metadata = json!({
+            "type": "clarification_response",
+            "clarification_id": submission.clarification_id,
+            "clarification_revision": submission.clarification_revision,
+            "selected_option_id": submission.selected_option_id,
+            "answers": submission.answers,
+            "constraint_patch": submission.constraint_patch,
+            "source_message": submission.source_message,
+        });
 
         let message_row = sqlx::query_as::<_, ChatMessageRow>(
             r#"
@@ -399,7 +418,7 @@ impl JobRepository {
         .bind(message_id)
         .bind(target.session_id)
         .bind(job_id)
-        .bind(&source_message)
+        .bind(&submission.display_message)
         .bind(&metadata)
         .fetch_one(&mut *tx)
         .await?;
@@ -438,7 +457,7 @@ impl JobRepository {
         .bind(json!({
             "message_id": message_id,
             "resume_from_step": target.current_step,
-            "selected_option_id": selected_option_id.clone(),
+            "selected_option_id": submission.selected_option_id.clone(),
         }))
         .execute(&mut *tx)
         .await?;
@@ -461,14 +480,14 @@ impl JobRepository {
             "status": "queued",
             "current_step": "queued",
             "message_id": message_id,
-            "selected_option_id": selected_option_id.clone(),
+            "selected_option_id": submission.selected_option_id.clone(),
         }))
         .execute(&mut *tx)
         .await?;
 
         tx.commit().await?;
 
-        Ok(Some(message_row.into()))
+        Ok(PersistResponseOutcome::Inserted(message_row.into()))
     }
 
     pub async fn insert_checkpoint(
@@ -613,6 +632,7 @@ impl JobRepository {
 struct JobResponseTargetRow {
     session_id: Uuid,
     current_step: String,
+    status: String,
 }
 
 #[derive(Debug, FromRow)]

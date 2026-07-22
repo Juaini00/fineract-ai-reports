@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::knowledge::model::{
     CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
-    QueryKnowledge,
+    ParameterInputKnowledge, QueryKnowledge,
 };
 
 pub struct KnowledgeLoader {
@@ -30,6 +30,7 @@ impl KnowledgeLoader {
         let queries = self.load_yaml_dir::<QueryKnowledge>("queries")?;
         let policies = self.load_yaml_dir::<GenericKnowledge>("policies")?;
         let responses = self.load_yaml_dir::<GenericKnowledge>("responses")?;
+        let parameter_inputs = self.load_yaml_dir::<ParameterInputKnowledge>("parameters")?;
 
         let classification = self.load_classification_policy()?;
 
@@ -44,6 +45,7 @@ impl KnowledgeLoader {
             queries,
             policies,
             responses,
+            parameter_inputs,
             classification,
         })
     }

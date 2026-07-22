@@ -1,0 +1,7 @@
+id: random_sample_default
+bucket: approved_default
+candidate_capabilities: [client_random_sample]
+expected:
+  direct_execution: true
+  capability_id: client_random_sample
+  must_not_ask: [date_range, limit, search]

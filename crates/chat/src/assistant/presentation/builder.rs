@@ -68,6 +68,7 @@ impl ResponseBuilder {
             table: Some(ResponseTable { columns, rows }),
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings,
             actions: Vec::new(),
             evidence_refs: tool_result
@@ -87,19 +88,21 @@ impl ResponseBuilder {
         AssistantResponse {
             response_type: AssistantResponseType::Clarification,
             title: Some("Please clarify the report".into()),
-            message: payload.question,
+            message: payload.question.clone(),
             sections: Vec::new(),
             table: None,
             cards: Vec::new(),
+            // Retain this deprecated projection so existing clients can render V1.
             options: payload
                 .options
-                .into_iter()
+                .iter()
                 .map(|option| ResponseOption {
-                    id: option.id,
-                    label: option.label,
-                    description: option.description,
+                    id: option.id.clone(),
+                    label: option.label.clone(),
+                    description: option.description.clone(),
                 })
                 .collect(),
+            clarification: Some(payload.view()),
             warnings: Vec::new(),
             actions: vec![ResponseAction {
                 action_type: ResponseActionType::AskFollowUp,
@@ -121,6 +124,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: Vec::new(),
             evidence_refs: Vec::new(),
@@ -138,6 +142,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: Vec::new(),
             evidence_refs: Vec::new(),
@@ -154,6 +159,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: Vec::new(),
             evidence_refs: Vec::new(),
@@ -171,6 +177,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: vec![ResponseAction {
                 action_type: ResponseActionType::StartNewSession,
@@ -182,41 +189,35 @@ impl ResponseBuilder {
     }
 
     pub fn missing_parameter(message: &str) -> AssistantResponse {
-        AssistantResponse {
-            response_type: AssistantResponseType::Clarification,
-            title: Some("Please clarify the lookup".into()),
-            message: message.into(),
-            sections: Vec::new(),
-            table: None,
-            cards: Vec::new(),
+        Self::clarification(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::FreeText,
+            question: message.into(),
             options: Vec::new(),
-            warnings: Vec::new(),
-            actions: vec![ResponseAction {
-                action_type: ResponseActionType::AskFollowUp,
-                label: "Provide the missing detail".into(),
-            }],
-            evidence_refs: Vec::new(),
-            rendered_markdown: None,
-        }
+            fields: Vec::new(),
+            attempt: 1,
+            source_intent: None,
+            allow_free_text: true,
+            is_missing_execution_parameters: true,
+        })
     }
 
     pub fn free_form_other_prompt() -> AssistantResponse {
-        AssistantResponse {
-            response_type: AssistantResponseType::Clarification,
-            title: Some("Describe your request".into()),
-            message: "Please describe what you need in your own words. I will treat your next message as a new request.".into(),
-            sections: Vec::new(),
-            table: None,
-            cards: Vec::new(),
+        Self::clarification(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::FreeText,
+            question: "Please describe what you need in your own words. I will treat your next message as a new request.".into(),
             options: Vec::new(),
-            warnings: Vec::new(),
-            actions: vec![ResponseAction {
-                action_type: ResponseActionType::AskFollowUp,
-                label: "Describe request".into(),
-            }],
-            evidence_refs: Vec::new(),
-            rendered_markdown: None,
-        }
+            fields: Vec::new(),
+            attempt: 1,
+            source_intent: None,
+            allow_free_text: true,
+            is_missing_execution_parameters: false,
+        })
     }
 
     pub fn unsupported() -> AssistantResponse {
@@ -230,6 +231,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: Vec::new(),
             evidence_refs: Vec::new(),
@@ -246,6 +248,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: Vec::new(),
             evidence_refs: Vec::new(),
@@ -262,6 +265,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: Vec::new(),
             evidence_refs: Vec::new(),
@@ -278,6 +282,7 @@ impl ResponseBuilder {
             table: None,
             cards: Vec::new(),
             options: Vec::new(),
+            clarification: None,
             warnings: Vec::new(),
             actions: vec![ResponseAction {
                 action_type: ResponseActionType::AskFollowUp,
@@ -438,6 +443,7 @@ mod tests {
             }],
             policies: Vec::new(),
             responses: Vec::new(),
+            parameter_inputs: Vec::new(),
             classification: Default::default(),
         }
     }

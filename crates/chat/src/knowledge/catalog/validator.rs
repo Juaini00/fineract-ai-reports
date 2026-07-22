@@ -6,7 +6,11 @@ use std::{
 use anyhow::{Result, bail};
 use sqlx::{AssertSqlSafe, Column, Executor, PgPool, SqlSafeStr, Statement};
 
-use crate::knowledge::model::{GenericKnowledge, KnowledgeCatalog, QueryKnowledge};
+use crate::assistant::ClarificationFieldType;
+use crate::knowledge::model::{
+    CapabilityKnowledge, GenericKnowledge, KnowledgeCatalog, ParameterInputKnowledge,
+    QueryKnowledge,
+};
 
 const DATA_AREA_STATUSES: &[&str] = &[
     "included_mvp_foundation",
@@ -81,6 +85,11 @@ impl KnowledgeValidator {
             "response",
             catalog.responses.iter().map(|item| item.id.as_str()),
         )?;
+        validate_unique_ids(
+            "parameter input",
+            catalog.parameter_inputs.iter().map(|item| item.id.as_str()),
+        )?;
+        validate_parameter_input_registry(&catalog.parameter_inputs, &catalog.queries)?;
 
         for area in &catalog.data_areas {
             validate_status("data area", &area.id, &area.status, DATA_AREA_STATUSES)?;
@@ -210,6 +219,19 @@ impl KnowledgeValidator {
                     capability.id,
                     capability.query_id
                 );
+            }
+
+            if capability.status == "approved_mvp" {
+                let query = catalog
+                    .queries
+                    .iter()
+                    .find(|query| query.id == capability.query_id)
+                    .expect("validated query reference");
+                validate_capability_parameter_contract(
+                    capability,
+                    query,
+                    &catalog.parameter_inputs,
+                )?;
             }
 
             validate_refs(
@@ -356,6 +378,188 @@ fn validate_generic_layer(
             && !domain_ids.contains(domain)
         {
             bail!("{label} {} references unknown domain {domain}", item.id);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_parameter_input_registry(
+    inputs: &[ParameterInputKnowledge],
+    queries: &[QueryKnowledge],
+) -> Result<()> {
+    let mut covered = HashSet::new();
+    for input in inputs {
+        for parameter in &input.parameters {
+            if !covered.insert(parameter.as_str()) {
+                bail!("parameter {} is covered more than once", parameter);
+            }
+        }
+    }
+
+    for input in inputs {
+        if input.parameters.is_empty() {
+            bail!(
+                "parameter input {} must cover at least one parameter",
+                input.id
+            );
+        }
+
+        for parameter in &input.parameters {
+            let matches = queries
+                .iter()
+                .flat_map(|query| query.parameters.iter())
+                .filter(|candidate| candidate.name == *parameter)
+                .collect::<Vec<_>>();
+            if matches.is_empty() {
+                bail!(
+                    "parameter input {} covers unknown parameter {}",
+                    input.id,
+                    parameter
+                );
+            }
+            if matches
+                .iter()
+                .any(|candidate| candidate.source.as_deref() == Some("authorized_scope"))
+            {
+                bail!(
+                    "parameter input {} must not cover authorized-scope parameter {}",
+                    input.id,
+                    parameter
+                );
+            }
+
+            let expected_kind = match input.field_type {
+                ClarificationFieldType::DateRange => "date",
+                ClarificationFieldType::Integer => "integer",
+                ClarificationFieldType::Text => "string",
+            };
+            if matches
+                .iter()
+                .any(|candidate| candidate.kind != expected_kind)
+            {
+                bail!("parameter input {} has an invalid type mapping", input.id);
+            }
+        }
+
+        let valid_mapping = match input.field_type {
+            ClarificationFieldType::DateRange => {
+                let names = input
+                    .parameters
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<HashSet<_>>();
+                names.len() == 2 && names == HashSet::from(["from_date", "to_date"])
+            }
+            ClarificationFieldType::Integer | ClarificationFieldType::Text => {
+                input.parameters.len() == 1
+            }
+        };
+
+        if !valid_mapping {
+            bail!("parameter input {} has an invalid type mapping", input.id);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_capability_parameter_contract(
+    capability: &CapabilityKnowledge,
+    query: &QueryKnowledge,
+    inputs: &[ParameterInputKnowledge],
+) -> Result<()> {
+    let required_user_parameters = query
+        .parameters
+        .iter()
+        .filter(|parameter| {
+            parameter.required && parameter.source.as_deref() != Some("authorized_scope")
+        })
+        .map(|parameter| parameter.name.as_str())
+        .collect::<HashSet<_>>();
+    let declared_required_parameters = capability
+        .required_parameters
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+
+    if declared_required_parameters != required_user_parameters {
+        bail!(
+            "approved capability {} required_parameters do not match required user query parameters",
+            capability.id
+        );
+    }
+
+    for parameter in &required_user_parameters {
+        let coverage = inputs
+            .iter()
+            .filter(|input| {
+                input
+                    .parameters
+                    .iter()
+                    .any(|candidate| candidate == parameter)
+            })
+            .count();
+        if coverage != 1 {
+            bail!(
+                "approved capability {} required user parameter {} must be covered exactly once",
+                capability.id,
+                parameter
+            );
+        }
+    }
+
+    if let Some(max_limit) = capability.guards.max_limit
+        && max_limit <= 0
+    {
+        bail!("capability {} max_limit must be positive", capability.id);
+    }
+    if let Some(max_date_range_days) = capability.guards.max_date_range_days
+        && max_date_range_days == 0
+    {
+        bail!(
+            "capability {} max_date_range_days must be positive",
+            capability.id
+        );
+    }
+    if let Some(default_limit) = capability.defaults.default_limit {
+        if default_limit <= 0 {
+            bail!(
+                "capability {} default_limit must be positive",
+                capability.id
+            );
+        }
+        if !capability
+            .required_parameters
+            .iter()
+            .any(|parameter| parameter == "limit")
+            && !capability
+                .optional_parameters
+                .iter()
+                .any(|parameter| parameter == "limit")
+        {
+            bail!(
+                "capability {} default_limit requires limit to be accepted",
+                capability.id
+            );
+        }
+        if !query
+            .parameters
+            .iter()
+            .any(|parameter| parameter.name == "limit")
+        {
+            bail!(
+                "capability {} default_limit requires query parameter limit",
+                capability.id
+            );
+        }
+        if let Some(max_limit) = capability.guards.max_limit
+            && default_limit > max_limit
+        {
+            bail!(
+                "capability {} default_limit exceeds max_limit",
+                capability.id
+            );
         }
     }
 

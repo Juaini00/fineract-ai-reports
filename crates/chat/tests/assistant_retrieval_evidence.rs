@@ -144,10 +144,13 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
             examples: vec!["show savings deposits".into()],
             required_parameters: vec![],
             optional_parameters: vec![],
+            defaults: Default::default(),
+            guards: Default::default(),
         }],
         queries: vec![],
         policies: vec![],
         responses: vec![],
+        parameter_inputs: Vec::new(),
         classification: ClassificationPolicy::default(),
     });
     let plan = RetrievalPlan::new(

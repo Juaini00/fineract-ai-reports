@@ -38,4 +38,3 @@ Make `POST /chat/jobs/{job_id}/responses` behave correctly when clients always s
 5. Invalid/stale option never executes and repeated attempts do not return an identical clarification indefinitely.
 6. A parameter reply longer than six words remains a continuation.
 7. The original transcript’s `this month` facts remain available after report selection; only the missing limit is requested.
-
