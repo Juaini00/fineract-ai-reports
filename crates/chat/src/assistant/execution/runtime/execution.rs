@@ -8,6 +8,7 @@ pub(super) async fn execute_selected_capability(
     client: Option<&PrincipalContext>,
     fineract_pool: Option<&PgPool>,
     canonical: Option<&CanonicalRuntimeContext>,
+    active_payload: Option<&ClarificationPayload>,
     pending_clarification: Option<Option<ClarificationPayload>>,
 ) -> GraphRuntimeResult {
     let (Some(catalog), Some(client)) = (catalog, client) else {
@@ -49,25 +50,36 @@ pub(super) async fn execute_selected_capability(
             error_message = %error.message,
             "clarification-reply execution blocked: invalid temporal input"
         );
-        let payload = ClarificationPayload {
-            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
-            id: uuid::Uuid::new_v4(),
-            revision: 0,
-            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
-            question: error.message.clone(),
-            options: vec![ClarificationOption {
-                id: capability_id.clone(),
-                label: capability_id.clone(),
-                description: Some("Retry this report after providing a valid date range.".into()),
-                fields: Vec::new(),
-            }],
-            fields: Vec::new(),
-            attempt: 1,
-            source_intent: intent
+        let payload = match planned_clarification(
+            catalog,
+            std::slice::from_ref(&capability_id),
+            intent.as_ref(),
+            &Default::default(),
+            intent
                 .as_ref()
                 .map(|intent| source_intent_snapshot(intent, &intent.reason)),
-            allow_free_text: true,
-            is_missing_execution_parameters: true,
+            active_payload,
+        ) {
+            ClarificationPlanResult::Clarify { mut payload, .. } => {
+                // The payload carries stable field metadata; do not expose parser errors.
+                payload.question = error.message.clone();
+                payload
+            }
+            ClarificationPlanResult::Complete { .. } => ClarificationPayload {
+                version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 1,
+                kind: crate::assistant::clarification::ClarificationKind::FreeText,
+                question: "Please provide a valid date range for this report.".into(),
+                options: Vec::new(),
+                fields: Vec::new(),
+                attempt: 1,
+                source_intent: intent
+                    .as_ref()
+                    .map(|intent| source_intent_snapshot(intent, &intent.reason)),
+                allow_free_text: true,
+                is_missing_execution_parameters: true,
+            },
         };
         return graph_result(
             memory,
@@ -111,33 +123,30 @@ pub(super) async fn execute_selected_capability(
                         "clarification-reply plan_selected_capability_verified failed; \
                          re-clarifying instead of executing"
                     );
-                    let payload = ClarificationPayload {
-                        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
-                        id: uuid::Uuid::new_v4(),
-                        revision: 0,
-                        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
-                        question: error.to_string(),
-                        options: vec![
-                            ClarificationOption {
-                                id: capability_id.clone(),
-                                label: capability_id.clone(),
-                                description: None,
-                                fields: Vec::new(),
-                            },
-                            ClarificationOption {
-                                id: OTHER_CLARIFICATION_OPTION_ID.into(),
-                                label: "Others".into(),
-                                description: Some(
-                                    "Let me describe what I need in my own words.".into(),
+                    let payload = match planned_clarification(
+                        catalog,
+                        std::slice::from_ref(&capability_id),
+                        Some(intent),
+                        &Default::default(),
+                        Some(source_intent_snapshot(intent, &intent.reason)),
+                        active_payload,
+                    ) {
+                        ClarificationPlanResult::Clarify { payload, .. } => payload,
+                        ClarificationPlanResult::Complete { .. } => {
+                            tracing::error!(target: "assistant::execute_selected_capability", capability_id = %capability_id, "planner reported complete after missing parameters");
+                            return graph_result(
+                                memory,
+                                TerminalState::FailedOperational,
+                                "planning_inconsistent",
+                                ResponseBuilder::error(),
+                                recent_message_count,
+                                pending_clarification,
+                                execution_transitions(
+                                    TerminalState::FailedOperational,
+                                    "planning_inconsistent",
                                 ),
-                                fields: Vec::new(),
-                            },
-                        ],
-                        fields: Vec::new(),
-                        attempt: 1,
-                        source_intent: Some(source_intent_snapshot(intent, &intent.reason)),
-                        allow_free_text: true,
-                        is_missing_execution_parameters: true,
+                            );
+                        }
                     };
                     return graph_result(
                         memory,

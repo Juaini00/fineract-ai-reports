@@ -1,5 +1,124 @@
 use super::*;
 
+pub(super) fn apply_constraint_patch(
+    intent: &mut AssistantIntent,
+    patch: &crate::assistant::ConstraintPatch,
+) {
+    for (field, value) in patch {
+        match (field, value) {
+            (ConstraintField::FromDate, TypedFactValue::Date(value)) => {
+                intent.constraints.from_date = Some(value.clone())
+            }
+            (ConstraintField::ToDate, TypedFactValue::Date(value)) => {
+                intent.constraints.to_date = Some(value.clone())
+            }
+            (ConstraintField::LimitValue, TypedFactValue::Integer(value)) => {
+                match intent.constraints.quantity {
+                    Some(Quantity::TopN { .. }) => {
+                        intent.constraints.quantity = Some(Quantity::TopN { value: *value })
+                    }
+                    _ => intent.constraints.quantity = Some(Quantity::Limit { value: *value }),
+                }
+            }
+            (ConstraintField::LimitMode, TypedFactValue::LimitMode(mode)) => match mode {
+                LimitMode::TopN => {
+                    intent.constraints.quantity = Some(Quantity::TopN {
+                        value: patch
+                            .get(&ConstraintField::LimitValue)
+                            .and_then(|v| match v {
+                                TypedFactValue::Integer(v) => Some(*v),
+                                _ => None,
+                            })
+                            .unwrap_or(1),
+                    })
+                }
+                LimitMode::Limit => {
+                    intent.constraints.quantity = Some(Quantity::Limit {
+                        value: patch
+                            .get(&ConstraintField::LimitValue)
+                            .and_then(|v| match v {
+                                TypedFactValue::Integer(v) => Some(*v),
+                                _ => None,
+                            })
+                            .unwrap_or(1),
+                    })
+                }
+                LimitMode::All => intent.constraints.quantity = Some(Quantity::All),
+                LimitMode::Default => intent.constraints.quantity = Some(Quantity::Default),
+            },
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn clarification_facts(
+    intent: Option<&AssistantIntent>,
+    patch: &crate::assistant::ConstraintPatch,
+) -> ClarificationFacts {
+    let mut values = patch.clone();
+    if let Some(intent) = intent {
+        if let Some(value) = &intent.constraints.from_date {
+            values
+                .entry(ConstraintField::FromDate)
+                .or_insert_with(|| TypedFactValue::Date(value.clone()));
+        }
+        if let Some(value) = &intent.constraints.to_date {
+            values
+                .entry(ConstraintField::ToDate)
+                .or_insert_with(|| TypedFactValue::Date(value.clone()));
+        }
+        if let Some(quantity) = &intent.constraints.quantity {
+            let (mode, value) = match quantity {
+                Quantity::TopN { value } => (LimitMode::TopN, Some(*value)),
+                Quantity::Limit { value } => (LimitMode::Limit, Some(*value)),
+                Quantity::All => (LimitMode::All, None),
+                Quantity::Default => (LimitMode::Default, None),
+            };
+            values
+                .entry(ConstraintField::LimitMode)
+                .or_insert(TypedFactValue::LimitMode(mode));
+            if let Some(value) = value {
+                values
+                    .entry(ConstraintField::LimitValue)
+                    .or_insert(TypedFactValue::Integer(value));
+            }
+        }
+    }
+    ClarificationFacts { values }
+}
+
+pub(super) fn planned_clarification(
+    catalog: &KnowledgeCatalog,
+    candidate_ids: &[String],
+    intent: Option<&AssistantIntent>,
+    patch: &crate::assistant::ConstraintPatch,
+    source_intent: Option<SourceIntentSnapshot>,
+    existing: Option<&ClarificationPayload>,
+) -> ClarificationPlanResult {
+    let id = existing
+        .map(|payload| payload.id)
+        .unwrap_or_else(uuid::Uuid::new_v4);
+    match ClarificationPlanner::new(catalog).plan(
+        candidate_ids,
+        &clarification_facts(intent, patch),
+        id,
+    ) {
+        ClarificationPlanResult::Clarify {
+            mut payload,
+            approved_defaults,
+        } => {
+            payload.revision = existing.map(|payload| payload.revision + 1).unwrap_or(1);
+            payload.attempt = existing.map(|payload| payload.attempt).unwrap_or(1);
+            payload.source_intent = source_intent;
+            ClarificationPlanResult::Clarify {
+                payload,
+                approved_defaults,
+            }
+        }
+        complete => complete,
+    }
+}
+
 pub(super) fn pending_clarification_intent(context: &ContextWindow) -> AssistantIntent {
     let quantity = pending_clarification_quantity(context);
     AssistantIntent {
@@ -169,9 +288,11 @@ pub(super) fn clarification_audit(
     json!({
         "clarification_outcome": "selected_option",
         "option_id": option_id,
-        "source_message": input.source_message,
+        "clarification_id": payload.id,
+        "clarification_revision": payload.revision,
+        "clarification_kind": payload.kind,
         "source": source,
-        "source_intent": payload.source_intent,
+        "structured": input.clarification_id.is_some(),
     })
 }
 

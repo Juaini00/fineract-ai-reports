@@ -29,11 +29,12 @@ use crate::assistant::execution::plan::PolicyDecisionStatus;
 use crate::assistant::{
     AssistantConstraints, AssistantDomain, AssistantGraphTopology, AssistantIntent,
     AssistantIntentKind, AssistantLanguage, AssistantResponse, CanonicalStateRepository,
-    ClarificationOption, ClarificationOutcome, ClarificationPayload, ClarificationResolver,
+    ClarificationFacts, ClarificationOption, ClarificationOutcome, ClarificationPayload,
+    ClarificationPlanResult, ClarificationPlanner, ClarificationResolver, ConstraintField,
     ContextReference, ContextWarningCode, ContextWindow, DeterministicExtraction,
-    ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory,
+    ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory, LimitMode,
     OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
-    Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState,
+    Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState, TypedFactValue,
     evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
@@ -208,7 +209,9 @@ impl AssistantGraphRuntime {
         if let Some(payload) = &context.pending_clarification
             && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
         {
-            memory.intent = Some(intent_from_source(payload, &context, canonical));
+            let mut continuation_intent = intent_from_source(payload, &context, canonical);
+            apply_constraint_patch(&mut continuation_intent, &input.constraint_patch);
+            memory.intent = Some(continuation_intent);
             record_source_extraction_metadata(
                 &mut memory,
                 payload,
@@ -243,12 +246,13 @@ impl AssistantGraphRuntime {
                         client,
                         fineract_pool,
                         canonical,
+                        Some(payload),
                         Some(None),
                     )
                     .await;
                 }
                 ClarificationOutcome::FreeFormOther { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                     return graph_result(
                         memory,
                         TerminalState::WaitingForUserInput,
@@ -263,7 +267,7 @@ impl AssistantGraphRuntime {
                     );
                 }
                 ClarificationOutcome::Unresolved { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "source_message": input.source_message, "source_intent": payload.source_intent });
+                    memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
                     return graph_result(
                         memory,
                         TerminalState::WaitingForUserInput,
@@ -311,6 +315,7 @@ impl AssistantGraphRuntime {
                 client,
                 fineract_pool,
                 canonical,
+                Some(payload),
                 Some(None),
             )
             .await;

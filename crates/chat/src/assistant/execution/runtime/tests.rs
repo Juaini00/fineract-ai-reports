@@ -630,10 +630,7 @@ async fn exact_pending_option_id_resolves_before_router() {
             .as_deref(),
         Some("USD")
     );
-    assert_eq!(
-        result.memory.retrieval_evidence["source_message"],
-        "please use the balance option"
-    );
+    assert_eq!(result.memory.retrieval_evidence["structured"], false);
     assert_eq!(
         result.memory.retrieval_evidence["source"],
         "explicit_option_id"
