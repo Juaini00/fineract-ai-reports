@@ -521,8 +521,11 @@ async fn domain_prompt_matrix_returns_expected_contracts() {
                 }
                 "waiting_for_user_input" => {
                     let ids = option_ids(response);
+                    let fields = response["clarification"]["fields"]
+                        .as_array()
+                        .map_or(0, Vec::len);
                     assert!(
-                        expected.iter().any(|id| ids.iter().any(|got| got == id)),
+                        expected.iter().any(|id| ids.iter().any(|got| got == id)) || fields > 0,
                         "{prompt}: {response}"
                     );
                 }
@@ -600,6 +603,121 @@ async fn multi_step_clarification_others_then_free_text_does_not_repeat_same_opt
         first_ids.iter().map(String::as_str).collect::<Vec<_>>(),
         "same options repeated after free text: {final_job}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clarification_public_projection_matches_result_event_and_message_metadata() {
+    let app = spawn_app().await;
+    let key = app.provision_wildcard_api_key(true).await;
+    let session_id = create_session(&app, &key.raw, "clarification projections").await;
+    let (job_id, job) = first_clarification_job(&app, &key.raw, &session_id).await;
+    let expected = job["result_json"]["structured_response"]["clarification"].clone();
+    assert!(expected.is_object(), "missing public clarification: {job}");
+
+    let event: Value = sqlx::query_scalar(
+        "SELECT payload_json FROM chat_job_events WHERE job_id = $1::uuid AND event_type = 'clarification' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&job_id)
+    .fetch_one(&app.app_pool)
+    .await
+    .unwrap();
+    assert_eq!(event["structured_response"]["clarification"], expected);
+
+    let messages = app
+        .get(
+            &format!("/chat/sessions/{session_id}/messages"),
+            Some(&key.raw),
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let metadata = messages["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| {
+            message["role"] == "assistant"
+                && message["metadata_json"]["type"] == "assistant_response"
+        })
+        .expect("assistant response message");
+    assert_eq!(
+        metadata["metadata_json"]["assistant_response"]["clarification"],
+        expected
+    );
+
+    let audit = wait_for_audit(&app, &key.raw, &job_id).await;
+    let summary = audit["data"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["stage"] == "assistant_response_projected")
+        .expect("response projection audit event")["output_summary_json"]["clarification"]
+        .clone();
+    assert_eq!(summary["id"], expected["id"]);
+    assert_eq!(summary["revision"], expected["revision"]);
+    assert_eq!(summary["kind"], expected["kind"]);
+    assert_eq!(
+        summary["option_ids"],
+        Value::Array(
+            expected["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|option| option["id"].clone())
+                .collect(),
+        )
+    );
+    let field_keys = expected["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(
+            expected["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|option| option["fields"].as_array().unwrap()),
+        )
+        .map(|field| field["key"].clone())
+        .collect();
+    assert_eq!(summary["field_keys"], Value::Array(field_keys));
+    assert_eq!(summary["resolution_outcome"], "waiting_for_user_input");
+    assert!(summary["provenance_identifiers"].is_object());
+    let checkpoint: Value = sqlx::query_scalar(
+        "SELECT state_json FROM assistant_graph_checkpoints WHERE job_id = $1::uuid ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&job_id)
+    .fetch_one(&app.app_pool)
+    .await
+    .unwrap();
+    assert_eq!(checkpoint["clarification_summary"], summary);
+    assert!(!summary.to_string().contains("source_intent"));
+    assert!(!summary.to_string().contains("principal_scope"));
+    assert!(!summary.to_string().contains("SELECT "));
+}
+
+async fn wait_for_audit(app: &TestApp, api_key: &str, job_id: &str) -> Value {
+    let deadline = Instant::now() + POLL_TIMEOUT;
+    loop {
+        let response = app
+            .get(&format!("/chat/jobs/{job_id}/audit"), Some(api_key))
+            .await;
+        assert_eq!(response.status(), 200);
+        let audit = response.json::<Value>().await.unwrap();
+        if audit["data"]["events"].as_array().is_some_and(|events| {
+            events
+                .iter()
+                .any(|event| event["stage"] == "assistant_response_projected")
+        }) {
+            return audit;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "audit was not persisted: {audit}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 fn assert_no_legacy_empty_options_loop(result: &Value) {

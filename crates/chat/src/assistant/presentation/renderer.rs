@@ -40,19 +40,25 @@ impl ResponseRenderer for MarkdownRenderer {
             }
         }
         if let Some(clarification) = &response.clarification {
+            out.push_str("\n\n## Question\n");
+            out.push_str(&clarification.question);
             if !clarification.options.is_empty() {
                 out.push_str("\n\n## Options");
                 for option in &clarification.options {
                     out.push_str("\n- ");
-                    out.push_str(&option.label);
-                    if let Some(description) = &option.description {
+                    out.push_str(display_label(&option.label, &option.id));
+                    if let Some(description) = option
+                        .description
+                        .as_deref()
+                        .filter(|text| !text.is_empty())
+                    {
                         out.push_str(": ");
                         out.push_str(description);
                     }
-                    render_fields(&mut out, &option.fields);
+                    render_fields(&mut out, &option.fields, "Details for this option");
                 }
             }
-            render_fields(&mut out, &clarification.fields);
+            render_fields(&mut out, &clarification.fields, "Required details");
         } else if !response.options.is_empty() {
             // Legacy responses have only the deprecated top-level projection.
             out.push_str("\n\n## Options");
@@ -83,17 +89,40 @@ impl ResponseRenderer for MarkdownRenderer {
     }
 }
 
-fn render_fields(out: &mut String, fields: &[crate::assistant::clarification::ClarificationField]) {
+fn render_fields(
+    out: &mut String,
+    fields: &[crate::assistant::clarification::ClarificationField],
+    heading: &str,
+) {
     if fields.is_empty() {
         return;
     }
-    out.push_str("\n\n## Required details");
+    out.push_str("\n\n## ");
+    out.push_str(heading);
     for field in fields {
         out.push_str("\n- ");
-        out.push_str(&field.label);
+        out.push_str(display_label(&field.label, &field.key));
         if field.required {
             out.push_str(" (required)");
         }
+        if let Some(help_text) = field.help_text.as_deref().filter(|text| !text.is_empty()) {
+            out.push_str(": ");
+            out.push_str(help_text);
+        }
+        for error in &field.errors {
+            if !error.is_empty() {
+                out.push_str("\n  - Error: ");
+                out.push_str(error);
+            }
+        }
+    }
+}
+
+fn display_label<'a>(label: &'a str, fallback: &'a str) -> &'a str {
+    if label.trim().is_empty() {
+        fallback
+    } else {
+        label
     }
 }
 

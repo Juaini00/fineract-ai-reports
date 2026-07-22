@@ -115,6 +115,11 @@ impl JobService {
                 result.pending_clarification.as_ref().map(|p| p.as_ref()),
             )
             .await?;
+        let clarification_summary = safe_clarification_summary(
+            memory.structured_response.as_ref(),
+            memory.terminal_state,
+            memory.planner_snapshot_id,
+        );
         self.job_memory
             .insert_checkpoint(
                 &memory,
@@ -122,6 +127,7 @@ impl JobService {
                     "transitions": result.transitions.clone(),
                     "execution_summary": memory.execution_summary,
                     "planner_snapshot_id": memory.planner_snapshot_id,
+                    "clarification_summary": clarification_summary.clone(),
                 }),
             )
             .await?;
@@ -136,6 +142,7 @@ impl JobService {
                         "transition": transition,
                         "execution_summary": memory.execution_summary,
                         "planner_snapshot_id": memory.planner_snapshot_id,
+                        "clarification_summary": clarification_summary.clone(),
                     }),
                 )
                 .await?;
@@ -144,12 +151,15 @@ impl JobService {
         let Some(response) = &memory.structured_response else {
             return Ok(None);
         };
+        // Serialize once so every durable and live public projection carries the
+        // exact same client-safe response contract.
+        let structured_response = serde_json::to_value(response)?;
         let rendered = response
             .rendered_markdown
             .clone()
             .unwrap_or_else(|| MarkdownRenderer.render(response));
         let result_json = json!({
-            "structured_response": response,
+            "structured_response": structured_response.clone(),
             "warnings": response.warnings.clone(),
             "markdown": rendered.clone(),
             "graph_state": memory.graph_state.clone(),
@@ -161,7 +171,10 @@ impl JobService {
                 session_id,
                 job_id,
                 rendered.clone(),
-                json!({ "type": "assistant_response", "assistant_response": response }),
+                json!({
+                    "type": "assistant_response",
+                    "assistant_response": structured_response.clone(),
+                }),
             )
             .await?;
         let terminal_state = memory
@@ -201,19 +214,78 @@ impl JobService {
                 self.jobs.complete(job_id, result_json.clone()).await?;
             }
         }
+        let mut audit_event = AuditEvent::new(
+            client.user_id,
+            job_id,
+            "assistant_response_projected",
+            "service",
+            outcome.status,
+        );
+        audit_event.session_id = Some(session_id);
+        audit_event.legacy_api_key_id = client.legacy_api_key_id;
+        audit_event.output_summary_json = json!({
+            "response_type": response.response_type,
+            "clarification": clarification_summary,
+        });
+        self.audit.record(audit_event);
+
         self.emit_event(
             job_id,
             outcome.event_kind,
             Some("complete_or_wait"),
             json!({
                 "response_type": response.response_type,
-                "structured_response": response,
+                "structured_response": structured_response,
                 "markdown": rendered,
             }),
         )
         .await?;
         Ok(Some(outcome))
     }
+}
+
+/// Public-audit and checkpoint summary only. Never copy the private
+/// clarification payload, source intent, principal projection, or tool data.
+fn safe_clarification_summary(
+    response: Option<&crate::assistant::response::AssistantResponse>,
+    terminal_state: Option<TerminalState>,
+    planner_snapshot_id: Option<Uuid>,
+) -> serde_json::Value {
+    let Some(response) = response else {
+        return serde_json::Value::Null;
+    };
+    let Some(clarification) = response.clarification.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    let field_keys = clarification
+        .fields
+        .iter()
+        .chain(
+            clarification
+                .options
+                .iter()
+                .flat_map(|option| &option.fields),
+        )
+        .map(|field| field.key.clone())
+        .collect::<Vec<_>>();
+    let evidence_refs = response
+        .evidence_refs
+        .iter()
+        .map(|reference| reference.id.clone())
+        .collect::<Vec<_>>();
+
+    json!({
+        "id": clarification.id,
+        "revision": clarification.revision,
+        "kind": clarification.kind,
+        "option_ids": clarification.options.iter().map(|option| &option.id).collect::<Vec<_>>(),
+        "field_keys": field_keys,
+        "resolution_outcome": terminal_state,
+        "provenance_identifiers": {
+            "planner_snapshot_id": planner_snapshot_id,
+            "evidence_refs": evidence_refs,
+        },
+    })
 }
 
 #[derive(Clone, Copy)]
