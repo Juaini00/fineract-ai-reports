@@ -10,7 +10,7 @@ Resolved:
 
 Implementation landed in `4238389..526369e` (versioned contract through structured-clarification lifecycle tests). The series includes catalog input contracts, job-scoped pending clarification, typed response validation/provenance, bundled fields, delivery projections, behavior corpus, and lifecycle coverage. Documentation now describes the published client contract.
 
-This issue remains active: final acceptance-gate verification and user acceptance are still required, and deprecated top-level options plus the non-authoritative session-projection compatibility path still need cleanup. Current focused verification, `cargo test -p chat clarification`, passed the contract/lifecycle suites but failed `savings_clarification_keeps_selected_capability_for_parameter_only_reply`; investigate that failure before resolving. No completion claim is made from commit messages alone.
+This issue remains active: final acceptance-gate verification and user acceptance are still required, and deprecated top-level options plus the non-authoritative session-projection compatibility path still need cleanup. Focused clarification suites now pass, including `savings_clarification_keeps_selected_capability_for_parameter_only_reply`, which was updated to assert the V1 `collect_fields` contract rather than obsolete top-level capability options. No completion claim is made from commit messages alone.
 
 ## Problem
 
