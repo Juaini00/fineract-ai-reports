@@ -83,6 +83,22 @@ async fn job_routes_hide_jobs_owned_by_another_user() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn partial_structured_response_is_a_sanitized_validation_error() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+    let response = app
+        .post_json_bearer(
+            &format!("/chat/jobs/{}/responses", Uuid::new_v4()),
+            &token,
+            &json!({ "clarification_id": Uuid::new_v4(), "answers": {} }),
+        )
+        .await;
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "clarification_validation_error");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn deferred_domain_request_ends_without_leaking_internals() {
     // "loan disbursement last month" — loan domain is deferred; the pipeline
     // must classify → policy → reject with a sanitized template.

@@ -36,12 +36,16 @@ use crate::conversation::repository::{
 use crate::job::model::{
     ChatJob, ChatJobAuditTimeline, CreateChatJobInput, CreatedChatJob, RespondToChatJobInput,
 };
-use crate::job::repository::{JobRepository, assistant_memory::JobMemoryRepository};
+use crate::job::repository::{
+    JobRepository, PersistResponseOutcome, assistant_memory::JobMemoryRepository,
+};
 use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
 use crate::policy::authorization::project_admin_principal;
+use clarification_response::validate_submission;
 
+pub mod clarification_response;
 mod events;
 mod run;
 mod shadow;
@@ -213,20 +217,72 @@ impl JobService {
     }
 
     #[tracing::instrument(skip(self, input), fields(user_id = %input.client.user_id, job_id = %input.job_id))]
-    pub async fn respond(&self, input: RespondToChatJobInput) -> Result<Option<ChatMessage>> {
+    pub async fn respond(&self, input: RespondToChatJobInput) -> Result<RespondToChatJobOutcome> {
         let mut client = input.client;
         project_admin_principal(&mut client, &self.catalog, &self.fineract_pool).await?;
-        let Some(message) = self
+        let structured = input.clarification_id.is_some()
+            || input.clarification_revision.is_some()
+            || !input.answers.is_empty();
+        if structured
+            && (input.clarification_id.is_none() || input.clarification_revision.is_none())
+        {
+            let field = if input.clarification_id.is_none() {
+                "clarification_id"
+            } else {
+                "clarification_revision"
+            };
+            return Ok(RespondToChatJobOutcome::Validation(vec![field.to_owned()]));
+        }
+        let payload = if structured {
+            match self.job_memory.get(input.job_id, client.user_id).await? {
+                Some(memory) => match memory.pending_clarification {
+                    Some(payload) => payload,
+                    None => return Ok(RespondToChatJobOutcome::NotActive),
+                },
+                None => return Ok(RespondToChatJobOutcome::NotFound),
+            }
+        } else {
+            // Legacy clients intentionally retain the original message/option continuation behavior.
+            crate::assistant::ClarificationPayload {
+                version: 0,
+                id: Uuid::nil(),
+                revision: 0,
+                kind: crate::assistant::ClarificationKind::FreeText,
+                question: String::new(),
+                options: vec![],
+                fields: vec![],
+                attempt: 0,
+                source_intent: None,
+                allow_free_text: true,
+                is_missing_execution_parameters: false,
+            }
+        };
+        let submission = match validate_submission(
+            &payload,
+            &client,
+            input.clarification_id,
+            input.clarification_revision,
+            input.selected_option_id,
+            input.source_message,
+            input.answers,
+        ) {
+            Ok(submission) => submission,
+            Err(error) => return Ok(RespondToChatJobOutcome::Validation(error.fields)),
+        };
+        let outcome = self
             .jobs
-            .respond(
-                input.job_id,
-                client.user_id,
-                input.source_message.clone(),
-                input.selected_option_id.clone(),
-            )
-            .await?
-        else {
-            return Ok(None);
+            .respond(input.job_id, client.user_id, submission.clone())
+            .await?;
+        let PersistResponseOutcome::Inserted(message) = outcome else {
+            return Ok(match outcome {
+                PersistResponseOutcome::NotFound => RespondToChatJobOutcome::NotFound,
+                PersistResponseOutcome::NotActive if structured => {
+                    RespondToChatJobOutcome::NotActive
+                }
+                PersistResponseOutcome::NotActive => RespondToChatJobOutcome::NotFound,
+                PersistResponseOutcome::Stale => RespondToChatJobOutcome::Stale,
+                PersistResponseOutcome::Inserted(_) => unreachable!(),
+            });
         };
         let reference_instant = self
             .jobs
@@ -239,9 +295,9 @@ impl JobService {
             input.job_id,
             &client,
             RuntimeUserInput {
-                message: input.message,
+                message: submission.display_message,
                 source_message: message.content.clone(),
-                selected_option_id: input.selected_option_id,
+                selected_option_id: submission.selected_option_id,
             },
             CanonicalTurn {
                 message_id: message.id,
@@ -251,8 +307,17 @@ impl JobService {
             },
         )
         .await?;
-        Ok(Some(message))
+        Ok(RespondToChatJobOutcome::Inserted(message))
     }
+}
+
+#[derive(Debug)]
+pub enum RespondToChatJobOutcome {
+    Inserted(ChatMessage),
+    NotFound,
+    NotActive,
+    Stale,
+    Validation(Vec<String>),
 }
 
 pub(crate) fn redis_url_log_value(url: &str) -> String {

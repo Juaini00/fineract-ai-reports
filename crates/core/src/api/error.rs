@@ -20,9 +20,26 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::bad_request_with_code("bad_request", message, None)
+    }
+
+    pub fn bad_request_with_code(
+        code: &'static str,
+        message: impl Into<String>,
+        details: Option<Value>,
+    ) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: "bad_request",
+            code,
+            message: message.into(),
+            details,
+        }
+    }
+
+    pub fn conflict_with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code,
             message: message.into(),
             details: None,
         }
@@ -65,10 +82,11 @@ impl ApiError {
     }
 
     pub fn internal(error: anyhow::Error) -> Self {
+        warn!(error = %error, "internal API error");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error",
-            message: error.to_string(),
+            message: "An internal server error occurred.".to_string(),
             details: None,
         }
     }

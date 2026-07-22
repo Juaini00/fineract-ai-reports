@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::api::ChatAppState;
 use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
 use crate::job::model::{CreateChatJobInput, RespondToChatJobInput};
-use crate::job::service::redis_url_log_value;
+use crate::job::service::{RespondToChatJobOutcome, redis_url_log_value};
 
 #[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
@@ -189,29 +189,42 @@ pub async fn respond(
     Path(job_id): Path<Uuid>,
     ValidatedJson(request): ValidatedJson<RespondToChatJobRequest>,
 ) -> Result<Response, ApiError> {
-    let selected_option_id = request
-        .option_id
-        .map(|option_id| option_id.trim().to_owned())
-        .filter(|option_id| !option_id.is_empty());
-    let source_message = request.message;
-    let message = selected_option_id
-        .clone()
-        .unwrap_or_else(|| source_message.clone());
-
-    let Some(message) = state
+    let outcome = state
         .chat
         .jobs
         .respond(RespondToChatJobInput {
             client,
             job_id,
-            source_message,
-            selected_option_id,
-            message,
+            clarification_id: request.clarification_id,
+            clarification_revision: request.clarification_revision,
+            selected_option_id: request.option_id,
+            source_message: request.message,
+            answers: request.answers,
         })
         .await
-        .map_err(ApiError::internal)?
-    else {
-        return Err(ApiError::not_found("chat job not found"));
+        .map_err(ApiError::internal)?;
+    let message = match outcome {
+        RespondToChatJobOutcome::Inserted(message) => message,
+        RespondToChatJobOutcome::NotFound => return Err(ApiError::not_found("chat job not found")),
+        RespondToChatJobOutcome::NotActive => {
+            return Err(ApiError::conflict_with_code(
+                "clarification_not_active",
+                "Clarification is no longer active.",
+            ));
+        }
+        RespondToChatJobOutcome::Stale => {
+            return Err(ApiError::conflict_with_code(
+                "clarification_stale",
+                "Clarification has changed. Refresh and try again.",
+            ));
+        }
+        RespondToChatJobOutcome::Validation(fields) => {
+            return Err(ApiError::bad_request_with_code(
+                "clarification_validation_error",
+                "Clarification response is invalid.",
+                Some(serde_json::json!({ "fields": fields })),
+            ));
+        }
     };
 
     info!(job_id = %job_id, message_id = %message.id, "chat job response received");
