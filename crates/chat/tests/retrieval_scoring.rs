@@ -252,6 +252,7 @@ fn clarification_option_falls_back_to_humanized_id_when_display_name_missing() {
             .clone()
             .unwrap_or_else(|| humanize_id(&cap.id)),
         description: cap.description.clone(),
+        fields: Vec::new(),
     };
 
     assert_eq!(option.label, "Organization Office Summary");

@@ -2,6 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::assistant::clarification::ClarificationView;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssistantResponse {
     pub response_type: AssistantResponseType,
@@ -12,8 +14,12 @@ pub struct AssistantResponse {
     pub table: Option<ResponseTable>,
     #[serde(default)]
     pub cards: Vec<ResponseCard>,
+    /// Deprecated compatibility projection of clarification options.
     #[serde(default)]
     pub options: Vec<ResponseOption>,
+    /// Versioned client-safe clarification contract.
+    #[serde(default)]
+    pub clarification: Option<ClarificationView>,
     #[serde(default)]
     pub warnings: Vec<ResponseWarning>,
     #[serde(default)]
@@ -128,6 +134,7 @@ mod tests {
             table: None,
             cards: vec![],
             options: vec![],
+            clarification: None,
             warnings: vec![],
             actions: vec![],
             evidence_refs: vec![],

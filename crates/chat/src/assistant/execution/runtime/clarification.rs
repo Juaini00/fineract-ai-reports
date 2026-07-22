@@ -222,6 +222,7 @@ pub(super) fn clarification_payload_for(
                     .or_else(|| e.metadata.get("summary"))
                     .and_then(|value| value.as_str())
                     .map(ToOwned::to_owned),
+                fields: Vec::new(),
             })
         })
         .collect();
@@ -232,10 +233,16 @@ pub(super) fn clarification_payload_for(
         id: OTHER_CLARIFICATION_OPTION_ID.into(),
         label: "Others".into(),
         description: Some("Let me describe what I need in my own words.".into()),
+        fields: Vec::new(),
     });
     ClarificationPayload {
+        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which report should I use?".into(),
         options,
+        fields: Vec::new(),
         attempt: 1,
         source_intent,
         allow_free_text: true,
@@ -260,6 +267,7 @@ pub(super) fn clarification_payload(
                 .or_else(|| item.metadata.get("summary"))
                 .and_then(|value| value.as_str())
                 .map(ToOwned::to_owned),
+            fields: Vec::new(),
         })
         .collect();
     if options.is_empty() {
@@ -269,10 +277,16 @@ pub(super) fn clarification_payload(
         id: OTHER_CLARIFICATION_OPTION_ID.into(),
         label: "Others".into(),
         description: Some("Let me describe what I need in my own words.".into()),
+        fields: Vec::new(),
     });
     ClarificationPayload {
+        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which report should I use?".into(),
         options,
+        fields: Vec::new(),
         attempt: 1,
         source_intent,
         allow_free_text: true,
@@ -341,6 +355,7 @@ pub(super) fn fallback_clarification_options(domain: &AssistantDomain) -> Vec<Cl
             id: id.into(),
             label: label.into(),
             description: Some(description.into()),
+            fields: Vec::new(),
         })
         .collect()
 }

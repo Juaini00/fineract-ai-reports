@@ -127,8 +127,13 @@ fn fake_response_type(intent: &AssistantIntent) -> String {
         }
         AssistantIntentKind::ClarificationReply => {
             ResponseBuilder::clarification(ClarificationPayload {
+                version: chat::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 0,
+                kind: chat::assistant::clarification::ClarificationKind::SelectOption,
                 question: "Which report?".into(),
                 options: Vec::new(),
+                fields: Vec::new(),
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
@@ -182,19 +187,26 @@ fn golden_seed_dataset_parses() {
 #[tokio::test]
 async fn offline_fake_resolver_selects_semantic_balance_option() {
     let payload = ClarificationPayload {
+        version: chat::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: chat::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which savings report?".into(),
         options: vec![
             ClarificationOption {
                 id: "savings_balance_summary".into(),
                 label: "balance".into(),
                 description: None,
+                fields: Vec::new(),
             },
             ClarificationOption {
                 id: "savings_deposit_total".into(),
                 label: "deposit total".into(),
                 description: None,
+                fields: Vec::new(),
             },
         ],
+        fields: Vec::new(),
         attempt: 1,
         source_intent: None,
         allow_free_text: true,

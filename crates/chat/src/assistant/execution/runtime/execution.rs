@@ -50,12 +50,18 @@ pub(super) async fn execute_selected_capability(
             "clarification-reply execution blocked: invalid temporal input"
         );
         let payload = ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
             question: error.message.clone(),
             options: vec![ClarificationOption {
                 id: capability_id.clone(),
                 label: capability_id.clone(),
                 description: Some("Retry this report after providing a valid date range.".into()),
+                fields: Vec::new(),
             }],
+            fields: Vec::new(),
             attempt: 1,
             source_intent: intent
                 .as_ref()
@@ -106,12 +112,17 @@ pub(super) async fn execute_selected_capability(
                          re-clarifying instead of executing"
                     );
                     let payload = ClarificationPayload {
+                        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+                        id: uuid::Uuid::new_v4(),
+                        revision: 0,
+                        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
                         question: error.to_string(),
                         options: vec![
                             ClarificationOption {
                                 id: capability_id.clone(),
                                 label: capability_id.clone(),
                                 description: None,
+                                fields: Vec::new(),
                             },
                             ClarificationOption {
                                 id: OTHER_CLARIFICATION_OPTION_ID.into(),
@@ -119,8 +130,10 @@ pub(super) async fn execute_selected_capability(
                                 description: Some(
                                     "Let me describe what I need in my own words.".into(),
                                 ),
+                                fields: Vec::new(),
                             },
                         ],
+                        fields: Vec::new(),
                         attempt: 1,
                         source_intent: Some(source_intent_snapshot(intent, &intent.reason)),
                         allow_free_text: true,

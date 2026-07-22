@@ -27,8 +27,9 @@ pub use crate::job::repository::assistant_memory::{GraphCheckpoint, JobMemoryRep
 pub use crate::knowledge::index::swiftide as swiftide_index;
 pub use crate::knowledge::index::swiftide::{SwiftideIndexPipeline, SwiftideKnowledgeDocument};
 pub use clarification::{
-    ClarificationOption, ClarificationOutcome, ClarificationPayload, OTHER_CLARIFICATION_OPTION_ID,
-    PendingClarification,
+    CLARIFICATION_VERSION_1, ClarificationChoice, ClarificationField, ClarificationFieldType,
+    ClarificationKind, ClarificationOption, ClarificationOutcome, ClarificationPayload,
+    ClarificationView, OTHER_CLARIFICATION_OPTION_ID, PendingClarification,
 };
 pub use context::builder::ContextBuilder;
 pub use context::canonical_state::*;

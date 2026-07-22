@@ -7,7 +7,8 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     assistant::{
-        AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage, ContextReference,
+        AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
+        AssistantResponseType, ContextReference,
         llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
     },
     knowledge::model::KnowledgeCatalog,
@@ -140,8 +141,13 @@ fn preserves_limit_when_source_intent_quantity_defaults() {
         warnings: Vec::new(),
     };
     let payload = ClarificationPayload {
+        version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: crate::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which report?".into(),
         options: Vec::new(),
+        fields: Vec::new(),
         attempt: 1,
         source_intent: Some(SourceIntentSnapshot {
             prompt: "show 10 clients with the most savings accounts".into(),
@@ -526,19 +532,26 @@ async fn exact_pending_option_id_resolves_before_router() {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: Some(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
             question: "Which report?".into(),
             options: vec![
                 ClarificationOption {
                     id: "client_top_n_by_deposit_volume".into(),
                     label: "Top clients by deposit volume".into(),
                     description: None,
+                    fields: Vec::new(),
                 },
                 ClarificationOption {
                     id: "client_top_n_by_savings_balance".into(),
                     label: "Top clients by savings balance".into(),
                     description: None,
+                    fields: Vec::new(),
                 },
             ],
+            fields: Vec::new(),
             attempt: 1,
             source_intent: Some(SourceIntentSnapshot {
                 prompt: "show 10 clients in USD".into(),
@@ -651,12 +664,18 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         recent_messages: Vec::new(),
         relevant_jobs: Vec::new(),
         pending_clarification: Some(ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::SelectOption,
             question: "Which report?".into(),
             options: vec![ClarificationOption {
                 id: "client_top_n_by_deposit_volume".into(),
                 label: "Top clients by deposit volume".into(),
                 description: None,
+                fields: Vec::new(),
             }],
+            fields: Vec::new(),
             attempt: 1,
             source_intent: None,
             allow_free_text: true,

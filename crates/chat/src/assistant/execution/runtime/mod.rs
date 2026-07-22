@@ -28,20 +28,19 @@ use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
 use crate::assistant::{
     AssistantConstraints, AssistantDomain, AssistantGraphTopology, AssistantIntent,
-    AssistantIntentKind, AssistantLanguage, AssistantResponse, AssistantResponseType,
-    CanonicalStateRepository, ClarificationOption, ClarificationOutcome, ClarificationPayload,
-    ClarificationResolver, ContextReference, ContextWarningCode, ContextWindow,
-    DeterministicExtraction, ExtractionProvenance, FactSourceKind, GraphState, GraphTransition,
-    JobMemory, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
-    PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
-    TerminalState, deterministic_observations,
+    AssistantIntentKind, AssistantLanguage, AssistantResponse, CanonicalStateRepository,
+    ClarificationOption, ClarificationOutcome, ClarificationPayload, ClarificationResolver,
+    ContextReference, ContextWarningCode, ContextWindow, DeterministicExtraction,
+    ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory,
+    OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
+    Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState,
+    deterministic_observations,
     evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
     merge_observations, original_request_observations,
     presentation::builder::finish,
     reranker::{LlmReranker, RerankerDecision, RerankerVerdict},
-    response::{ResponseAction, ResponseActionType},
     retrieval::RetrievalEngine,
     stable_uuid,
 };
@@ -131,19 +130,7 @@ impl AssistantGraphRuntime {
             "runtime": "semantic_assistant_graph",
             "recent_message_count": context.recent_messages.len(),
         });
-        memory.structured_response = Some(AssistantResponse {
-            response_type: AssistantResponseType::Clarification,
-            title: Some("Assistant runtime is ready".into()),
-            message: "I saved your message and built the conversation context. Semantic routing is not wired yet, so please try again after routing is enabled.".into(),
-            sections: Vec::new(),
-            table: None,
-            cards: Vec::new(),
-            options: Vec::new(),
-            warnings: Vec::new(),
-            actions: vec![ResponseAction { action_type: ResponseActionType::AskFollowUp, label: "Ask a follow-up".into() }],
-            evidence_refs: Vec::new(),
-            rendered_markdown: None,
-        });
+        memory.structured_response = Some(ResponseBuilder::error());
         AssistantGraphTopology::new()
             .validate_sequence(&transitions)
             .expect("assistant runtime produced illegal graph transitions");

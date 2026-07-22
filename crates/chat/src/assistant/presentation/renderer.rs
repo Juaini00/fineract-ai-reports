@@ -39,7 +39,22 @@ impl ResponseRenderer for MarkdownRenderer {
                 }
             }
         }
-        if !response.options.is_empty() {
+        if let Some(clarification) = &response.clarification {
+            if !clarification.options.is_empty() {
+                out.push_str("\n\n## Options");
+                for option in &clarification.options {
+                    out.push_str("\n- ");
+                    out.push_str(&option.label);
+                    if let Some(description) = &option.description {
+                        out.push_str(": ");
+                        out.push_str(description);
+                    }
+                    render_fields(&mut out, &option.fields);
+                }
+            }
+            render_fields(&mut out, &clarification.fields);
+        } else if !response.options.is_empty() {
+            // Legacy responses have only the deprecated top-level projection.
             out.push_str("\n\n## Options");
             for option in &response.options {
                 out.push_str("\n- ");
@@ -65,6 +80,20 @@ impl ResponseRenderer for MarkdownRenderer {
             }
         }
         out
+    }
+}
+
+fn render_fields(out: &mut String, fields: &[crate::assistant::clarification::ClarificationField]) {
+    if fields.is_empty() {
+        return;
+    }
+    out.push_str("\n\n## Required details");
+    for field in fields {
+        out.push_str("\n- ");
+        out.push_str(&field.label);
+        if field.required {
+            out.push_str(" (required)");
+        }
     }
 }
 

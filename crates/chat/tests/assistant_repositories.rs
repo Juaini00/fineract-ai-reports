@@ -1,10 +1,11 @@
 mod common;
 
 use chat::assistant::{
-    AssistantIntentKind, AssistantLanguage, CanonicalStateRepository,
-    CanonicalStateRepositoryError, ClarificationOption, ClarificationPayload, EffectiveConstraints,
-    GraphState, GraphTransition, JobMemoryRepository, LlmTrace, LlmTraceRepository, OriginalIntent,
-    PlannerInputSnapshot, PrincipalProjection, SessionMemoryRepository,
+    AssistantIntentKind, AssistantLanguage, CLARIFICATION_VERSION_1, CanonicalStateRepository,
+    CanonicalStateRepositoryError, ClarificationKind, ClarificationOption, ClarificationPayload,
+    EffectiveConstraints, GraphState, GraphTransition, JobMemoryRepository, LlmTrace,
+    LlmTraceRepository, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
+    SessionMemoryRepository,
 };
 use chrono::Utc;
 use common::spawn_app;
@@ -87,12 +88,18 @@ async fn session_memory_update_pending_source_and_revision_conflict() {
     memory.summary = Some("last answer".into());
     memory.active_domain = Some("savings".into());
     memory.pending_clarification = Some(ClarificationPayload {
+        version: CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: ClarificationKind::SelectOption,
         question: "Which savings report?".into(),
         options: vec![ClarificationOption {
             id: "savings_deposit_total".into(),
             label: "Savings total".into(),
             description: None,
+            fields: Vec::new(),
         }],
+        fields: Vec::new(),
         attempt: 1,
         source_intent: None,
         allow_free_text: true,

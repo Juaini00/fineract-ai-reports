@@ -13,6 +13,9 @@ fn assistant_contracts_schemas_cover_boundary_roots() {
         "AssistantIntent",
         "SourceIntentSnapshot",
         "ClarificationPayload",
+        "ClarificationView",
+        "ClarificationField",
+        "ClarificationChoice",
         "ClarificationOutcome",
         "PendingClarification",
         "GraphState",
@@ -80,12 +83,18 @@ fn assistant_contracts_representative_round_trip() {
     };
     let pending = PendingClarification {
         payload: ClarificationPayload {
+            version: CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: ClarificationKind::SelectOption,
             question: "Which report should I use?".into(),
             options: vec![ClarificationOption {
                 id: "client_top_n_by_savings_balance".into(),
                 label: "Top clients by savings balance".into(),
                 description: None,
+                fields: Vec::new(),
             }],
+            fields: Vec::new(),
             attempt: 1,
             source_intent: Some(source.clone()),
             allow_free_text: true,
@@ -122,6 +131,7 @@ fn assistant_contracts_representative_round_trip() {
         }),
         cards: Vec::new(),
         options: Vec::new(),
+        clarification: None,
         warnings: vec![ResponseWarning {
             code: "pii_hidden".into(),
             message: "PII hidden".into(),
@@ -183,6 +193,76 @@ fn assistant_contracts_representative_round_trip() {
     };
     let _: JobMemory = serde_json::from_value(serde_json::to_value(job).unwrap()).unwrap();
     let _: SessionMemory = serde_json::from_value(serde_json::to_value(session).unwrap()).unwrap();
+}
+
+#[test]
+fn clarification_view_select_option_round_trips_conditional_fields() {
+    let view = ClarificationView {
+        version: CLARIFICATION_VERSION_1,
+        id: Uuid::nil(),
+        revision: 2,
+        kind: ClarificationKind::SelectOption,
+        question: "Which report should I use?".into(),
+        options: vec![ClarificationChoice {
+            id: "monthly".into(),
+            label: "Monthly report".into(),
+            description: None,
+            fields: vec![ClarificationField {
+                id: "date_range".into(),
+                label: "Date range".into(),
+                field_type: ClarificationFieldType::DateRange,
+                required: true,
+            }],
+        }],
+        fields: Vec::new(),
+        allow_free_text: true,
+    };
+    let parsed: ClarificationView =
+        serde_json::from_value(serde_json::to_value(&view).unwrap()).unwrap();
+    assert_eq!(parsed, view);
+    assert!(parsed.validate().is_ok());
+}
+
+#[test]
+fn old_assistant_response_json_deserializes_without_clarification() {
+    let response: AssistantResponse = serde_json::from_value(json!({
+        "response_type": "summary", "title": null, "message": "Hello",
+        "sections": [], "table": null, "cards": [], "options": [], "warnings": [],
+        "actions": [], "evidence_refs": [], "rendered_markdown": null
+    }))
+    .unwrap();
+    assert!(response.clarification.is_none());
+}
+
+#[test]
+fn clarification_view_validation_rejects_invalid_shapes() {
+    let base = ClarificationView {
+        version: CLARIFICATION_VERSION_1,
+        id: Uuid::nil(),
+        revision: 0,
+        kind: ClarificationKind::SelectOption,
+        question: "Choose".into(),
+        options: Vec::new(),
+        fields: Vec::new(),
+        allow_free_text: false,
+    };
+    assert!(base.validate().is_err());
+    let collect = ClarificationView {
+        kind: ClarificationKind::CollectFields,
+        ..base.clone()
+    };
+    assert!(collect.validate().is_err());
+    let free_text = ClarificationView {
+        kind: ClarificationKind::FreeText,
+        fields: vec![ClarificationField {
+            id: "text".into(),
+            label: "Text".into(),
+            field_type: ClarificationFieldType::Text,
+            required: true,
+        }],
+        ..base
+    };
+    assert!(free_text.validate().is_err());
 }
 
 #[derive(Debug, Deserialize)]

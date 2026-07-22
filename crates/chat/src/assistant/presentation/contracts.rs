@@ -1,10 +1,11 @@
 use schemars::schema_for;
 
 use crate::assistant::{
-    AssistantIntent, AssistantResponse, ClarificationOutcome, ClarificationPayload, ContextWindow,
-    Evidence, GraphState, GraphTransition, JobMemory, MemoryDelta, PendingClarification,
-    RerankerDecision, RetrievalPlan, SessionMemory, SourceIntentSnapshot, TerminalState,
-    ToolRequest, ToolResult, ToolValidationError,
+    AssistantIntent, AssistantResponse, ClarificationChoice, ClarificationField,
+    ClarificationOutcome, ClarificationPayload, ClarificationView, ContextWindow, Evidence,
+    GraphState, GraphTransition, JobMemory, MemoryDelta, PendingClarification, RerankerDecision,
+    RetrievalPlan, SessionMemory, SourceIntentSnapshot, TerminalState, ToolRequest, ToolResult,
+    ToolValidationError,
 };
 
 pub fn assistant_contract_names() -> &'static [&'static str] {
@@ -12,6 +13,9 @@ pub fn assistant_contract_names() -> &'static [&'static str] {
         "AssistantIntent",
         "SourceIntentSnapshot",
         "ClarificationPayload",
+        "ClarificationView",
+        "ClarificationField",
+        "ClarificationChoice",
         "ClarificationOutcome",
         "PendingClarification",
         "GraphState",
@@ -44,6 +48,18 @@ pub fn assistant_contract_schemas() -> Vec<(&'static str, serde_json::Value)> {
         (
             "ClarificationPayload",
             serde_json::to_value(schema_for!(ClarificationPayload)).unwrap(),
+        ),
+        (
+            "ClarificationView",
+            serde_json::to_value(schema_for!(ClarificationView)).unwrap(),
+        ),
+        (
+            "ClarificationField",
+            serde_json::to_value(schema_for!(ClarificationField)).unwrap(),
+        ),
+        (
+            "ClarificationChoice",
+            serde_json::to_value(schema_for!(ClarificationChoice)).unwrap(),
         ),
         (
             "ClarificationOutcome",

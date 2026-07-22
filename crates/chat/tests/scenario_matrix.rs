@@ -155,19 +155,26 @@ async fn semantic_assistant_default_scenario_matrix_routes_without_live_services
 #[tokio::test]
 async fn semantic_clarification_reply_selects_balance_by_meaning() {
     let payload = ClarificationPayload {
+        version: chat::assistant::clarification::CLARIFICATION_VERSION_1,
+        id: uuid::Uuid::new_v4(),
+        revision: 0,
+        kind: chat::assistant::clarification::ClarificationKind::SelectOption,
         question: "Which savings report?".into(),
         options: vec![
             ClarificationOption {
                 id: "savings_deposit_total".into(),
                 label: "deposit total".into(),
                 description: None,
+                fields: Vec::new(),
             },
             ClarificationOption {
                 id: "savings_balance_summary".into(),
                 label: "balance summary".into(),
                 description: None,
+                fields: Vec::new(),
             },
         ],
+        fields: Vec::new(),
         attempt: 1,
         source_intent: None,
         allow_free_text: true,
@@ -294,12 +301,18 @@ fn assert_response_contract(prompt: &str, intent: &AssistantIntent) {
         }
         AssistantIntentKind::ClarificationReply => {
             ResponseBuilder::clarification(ClarificationPayload {
+                version: chat::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 0,
+                kind: chat::assistant::clarification::ClarificationKind::SelectOption,
                 question: "Which report?".into(),
                 options: vec![ClarificationOption {
                     id: "savings_balance_summary".into(),
                     label: "balance".into(),
                     description: None,
+                    fields: Vec::new(),
                 }],
+                fields: Vec::new(),
                 attempt: 1,
                 source_intent: None,
                 allow_free_text: true,
