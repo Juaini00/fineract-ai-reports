@@ -29,7 +29,8 @@ pub use crate::knowledge::index::swiftide::{SwiftideIndexPipeline, SwiftideKnowl
 pub use clarification::{
     CLARIFICATION_VERSION_1, ClarificationChoice, ClarificationField, ClarificationFieldType,
     ClarificationKind, ClarificationOption, ClarificationOutcome, ClarificationPayload,
-    ClarificationView, OTHER_CLARIFICATION_OPTION_ID, PendingClarification,
+    ClarificationValidation, ClarificationView, OTHER_CLARIFICATION_OPTION_ID,
+    PendingClarification,
 };
 pub use context::builder::ContextBuilder;
 pub use context::canonical_state::*;

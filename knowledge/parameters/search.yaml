@@ -1,0 +1,8 @@
+id: search
+parameters:
+  - search
+type: text
+label: Client name
+required: true
+validation:
+  max_length: 200

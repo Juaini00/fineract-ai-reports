@@ -49,6 +49,8 @@ fn make_capability(id: &str, domain: &str, subject: RequestSubject) -> Capabilit
         examples: vec![],
         required_parameters: vec![],
         optional_parameters: vec![],
+        defaults: Default::default(),
+        guards: Default::default(),
     }
 }
 
@@ -64,6 +66,7 @@ fn catalog_with(capability: CapabilityKnowledge) -> KnowledgeCatalog {
         queries: vec![],
         policies: vec![],
         responses: vec![],
+        parameter_inputs: Vec::new(),
         classification: Default::default(),
     }
 }

@@ -24,6 +24,18 @@ pub enum ClarificationFieldType {
     Text,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ClarificationValidation {
+    #[serde(default)]
+    pub min_integer: Option<i64>,
+    #[serde(default)]
+    pub max_integer: Option<i64>,
+    #[serde(default)]
+    pub max_length: Option<u32>,
+    #[serde(default)]
+    pub max_range_days: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ClarificationField {
     pub id: String,

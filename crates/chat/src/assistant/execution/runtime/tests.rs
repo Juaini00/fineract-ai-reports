@@ -393,6 +393,7 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         queries: Vec::new(),
         policies: Vec::new(),
         responses: Vec::new(),
+        parameter_inputs: Vec::new(),
         classification: Default::default(),
     };
     let llm = Arc::new(FakeLlm) as SharedLlmClient;

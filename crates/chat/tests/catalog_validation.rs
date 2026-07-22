@@ -4,6 +4,7 @@
 //! YAML/SQL drift and doesn't need Postgres or Fineract.
 
 use app_core::auth::model::PrincipalContext;
+use chat::assistant::ClarificationFieldType;
 use chat::chat::planner::{
     AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
     RetrievalPlan, evaluate_policy,
@@ -36,6 +37,73 @@ fn real_catalog_loads_and_passes_validation() {
     assert!(!catalog.queries.is_empty(), "queries empty");
     assert!(!catalog.policies.is_empty(), "policies empty");
     assert!(!catalog.responses.is_empty(), "responses empty");
+}
+
+#[test]
+fn catalog_parameter_inputs_define_expected_mappings() {
+    let catalog = load_catalog();
+
+    for (id, parameters, field_type) in [
+        (
+            "date_range",
+            &["from_date", "to_date"][..],
+            ClarificationFieldType::DateRange,
+        ),
+        ("limit", &["limit"][..], ClarificationFieldType::Integer),
+        ("search", &["search"][..], ClarificationFieldType::Text),
+    ] {
+        let input = catalog
+            .parameter_inputs
+            .iter()
+            .find(|input| input.id == id)
+            .unwrap_or_else(|| panic!("missing parameter input {id}"));
+        assert_eq!(input.parameters, parameters);
+        assert_eq!(input.field_type, field_type);
+    }
+}
+
+#[test]
+fn catalog_rejects_parameter_input_overlap() {
+    let mut catalog = load_catalog();
+    catalog
+        .parameter_inputs
+        .iter_mut()
+        .find(|input| input.id == "date_range")
+        .expect("date range input")
+        .parameters
+        .push("limit".into());
+
+    let error = KnowledgeValidator::validate(&catalog).expect_err("overlap must fail");
+    assert!(error.to_string().contains("covered more than once"));
+}
+
+#[test]
+fn catalog_rejects_capability_required_parameter_mismatch() {
+    let mut catalog = load_catalog();
+    catalog
+        .capabilities
+        .iter_mut()
+        .find(|capability| capability.id == "savings_deposit_top_n")
+        .expect("capability")
+        .required_parameters
+        .pop();
+
+    let error = KnowledgeValidator::validate(&catalog).expect_err("mismatch must fail");
+    assert!(error.to_string().contains("required_parameters"));
+}
+
+#[test]
+fn catalog_rejects_default_limit_above_maximum() {
+    let mut catalog = load_catalog();
+    let capability = catalog
+        .capabilities
+        .iter_mut()
+        .find(|capability| capability.id == "office_list_basic")
+        .expect("capability");
+    capability.defaults.default_limit = Some(201);
+
+    let error = KnowledgeValidator::validate(&catalog).expect_err("default limit must fail");
+    assert!(error.to_string().contains("default_limit"));
 }
 
 #[test]

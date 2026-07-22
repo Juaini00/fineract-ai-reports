@@ -1,0 +1,8 @@
+id: date_range
+parameters:
+  - from_date
+  - to_date
+type: date_range
+label: Report period
+help_text: Select inclusive start/end
+required: true
