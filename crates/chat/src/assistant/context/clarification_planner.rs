@@ -416,6 +416,7 @@ mod tests {
                         max_limit: Some(100),
                         max_date_range_days,
                     },
+                    parameter_policies: vec![],
                 },
             )
             .collect();

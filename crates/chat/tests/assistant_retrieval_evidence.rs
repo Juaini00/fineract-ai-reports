@@ -146,6 +146,7 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
             optional_parameters: vec![],
             defaults: Default::default(),
             guards: Default::default(),
+            parameter_policies: vec![],
         }],
         queries: vec![],
         policies: vec![],

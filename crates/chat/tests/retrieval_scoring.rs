@@ -51,6 +51,7 @@ fn make_capability(id: &str, domain: &str, subject: RequestSubject) -> Capabilit
         optional_parameters: vec![],
         defaults: Default::default(),
         guards: Default::default(),
+        parameter_policies: vec![],
     }
 }
 
