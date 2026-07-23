@@ -2,10 +2,12 @@ mod common;
 
 use std::{fs, path::Path, sync::Arc};
 
+use anyhow::Result;
+use async_trait::async_trait;
 use chat::assistant::{
     FakeLlmClient, LlmPurpose, LlmTraceRepository,
     llm::{
-        LlmClient, structured,
+        EmbeddingResponse, LlmClient, LlmResponse, TokenUsage, structured,
         traced_client::{LlmTraceContext, TracedLlmClient},
     },
 };
@@ -42,7 +44,7 @@ async fn insert_job(app: &common::TestApp, user_id: Uuid) -> (Uuid, Uuid) {
 }
 
 fn traced(
-    fake: Arc<FakeLlmClient>,
+    fake: Arc<dyn LlmClient>,
     repo: LlmTraceRepository,
     user_id: Uuid,
     session_id: Uuid,
@@ -57,8 +59,38 @@ fn traced(
             user_id,
             legacy_api_key_id: None,
             graph_state: Some("test".into()),
+            correlation_id: Some(Uuid::new_v4()),
+            context_contract_version: Some(1),
+            catalog_version_id: Some(Uuid::new_v4()),
+            index_version_id: Some(Uuid::new_v4()),
         }),
     )
+}
+
+struct MissingUsageLlmClient;
+
+#[async_trait]
+impl LlmClient for MissingUsageLlmClient {
+    async fn structured_value(
+        &self,
+        _purpose: LlmPurpose,
+        _system: &str,
+        _user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        Ok(LlmResponse {
+            value: json!({"ok": true}),
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "test".into(),
+            model: "missing-usage".into(),
+            latency_ms: 1,
+        })
+    }
+
+    async fn embed(&self, _purpose: LlmPurpose, _text: &str) -> Result<EmbeddingResponse> {
+        unreachable!("not used by this test")
+    }
 }
 
 #[tokio::test]
@@ -152,6 +184,45 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
             .iter()
             .any(|trace| trace.purpose == "route_intent" && trace.cost_usd.is_some())
     );
+    assert!(traces.iter().all(|trace| trace.correlation_id.is_some()));
+    assert!(
+        traces
+            .iter()
+            .all(|trace| trace.context_contract_version == Some(1))
+    );
+    assert!(
+        traces
+            .iter()
+            .all(|trace| trace.catalog_version_id.is_some())
+    );
+    assert!(traces.iter().all(|trace| trace.index_version_id.is_some()));
+    assert!(traces.iter().any(|trace| {
+        trace.purpose == "route_intent"
+            && trace.price_version.as_deref() == Some("static_config_v1")
+            && trace.cost_currency.as_deref() == Some("USD")
+    }));
+    assert!(traces.iter().any(|trace| {
+        trace.purpose == "clarification_resolve"
+            && trace.error_code.as_deref() == Some("provider_malformed")
+    }));
+    assert!(traces.iter().any(|trace| {
+        trace.purpose == "response_build" && trace.error_code.as_deref() == Some("provider_timeout")
+    }));
+    assert!(traces.iter().any(|trace| {
+        trace.purpose == "evidence_retrieval"
+            && trace.error_code.is_none()
+            && trace.input_tokens.is_none()
+            && trace.output_tokens.is_none()
+            && trace.total_tokens.is_none()
+            && trace.usage_status == "unavailable"
+    }));
+    assert!(traces.iter().any(|trace| {
+        trace.purpose == "route_intent"
+            && trace.input_tokens == Some(10)
+            && trace.output_tokens == Some(5)
+            && trace.total_tokens == Some(15)
+            && trace.usage_status == "provider_reported"
+    }));
 
     let missing = Arc::new(FakeLlmClient::new("missing", "missing"));
     missing.push_structured(json!({"ok": true}));
@@ -181,6 +252,33 @@ async fn traced_client_records_structured_embed_errors_and_costs() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn traced_client_records_missing_provider_usage_as_unavailable() {
+    let app = spawn_app().await;
+    let user_id = app.admin_user_id().await;
+    let (session_id, job_id) = insert_job(&app, user_id).await;
+    let repo = LlmTraceRepository::new(app.app_pool.clone());
+    let client = traced(
+        Arc::new(MissingUsageLlmClient),
+        repo.clone(),
+        user_id,
+        session_id,
+        job_id,
+    );
+
+    client
+        .structured_value(LlmPurpose::Test, "system", "user", json!({}))
+        .await
+        .unwrap();
+
+    let traces = repo.list_for_job(job_id).await.unwrap();
+    assert_eq!(traces.len(), 1);
+    assert_eq!(traces[0].usage_status, "unavailable");
+    assert_eq!(traces[0].input_tokens, None);
+    assert_eq!(traces[0].output_tokens, None);
+    assert_eq!(traces[0].total_tokens, None);
 }
 
 #[test]

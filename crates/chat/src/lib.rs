@@ -5,4 +5,5 @@ pub mod chat;
 pub mod conversation;
 pub mod job;
 pub mod knowledge;
+pub mod management;
 pub mod policy;

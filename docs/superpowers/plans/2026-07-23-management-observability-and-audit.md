@@ -139,12 +139,14 @@ cargo test -p chat --lib
 1. Add `management_audit_outbox`, `management_audit_events`, and `management_telemetry_counters` with foreign keys, constraints, indexes, and timestamps from the spec.
 2. Extend `assistant_llm_traces` only with additive nullable/default-safe columns necessary for correlation/version/price/error normalization.
 3. Use check constraints for public status/outcome where stable enough; preserve forward-compatible internal event handling via a migration-reviewed strategy.
-4. Ensure audit references survive session deletion: do not use `ON DELETE CASCADE` from session/job to new decision audit rows. Choose `SET NULL` or snapshot identifiers according to spec and test it.
-5. Run migration on an empty local database and, if available, migration smoke tests/up/down policy checks. Do not edit old migration files.
+4. Make new outbox/event `job_id` and `session_id` FKs nullable `ON DELETE SET NULL`; store non-null immutable `aggregate_type`/`aggregate_id` snapshots on both rows and test relation removal preserves the snapshot. Do not use `ON DELETE CASCADE`.
+5. Add `next_attempt_at`, a partial due-row index (`WHERE published_at IS NULL`), and only normalized allowlisted `last_error_code` values. Review existing `assistant_llm_traces` API-key/ownership FKs: replace any retention-conflicting API-key cascade with nullable/set-null ownership plus an immutable actor/correlation snapshot (or equivalent decoupling).
+6. Install and test an application-role database trigger that rejects `UPDATE`/`DELETE` on published management audit events; outbox rows remain mutable only for dispatch state.
+7. Run migration on an empty local database and, if available, migration smoke tests/up/down policy checks. Do not edit old migration files.
 
 **Reviewer checkpoint:** Assign a `gpt-5.5` reviewer for FK/delete behavior, indexes, transactional boundary, and data migration safety before proceeding.
 
-**Acceptance:** Schema supports durable events/outbox and indexed management reads without weakening existing ownership/auth data.
+**Acceptance:** Schema has nullable `SET NULL` audit relations with immutable aggregate snapshots, independent LLM-trace retention, due-row retry indexing, and DB-enforced published-event immutability without weakening existing ownership/auth data.
 
 ## Phase 2 — Durable decision audit foundation
 
@@ -166,7 +168,7 @@ cargo test -p chat --lib
 
 **Focused tests:** event redaction/validation, deterministic cursor round trip, no duplicate publication on retry, safe error conversion.
 
-**Acceptance:** Events cannot contain raw prompt/SQL/result content through typed construction APIs.
+**Acceptance:** Events cannot contain raw prompt/SQL/result content through typed construction APIs, and opaque audit cursors round-trip the complete `(occurred_at, id)` ordering tuple without gaps or duplicates.
 
 ### Task 2.2: Implement outbox dispatcher and health counters
 
@@ -177,15 +179,15 @@ cargo test -p chat --lib
 
 **Steps:**
 
-1. Add a bounded, restart-safe polling dispatcher that leases unpublished outbox rows transactionally and publishes idempotently.
-2. Retry with bounded backoff and record attempt/error code; do not discard decision outbox records on failure.
-3. Expose pending/oldest pending/outcome health values through a repository query.
+1. Add a bounded, restart-safe polling dispatcher that transactionally claims only due unpublished rows with `FOR UPDATE SKIP LOCKED`.
+2. In one PostgreSQL transaction, insert the event idempotently by `outbox_id` and mark the outbox row published. On failure increment attempts, record only a normalized code, set `next_attempt_at` with bounded exponential backoff, and retain exhausted rows as visible failed/delayed records; never discard them.
+3. Expose pending/oldest pending/next retry/exhausted outcome health values through a repository query.
 4. Keep existing `AuditHandle` operational only as telemetry during transition. Add persisted counters for queue/full/persist failures instead of warning-only loss.
 5. Ensure graceful shutdown flushes/finishes safely without claiming all queued telemetry persisted when it did not.
 
 **Focused tests:** dispatcher resumes after simulated failure, duplicate dispatch idempotency, outbox event survives process restart boundary through DB state, counter updates.
 
-**Acceptance:** A material decision is never represented only by a best-effort mpsc send.
+**Acceptance:** Concurrent dispatchers safely skip locked rows; retries cannot duplicate publication, are due-scheduled/indexed, and exhausted records remain observable. A material decision is never represented only by a best-effort mpsc send.
 
 ### Task 2.3: Instrument material chat/session lifecycle events
 
@@ -198,8 +200,8 @@ cargo test -p chat --lib
 
 **Steps:**
 
-1. Identify every transaction that creates a job, transitions terminal state, writes clarification state, authorizes/blocks/executes a query, and archives/deletes a session.
-2. In the same transaction, enqueue the corresponding required decision event. If a current service cannot supply a transaction, refactor minimally so repository methods own the atomic write.
+1. Identify every transaction that creates a job, transitions terminal state, writes clarification state, authorizes/blocks/executes a query, and archives a session (current “delete” is archive-only).
+2. In the same transaction, enqueue the corresponding required decision event. For external approved SQL, enqueue/commit `execution.authorized` before the call, then enqueue a separate completion/blocked/failure outcome after it; do not claim PostgreSQL atomicity across the external call. If a current service cannot supply a transaction, refactor minimally so repository methods own the atomic write.
 3. Capture actor, correlation ID, catalog/index snapshot, capability/query/policy identifiers, safe office scope mode, outcome, and sanitized summaries.
 4. Do not duplicate issue 003 field provenance storage; link only its final safe verified-payload summary when available.
 5. Preserve the old job audit event write/API until compatibility mapping is verified.
@@ -208,7 +210,7 @@ cargo test -p chat --lib
 
 **Reviewer checkpoint:** `gpt-5.5` review for atomicity, policy/execution placement, and redaction.
 
-**Acceptance:** Required job outcomes have a durable decision timeline even if the old telemetry queue is full.
+**Acceptance:** Required job outcomes have a durable decision timeline even if the old telemetry queue is full; every external execution has a pre-call authorization and distinct post-call outcome event.
 
 ## Phase 3 — Context and LLM telemetry normalization
 
@@ -241,14 +243,14 @@ cargo test -p chat --lib
 **Steps:**
 
 1. Attach correlation/catalog/index/context contract data where available.
-2. Replace externally visible arbitrary `error_kind` text with normalized error code/status; retain only safe internal diagnostics where explicitly permitted.
+2. Classify provider, database, and dispatcher failures into a finite normalized code/category allowlist before trace, outbox, audit, counter, or API persistence. Replace externally visible arbitrary `error_kind` text; raw provider text is never retained as “internal diagnostics.”
 3. Represent usage as provider-reported, estimated, or unavailable. Do not convert unavailable values into zero.
 4. Add versioned price metadata. Cost is null/unavailable if price data is absent/stale; never fabricate an estimate.
 5. Instrument dropped telemetry counters on every queue and persistence failure path.
 
 **Focused tests:** successful/malformed/timeout/error traces, unavailable usage, unavailable pricing, different price versions, and error redaction.
 
-**Acceptance:** LLM analytics can distinguish zero use from unknown use/cost and cannot leak provider input through errors.
+**Acceptance:** LLM analytics can distinguish zero use from unknown use/cost; persisted and returned provider/database/dispatcher failures are normalized allowlisted codes/categories and cannot leak raw provider input through errors.
 
 ## Phase 4 — Management read services and HTTP APIs
 
@@ -321,12 +323,12 @@ cargo test -p chat --lib
 
 **Steps:**
 
-1. Verify actual current archive/delete semantics and distinguish soft archive from permanent delete.
-2. Ensure an audit event is enqueued atomically before the operation completes.
-3. Prove management audit remains queryable after a session is hidden/deleted according to the chosen FK strategy.
+1. Verify and document that current session deletion is archive-only and that legacy `chat_job_audit_events` blocks hard job deletion; do not add a hard-delete path in this feature.
+2. Ensure an audit event is enqueued atomically before the archive operation completes.
+3. Prove management audit remains queryable after a session is hidden and after controlled relation removal in migration tests, with nullable FKs and immutable aggregate snapshots preserving identity.
 4. Document that automatic audit/telemetry purging is not implemented; do not add a scheduled purge without a separately approved retention policy.
 
-**Acceptance:** No management user can assume chat deletion silently destroys audit evidence.
+**Acceptance:** No management user can assume archive deletes audit evidence, and the plan makes no unsupported claim that current sessions/jobs are hard-deletable.
 
 ### Task 5.2: Publish client integration materials
 

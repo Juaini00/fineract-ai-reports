@@ -85,6 +85,16 @@ Management is a module inside the existing `chat` crate; do not add a crate. It 
 
 A transactional outbox is the chosen durability boundary. A state mutation and its outbox row are committed together. A dispatcher writes the immutable final event with idempotency on `outbox_id`; dispatcher retries do not duplicate it. The existing bounded `AuditHandle` may remain only for telemetry after the migration; it cannot be the sole writer for a required decision event.
 
+### Reviewer-blocker decisions
+
+- New outbox and decision-event `job_id`/`session_id` foreign keys are nullable and use `ON DELETE SET NULL`. Each row also stores immutable `aggregate_type` and `aggregate_id` snapshots, so losing a live relation never loses the audited aggregate identity.
+- Published `management_audit_events` are database-immutable: migration-installed triggers reject `UPDATE` and `DELETE` for the application role. Corrections and retention actions append events; any future privileged retention exception requires a separately approved migration and policy.
+- The dispatcher claims due rows (`published_at IS NULL AND next_attempt_at <= now()`) using `FOR UPDATE SKIP LOCKED`. Its publish insert and outbox completion update occur in one PostgreSQL transaction; `outbox_id` uniqueness makes a retry safe. Failures increment attempts, store only a normalized error code, and schedule bounded exponential backoff; exhausted rows remain visible as failed/delayed, never discarded.
+- PostgreSQL cannot atomically include external approved-SQL execution. Persist `execution.authorized` before issuing external SQL, then append `execution.completed` or `execution.blocked`/`chat.job_failed` after its known outcome. The before event records authorization, not a claimed completion.
+- Legacy `chat_job_audit_events` currently prevents hard job deletion, and current session deletion is archive-only. This release must not introduce a hard-delete path or claim one exists; its new nullable references prepare independent audit retention only.
+- `assistant_llm_traces` must not be cascade-deleted with API keys or another ownership row. Migration review must replace conflicting cascade retention with a nullable/set-null ownership reference plus immutable actor/correlation snapshot (or otherwise decouple the trace), preserving independent telemetry retention.
+- Provider, database, and dispatcher failures are classified into a finite normalized code/category allowlist before any audit, trace, outbox, counter, or API write. Raw provider text is neither persisted in these fields nor returned.
+
 ## Data design
 
 ### New tables
@@ -97,10 +107,10 @@ Durable pending decision events, inserted in the same transaction as the materia
 
 ```text
 id UUID PK
-aggregate_type TEXT                -- chat_job | chat_session | management
-aggregate_id UUID
-job_id UUID NULL
-session_id UUID NULL
+aggregate_type TEXT                -- immutable snapshot: chat_job | chat_session | management
+aggregate_id UUID                  -- immutable snapshot, never nulled
+job_id UUID NULL FK ON DELETE SET NULL
+session_id UUID NULL FK ON DELETE SET NULL
 actor_user_id UUID NULL
 role TEXT NULL
 correlation_id UUID
@@ -108,12 +118,13 @@ contract_version SMALLINT
 payload JSONB                     -- validated safe envelope only
 occurred_at TIMESTAMPTZ
 published_at TIMESTAMPTZ NULL
+next_attempt_at TIMESTAMPTZ
 attempt_count INTEGER
-last_error_code TEXT NULL
+last_error_code TEXT NULL          -- normalized allowlisted code only
 created_at TIMESTAMPTZ
 ```
 
-Indexes: unpublished rows by `(published_at, created_at)`, job timeline, session timeline, correlation id.
+Indexes: a partial due-row index on `(next_attempt_at, created_at) WHERE published_at IS NULL`, plus job timeline, session timeline, and correlation-id indexes. The dispatcher uses the partial index with `FOR UPDATE SKIP LOCKED`; it does not scan or lock all unpublished rows.
 
 #### `management_audit_events`
 
@@ -122,8 +133,10 @@ Immutable published decision events. The public API reads this table, not the ou
 ```text
 id UUID PK
 outbox_id UUID UNIQUE NULL
-job_id UUID NULL
-session_id UUID NULL
+job_id UUID NULL FK ON DELETE SET NULL
+session_id UUID NULL FK ON DELETE SET NULL
+aggregate_type TEXT                -- immutable snapshot
+aggregate_id UUID                  -- immutable snapshot, never nulled
 actor_user_id UUID NULL
 role TEXT NULL
 event_type TEXT
@@ -139,7 +152,7 @@ occurred_at TIMESTAMPTZ
 created_at TIMESTAMPTZ
 ```
 
-The existing `chat_job_audit_events` remains readable during migration. The implementation must not bulk-copy unsafe historical JSON into the new table without sanitizing/validating it.
+The existing `chat_job_audit_events` remains readable during migration and currently blocks hard job deletion. The implementation must not bulk-copy unsafe historical JSON into the new table without sanitizing/validating it. A database trigger makes published `management_audit_events` reject application-role updates and deletes.
 
 #### `management_telemetry_counters`
 
@@ -268,7 +281,7 @@ Returns the ordered decision event timeline and sanitized linked LLM call summar
 
 Query: required `from`, `to`; optional `event_type`, `outcome`, `job_id`, `session_id`, `cursor`, `limit`.
 
-The maximum date span and limit are configuration values. It returns newest-first event rows; a client uses the opaque cursor exactly as supplied. Aggregate analytics do not belong in this feed.
+The maximum date span and limit are configuration values. It returns newest-first event rows ordered by the stable tuple `(occurred_at DESC, id DESC)`; its opaque cursor encodes both tuple values and continuation uses the matching lexicographic predicate. A client uses the cursor exactly as supplied. Aggregate analytics do not belong in this feed.
 
 ### `GET /management/llm-usage`
 
@@ -300,7 +313,7 @@ This design intentionally separates data lifecycles:
 | Decision audit | Retained independently of session archive/delete; no automatic purge in this implementation |
 | Telemetry/LLM trace | Retained independently; no automatic purge in this implementation |
 
-Session deletion emits a decision event before/with the state change. The referenced session may no longer be visible, but audit event IDs and actor/time/outcome remain. A future retention job must use explicit configured periods, append a retention-run audit event, and never silently cascade-delete decision audit.
+Current session deletion is archive-only; it emits a decision event before/with that state change and this release adds no hard-delete behavior. The referenced session may no longer be visible, but audit event IDs, immutable aggregate snapshot, actor/time, and outcome remain. `assistant_llm_traces` retention is independent of API-key deletion and must not cascade through that relationship. A future retention job must use explicit configured periods, append a retention-run audit event, and never silently cascade-delete decision audit.
 
 ## Rollout and compatibility
 
@@ -314,7 +327,7 @@ Session deletion emits a decision event before/with the state change. The refere
 ## Test strategy
 
 - Unit: event enum/summary validation, error normalization, cursor encoding/decoding, time-range validation, cost aggregation by price version, telemetry counter increments.
-- Repository integration: transaction writes state plus outbox atomically; dispatcher idempotency; failed publish retry; indexed filters/cursor ordering; session deletion retains audit.
+- Repository integration: transaction writes state plus outbox atomically; due-row claim uses `FOR UPDATE SKIP LOCKED`; publish/completion is idempotent in one transaction; failed publish retry/backoff/exhaustion; indexed `(occurred_at, id)` cursor ordering; nullable FK deletion preserves aggregate snapshot; archive-only session deletion retains audit.
 - API contract: admin success, unauthenticated/non-admin rejection, envelopes, schemas, pagination, disabled reference-knowledge behavior, no unsafe fields, date bounds, and known error codes.
 - Assistant/job scenarios: each terminal job outcome writes required decision events; blocked execution writes no SQL text; clarification events bind to the same job; catalog/index version stays stable across catalog reload.
 - Regression: current chat audit endpoint, existing chat authentication, policy/office-scope tests, and all catalog validation tests remain green.
@@ -328,6 +341,9 @@ The feature is ready for client integration only when every endpoint has version
 - Every material terminal job path has durable ordered decision events, with event loss not dependent on the in-memory queue.
 - Every LLM trace exposes normalized provider/model/purpose/status and safe token/cost/latency semantics; unknown data stays unknown.
 - Catalog and index versions, selected IDs, and bounded context metadata are visible without raw source content.
-- Session deletion does not silently erase decision audit.
+- Archive-only session deletion does not silently erase decision audit; nullable relations retain immutable aggregate identity, and API-key deletion cannot cascade-remove LLM traces.
+- Published decision events reject application-role update/delete attempts; dispatcher retries are due-indexed, locked safely, idempotent, and expose exhausted failures.
+- External approved-SQL attempts have a durable authorization event before the call and a distinct terminal outcome event after it; no event falsely claims atomic external execution.
+- Persisted and returned provider/dispatcher/database errors contain only normalized allowlisted codes/categories, never raw provider text.
 - API payloads and persisted public audit summaries pass explicit redaction tests for SQL, secrets, raw prompts, document chunks, result rows, and stack traces.
 - Cost warnings are advisory only and context-window failure remains a technical safety outcome.

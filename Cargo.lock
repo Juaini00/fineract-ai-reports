@@ -591,6 +591,7 @@ dependencies = [
  "chrono",
  "core",
  "futures",
+ "hex",
  "petgraph",
  "pgvector",
  "redis",

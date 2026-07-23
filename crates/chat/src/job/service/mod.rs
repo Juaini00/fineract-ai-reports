@@ -37,11 +37,13 @@ use crate::job::model::{
     ChatJob, ChatJobAuditTimeline, CreateChatJobInput, CreatedChatJob, RespondToChatJobInput,
 };
 use crate::job::repository::{
-    JobRepository, PersistResponseOutcome, assistant_memory::JobMemoryRepository,
+    AssistantResponseTerminal, JobRepository, PersistResponseOutcome,
+    assistant_memory::JobMemoryRepository,
 };
 use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
+use crate::management::model::AuditOutcome;
 use crate::policy::authorization::project_admin_principal;
 use clarification_response::validate_submission;
 

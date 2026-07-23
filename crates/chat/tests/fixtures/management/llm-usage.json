@@ -1,0 +1,1 @@
+{"range":{"from":"2026-07-22T00:00:00Z","to":"2026-07-23T00:00:00Z"},"configured_provider":"configured-provider","configured_model":"configured-model","totals":{"calls":1,"input_tokens":10,"output_tokens":5,"total_tokens":15,"estimated_cost":null,"errors":0,"p95_latency_ms":20},"groups":[],"warnings":["cost_estimate_unavailable"]}

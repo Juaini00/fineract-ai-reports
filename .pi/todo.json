@@ -1,0 +1,55 @@
+{
+	"items": [
+		{
+			"id": "T-001",
+			"text": "Implement approved Phase 1 management contracts, admin extractor, and audit/outbox migration",
+			"status": "done",
+			"priority": "high",
+			"assignee": null,
+			"createdAt": "2026-07-23T04:46:00.258Z",
+			"updatedAt": "2026-07-23T04:56:19.728Z",
+			"blockedBy": null
+		},
+		{
+			"id": "T-002",
+			"text": "Phase 2: durable audit foundation, dispatcher, and lifecycle instrumentation",
+			"status": "done",
+			"priority": "high",
+			"assignee": null,
+			"createdAt": "2026-07-23T06:59:52.932Z",
+			"updatedAt": "2026-07-23T07:25:50.355Z",
+			"blockedBy": null
+		},
+		{
+			"id": "T-003",
+			"text": "Phase 3: context summaries and normalized LLM telemetry",
+			"status": "done",
+			"priority": "high",
+			"assignee": null,
+			"createdAt": "2026-07-23T07:31:53.829Z",
+			"updatedAt": "2026-07-23T07:48:26.974Z",
+			"blockedBy": null
+		},
+		{
+			"id": "T-004",
+			"text": "Phase 4: management knowledge, audit, status, and LLM usage HTTP APIs",
+			"status": "done",
+			"priority": "high",
+			"assignee": null,
+			"createdAt": "2026-07-23T07:55:48.286Z",
+			"updatedAt": "2026-07-23T08:05:57.255Z",
+			"blockedBy": null
+		},
+		{
+			"id": "T-005",
+			"text": "Verify pi-subagentura can launch and return a child-agent result",
+			"status": "done",
+			"priority": "medium",
+			"assignee": "senior-dev",
+			"createdAt": "2026-07-23T08:56:25.306Z",
+			"updatedAt": "2026-07-23T08:57:07.942Z",
+			"blockedBy": null
+		}
+	],
+	"counter": 5
+}

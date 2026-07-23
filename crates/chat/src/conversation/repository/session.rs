@@ -4,6 +4,8 @@ use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::conversation::model::ChatSession;
+use crate::management::model::{AuditAggregateType, AuditEventType, AuditOutcome, AuditSummary};
+use crate::management::{ManagementAuditEvent, enqueue};
 
 #[derive(Clone)]
 pub struct SessionRepository {
@@ -151,7 +153,8 @@ impl SessionRepository {
         user_id: Uuid,
         include_legacy: bool,
     ) -> Result<Option<Uuid>> {
-        sqlx::query_scalar(
+        let mut tx = self.pool.begin().await?;
+        let archived = sqlx::query_scalar(
             r#"
             UPDATE chat_sessions
             SET status = 'archived', archived_at = now(), updated_at = now()
@@ -164,9 +167,28 @@ impl SessionRepository {
         .bind(session_id)
         .bind(user_id)
         .bind(include_legacy)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Into::into)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(id) = archived {
+            enqueue(
+                &mut tx,
+                ManagementAuditEvent {
+                    aggregate_type: AuditAggregateType::ChatSession,
+                    aggregate_id: id,
+                    job_id: None,
+                    session_id: Some(id),
+                    actor_user_id: Some(user_id),
+                    event_type: AuditEventType::ChatSessionArchived,
+                    outcome: AuditOutcome::Success,
+                    summary: AuditSummary::SessionArchived,
+                    sanitized_error: None,
+                    occurred_at: Utc::now(),
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(archived)
     }
 }
 
