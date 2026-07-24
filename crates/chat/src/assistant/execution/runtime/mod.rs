@@ -20,9 +20,11 @@ use std::sync::Arc;
 
 use app_core::auth::model::PrincipalContext;
 use app_core::config::CanonicalGatewayMode;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+use crate::assistant::temporal::BusinessDateSource;
 
 use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
@@ -81,6 +83,8 @@ pub struct CanonicalRuntimeContext {
     pub timezone: String,
     pub revision: i64,
     pub initial: bool,
+    pub business_today: NaiveDate,
+    pub business_date_source: BusinessDateSource,
 }
 
 impl From<&str> for RuntimeUserInput {

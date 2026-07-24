@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::assistant::execution::runtime::CanonicalRuntimeContext;
 use crate::assistant::llm::planner_client::LlmPlannerClient;
+use crate::assistant::temporal::BusinessDateProvider;
 use crate::assistant::{
     AssistantGraphRuntime, AssistantGraphTopology, CanonicalStateRepository, ContextBuilder,
     ContextWindowPolicy, DeterministicExtraction, EffectiveConstraints, ExtractionProvenance,
@@ -74,6 +75,7 @@ pub struct JobService {
     audit: AuditHandle,
     redis_url: String,
     redis: Option<redis::Client>,
+    pub(super) business_date: Arc<dyn BusinessDateProvider>,
 }
 
 impl JobService {
@@ -91,6 +93,7 @@ impl JobService {
         redis_url: String,
         redis: Option<redis::Client>,
         audit: AuditHandle,
+        business_date: Arc<dyn BusinessDateProvider>,
     ) -> Self {
         let test_llm_enabled =
             llm_config.provider == "test" && llm_config.api_key == "__ai_report_test_llm__";
@@ -132,6 +135,7 @@ impl JobService {
             audit,
             redis_url,
             redis,
+            business_date,
         }
     }
 

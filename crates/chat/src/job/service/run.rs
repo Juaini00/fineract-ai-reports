@@ -62,6 +62,11 @@ impl JobService {
         } else {
             None
         };
+        let today = self
+            .business_date
+            .today()
+            .await
+            .map_err(|error| anyhow::anyhow!("business_date resolution failed: {error}"))?;
         let canonical = CanonicalRuntimeContext {
             mode: self.canonical_mode,
             repository: self.canonical_state.clone(),
@@ -72,6 +77,8 @@ impl JobService {
             timezone: "Asia/Jakarta".into(),
             revision: expected_revision,
             initial: canonical_turn.initial,
+            business_today: today.date,
+            business_date_source: today.source,
         };
         let mut result = AssistantGraphRuntime::run_with_router(
             memory,

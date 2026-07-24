@@ -5,6 +5,9 @@ use app_core::auth::service::AuthService;
 use axum::{Router, extract::FromRef};
 
 use crate::assistant::llm::planner_client::LlmPlannerClient;
+use crate::assistant::temporal::{
+    AuditingBusinessDateProvider, BusinessDateProvider, FineractBusinessDateProvider,
+};
 use crate::audit::spawn_audit_worker;
 use crate::conversation::repository::{MessageRepository, SessionRepository};
 use crate::conversation::service::{MessageService, SessionService};
@@ -71,6 +74,11 @@ impl ChatAppState {
         let llm_planner = LlmPlannerClient::new(&core.config.llm)?;
         let audit = spawn_audit_worker(core.pools.app.clone());
         spawn_outbox_dispatcher(core.pools.app.clone());
+        let business_date: Arc<dyn BusinessDateProvider> =
+            Arc::new(AuditingBusinessDateProvider::new(
+                FineractBusinessDateProvider::new(core.pools.fineract.clone()),
+                core.pools.app.clone(),
+            ));
 
         let chat = ChatServices {
             sessions: SessionService::new(session_repo),
@@ -89,6 +97,7 @@ impl ChatAppState {
                 core.config.redis.url.clone(),
                 core.pools.redis.clone(),
                 audit,
+                business_date,
             ),
         };
 
