@@ -1,0 +1,81 @@
+id: savings.pending_charges_clients
+database: fineract
+sql_file: queries/savings/pending_charges_clients.sql
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_charges_fees
+tables:
+  - m_savings_account_charge
+  - m_savings_account
+  - m_client
+  - m_office
+  - m_charge
+metrics:
+  - savings.charge_amount_outstanding
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: as_of_date
+    type: date
+    required: false
+  - name: limit
+    type: integer
+    required: false
+required_filters:
+  - m_savings_account_charge.waived = false
+  - m_savings_account_charge.is_paid_derived = false
+  - m_savings_account_charge.is_active = true
+  - m_savings_account_charge.amount_outstanding_derived > 0
+  - m_savings_account_charge.charge_due_date IS NULL OR <= as_of_date
+  - m_client.office_id constrained to authorized office_ids
+  - ordered by charge_due_date ascending (NULLS FIRST), id ascending
+  - bounded by limit when provided
+output_fields:
+  - name: client_id
+    type: bigint
+    sensitivity: public_business
+  - name: client_display_name
+    type: string
+    sensitivity: pii
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: charge_id
+    type: bigint
+    sensitivity: public_business
+  - name: charge_name
+    type: string
+    sensitivity: public_business
+  - name: currency_code
+    type: string
+    sensitivity: public_business
+  - name: amount_outstanding
+    type: decimal
+    sensitivity: public_business
+  - name: due_date
+    type: date
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+timeout_ms: 3000
+cost_class: medium
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: unpaid_filter_declared
+    rule: SQL must filter waived = false and is_paid_derived = false.
+  - id: limit_is_bound
+    rule: SQL must use a bound LIMIT parameter.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
