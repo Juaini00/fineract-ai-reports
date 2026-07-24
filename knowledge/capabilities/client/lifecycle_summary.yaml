@@ -2,11 +2,11 @@ id: client_lifecycle_summary
 status: approved_mvp
 domain: client
 data_areas:
-  - client_foundation
+- client_foundation
 required_api_capability: client_lifecycle_summary
 query_id: client.lifecycle_summary
 metrics:
-  - client.lifecycle_count
+- client.lifecycle_count
 output_mode: summary
 request_shape:
   operation: summary
@@ -15,12 +15,9 @@ request_shape:
   output: summary
   pii: none
 examples:
-  - Show client lifecycle summary.
-  - How many active clients are in my authorized offices?
-  - Count pending, active, and closed clients.
-required_parameters: []
-optional_parameters:
-  - office_ids
+- Show client lifecycle summary.
+- How many active clients are in my authorized offices?
+- Count pending, active, and closed clients.
 defaults:
   authorized_scope_only: true
 guards:
@@ -29,14 +26,18 @@ guards:
 pii:
   returns_pii: false
 cost_class: low
-clarification:
-  missing_parameters: []
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: lifecycle_enum_documented
-    rule: client status enum values must be documented before this capability is executable.
-  - id: no_pii_output
-    rule: query output fields must not expose client identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: lifecycle_enum_documented
+  rule: client status enum values must be documented before this capability is executable.
+- id: no_pii_output
+  rule: query output fields must not expose client identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false

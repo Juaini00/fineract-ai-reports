@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::conversation::model::ChatMessage;
@@ -99,7 +99,28 @@ impl MessageRepository {
         content: String,
         metadata_json: serde_json::Value,
     ) -> Result<ChatMessage> {
-        let id = Uuid::new_v4();
+        let mut tx = self.pool.begin().await?;
+        let message = self
+            .insert_assistant_message_in_transaction(
+                &mut tx,
+                session_id,
+                job_id,
+                content,
+                metadata_json,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(message)
+    }
+
+    pub(crate) async fn insert_assistant_message_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: Uuid,
+        job_id: Uuid,
+        content: String,
+        metadata_json: serde_json::Value,
+    ) -> Result<ChatMessage> {
         let row = sqlx::query_as::<_, ChatMessageRow>(
             r#"
             INSERT INTO chat_messages (
@@ -114,12 +135,12 @@ impl MessageRepository {
             RETURNING id, session_id, job_id, role, content, metadata_json, created_at
             "#,
         )
-        .bind(id)
+        .bind(Uuid::new_v4())
         .bind(session_id)
         .bind(job_id)
         .bind(content)
         .bind(metadata_json)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut **tx)
         .await?;
 
         Ok(row.into())

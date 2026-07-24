@@ -2,15 +2,15 @@ id: savings_withdrawal_monthly_breakdown
 status: approved_mvp
 domain: savings
 data_areas:
-  - organization_foundation
-  - client_foundation
-  - savings_core
-  - savings_transactions
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_transactions
 required_api_capability: savings_withdrawal_monthly_breakdown
 query_id: savings.withdrawal_monthly_breakdown
 metrics:
-  - savings.withdrawal_amount
-  - savings.withdrawal_count
+- savings.withdrawal_amount
+- savings.withdrawal_count
 output_mode: monthly_breakdown
 request_shape:
   operation: trend
@@ -19,17 +19,10 @@ request_shape:
   output: time_series
   pii: none
 examples:
-  - Monthly withdrawal totals from January to September 2026.
-  - Show savings withdrawals per month for this year.
-  - Month-by-month withdrawal breakdown.
-  - Penarikan tabungan per bulan dari Januari sampai September.
-required_parameters:
-  - from_date
-  - to_date
-optional_parameters:
-  - office_ids
-  - currency_code
-  - product_ids
+- Monthly withdrawal totals from January to September 2026.
+- Show savings withdrawals per month for this year.
+- Month-by-month withdrawal breakdown.
+- Penarikan tabungan per bulan dari Januari sampai September.
 defaults:
   exclude_reversed: true
 guards:
@@ -38,16 +31,34 @@ guards:
 pii:
   returns_pii: false
 cost_class: medium
-clarification:
-  missing_parameters:
-    - from_date
-    - to_date
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: withdrawal_filter_declared
-    rule: query must filter transaction_type_enum = 2 and is_reversed = false.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: withdrawal_filter_declared
+  rule: query must filter transaction_type_enum = 2 and is_reversed = false.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  from_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  to_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  currency_code:
+    type: string
+    required: false
+  product_ids:
+    type: integer_array
+    required: false

@@ -2,17 +2,18 @@ id: savings_activity_list
 status: approved_mvp
 domain: savings
 display_name: Savings Activity List
-description: Return recent savings transactions for a date range within the caller's authorized office scope.
+description: Return recent savings transactions for a date range within the caller's authorized office
+  scope.
 data_areas:
-  - organization_foundation
-  - client_foundation
-  - savings_core
-  - savings_transactions
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_transactions
 required_api_capability: savings_activity_list
 query_id: savings.activity_list
 metrics:
-  - savings.deposit_amount
-  - savings.withdrawal_amount
+- savings.deposit_amount
+- savings.withdrawal_amount
 output_mode: list
 request_shape:
   operation: list
@@ -21,20 +22,12 @@ request_shape:
   output: list
   pii: conditional_client_identity
 examples:
-  - Show customer savings activity this month.
-  - List savings transactions this week.
-  - Show all savings activity for authorized offices.
+- Show customer savings activity this month.
+- List savings transactions this week.
+- Show all savings activity for authorized offices.
 supported_intents:
-  - savings activity list by date range
-  - recent savings transactions for authorized offices
-required_parameters:
-  - from_date
-  - to_date
-optional_parameters:
-  - office_ids
-  - limit
-  - currency_code
-  - product_ids
+- savings activity list by date range
+- recent savings transactions for authorized offices
 defaults:
   exclude_reversed: true
 guards:
@@ -44,40 +37,62 @@ guards:
 pii:
   returns_pii: conditional
   allowed_fields_when_can_view_pii:
-    - client_id
-    - client_display_name
+  - client_id
+  - client_display_name
   omitted_when_cannot_view_pii:
-    - client_id
-    - client_display_name
+  - client_id
+  - client_display_name
   never_return:
-    - account_no
-    - external_id
-    - ref_no
-    - payment_detail_id
+  - account_no
+  - external_id
+  - ref_no
+  - payment_detail_id
 cost_class: medium
-clarification:
-  missing_parameters:
-    - from_date
-    - to_date
-    - limit
 output_fields:
   public:
-    - transaction_id
-    - transaction_date
-    - transaction_type
-    - amount
-    - currency_code
-    - office_id
-    - office_name
-    - product_id
-    - product_name
+  - transaction_id
+  - transaction_date
+  - transaction_type
+  - amount
+  - currency_code
+  - office_id
+  - office_name
+  - product_id
+  - product_name
   pii_conditional:
-    - client_id
-    - client_display_name
+  - client_id
+  - client_display_name
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: list_bounded
-    rule: max_limit must bound returned rows.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: list_bounded
+  rule: max_limit must bound returned rows.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  from_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  to_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  currency_code:
+    type: string
+    required: false
+  product_ids:
+    type: integer_array
+    required: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 100

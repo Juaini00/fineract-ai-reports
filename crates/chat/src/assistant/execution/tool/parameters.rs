@@ -14,7 +14,10 @@ use crate::{
         AssistantEntityType, AssistantIntent, ConstraintField, DeterministicExtraction,
         EffectiveConstraints, LimitMode, ListPatch, Quantity, TypedFactValue,
     },
-    knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
+    knowledge::{
+        catalog::parameter_policy::{EvaluationContext, ParameterPolicy, ResolvedValue},
+        model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
+    },
 };
 
 pub fn approved_default_patch(
@@ -214,6 +217,8 @@ pub(super) fn params_from_verified(
     query: &QueryKnowledge,
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
+    policies: &[ParameterPolicy],
+    ctx: Option<&EvaluationContext>,
 ) -> Result<Value> {
     let mut params = serde_json::Map::new();
     let person_name = deterministic_extraction.and_then(|extraction| {
@@ -255,6 +260,7 @@ pub(super) fn params_from_verified(
             "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
             _ => None,
         }
+        .or_else(|| resolve_policy_default(policies, ctx, &parameter.name))
         .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
@@ -264,6 +270,37 @@ pub(super) fn params_from_verified(
     }
 
     Ok(Value::Object(params))
+}
+
+/// Look up a per-parameter policy default and evaluate it against `ctx`.
+/// Returns `None` when the parameter has no policy, no default, is still
+/// required, or when no evaluation context was supplied.
+pub(super) fn resolve_policy_default(
+    policies: &[ParameterPolicy],
+    ctx: Option<&EvaluationContext>,
+    name: &str,
+) -> Option<Value> {
+    let ctx = ctx?;
+    let policy = policies.iter().find(|p| p.name == name)?;
+    if policy.required {
+        return None;
+    }
+    let default = policy.default.as_ref()?;
+    Some(resolved_to_value(default.evaluate(ctx)))
+}
+
+fn resolved_to_value(resolved: ResolvedValue) -> Value {
+    match resolved {
+        ResolvedValue::Date(d) => json!(d.to_string()),
+        ResolvedValue::Integer(i) => json!(i),
+        ResolvedValue::IntegerArray(ids) => json!(ids),
+        // Unbounded: no user-supplied cap. The runtime clamps to i64::MAX so
+        // callers that require an integer parameter (e.g. `LIMIT $n`) still
+        // bind successfully; catalog `hard_cap` is enforced elsewhere.
+        // ponytail: i64::MAX sentinel, upgrade to LIMIT-omitting SQL if a real
+        // "no limit" query appears.
+        ResolvedValue::Unbounded => json!(i64::MAX),
+    }
 }
 
 pub(super) fn verify_capability_metric(

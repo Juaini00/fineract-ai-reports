@@ -80,16 +80,18 @@ fn catalog_rejects_parameter_input_overlap() {
 #[test]
 fn catalog_rejects_capability_required_parameter_mismatch() {
     let mut catalog = load_catalog();
-    catalog
+    let capability = catalog
         .capabilities
         .iter_mut()
         .find(|capability| capability.id == "savings_deposit_top_n")
-        .expect("capability")
-        .required_parameters
-        .pop();
+        .expect("capability");
+    // Drop the last policy so at least one query-required user parameter is
+    // no longer covered by the capability's declared policies.
+    capability.parameter_policies.pop();
+    capability.required_parameters.pop();
 
     let error = KnowledgeValidator::validate(&catalog).expect_err("mismatch must fail");
-    assert!(error.to_string().contains("required_parameters"));
+    assert!(error.to_string().contains("does not cover"));
 }
 
 #[test]

@@ -1,5 +1,8 @@
 use super::*;
 
+use crate::job::repository::ExecutionAuditContext;
+use crate::management::model::SafeIdentifier;
+
 impl JobService {
     pub(super) async fn run_graph_skeleton(
         &self,
@@ -41,6 +44,10 @@ impl JobService {
                     user_id: client.user_id,
                     legacy_api_key_id: client.legacy_api_key_id,
                     graph_state: Some("route_intent".into()),
+                    correlation_id: None,
+                    context_contract_version: None,
+                    catalog_version_id: None,
+                    index_version_id: None,
                 }),
             )) as SharedLlmClient
         });
@@ -55,6 +62,11 @@ impl JobService {
         } else {
             None
         };
+        let today = self
+            .business_date
+            .today()
+            .await
+            .map_err(|error| anyhow::anyhow!("business_date resolution failed: {error}"))?;
         let canonical = CanonicalRuntimeContext {
             mode: self.canonical_mode,
             repository: self.canonical_state.clone(),
@@ -65,6 +77,8 @@ impl JobService {
             timezone: "Asia/Jakarta".into(),
             revision: expected_revision,
             initial: canonical_turn.initial,
+            business_today: today.date,
+            business_date_source: today.source,
         };
         let mut result = AssistantGraphRuntime::run_with_router(
             memory,
@@ -166,52 +180,99 @@ impl JobService {
             "terminal_state": memory.terminal_state,
             "selected_capability": memory.selected_capability.clone(),
         });
-        self.messages
-            .insert_assistant_message(
-                session_id,
-                job_id,
-                rendered.clone(),
-                json!({
-                    "type": "assistant_response",
-                    "assistant_response": structured_response.clone(),
-                }),
-            )
-            .await?;
+        let metadata_json = json!({
+            "type": "assistant_response",
+            "assistant_response": structured_response.clone(),
+        });
         let terminal_state = memory
             .terminal_state
             .unwrap_or(TerminalState::FailedOperational);
         let outcome = JobRunOutcome::from_terminal_state(terminal_state);
+        let execution_ctx = execution_audit_from_memory(&memory.execution_summary, terminal_state);
         match terminal_state {
-            TerminalState::Completed => {
-                self.jobs
-                    .complete_with_assistant_response(job_id, result_json.clone())
-                    .await?;
-            }
             TerminalState::WaitingForUserInput => {
-                self.jobs
-                    .store_assistant_response_result(job_id, result_json.clone())
+                self.messages
+                    .insert_assistant_message(session_id, job_id, rendered.clone(), metadata_json)
                     .await?;
-                self.jobs.wait_for_user_input(job_id).await?;
-            }
-            TerminalState::FailedOperational => {
                 self.jobs
                     .store_assistant_response_result(job_id, result_json.clone())
                     .await?;
                 self.jobs
-                    .fail(
+                    .wait_for_user_input_and_record_clarification_requested(
+                        session_id,
                         job_id,
-                        json!({
-                            "code": "assistant_failed",
-                            "message": "The assistant could not complete this request.",
-                        }),
+                        client.user_id,
                     )
                     .await?;
             }
-            TerminalState::BlockedByPolicy
-            | TerminalState::Unsupported
+            TerminalState::Completed => {
+                self.jobs
+                    .persist_assistant_response_and_terminal_state(
+                        session_id,
+                        job_id,
+                        client.user_id,
+                        rendered.clone(),
+                        metadata_json,
+                        result_json.clone(),
+                        AssistantResponseTerminal::Completed {
+                            outcome: AuditOutcome::Success,
+                        },
+                        execution_ctx.clone(),
+                    )
+                    .await?;
+            }
+            TerminalState::FailedOperational => {
+                self.jobs
+                    .persist_assistant_response_and_terminal_state(
+                        session_id,
+                        job_id,
+                        client.user_id,
+                        rendered.clone(),
+                        metadata_json,
+                        result_json.clone(),
+                        AssistantResponseTerminal::Failed {
+                            error_json: json!({
+                                "code": "assistant_failed",
+                                "message": "The assistant could not complete this request.",
+                            }),
+                        },
+                        execution_ctx.clone(),
+                    )
+                    .await?;
+            }
+            TerminalState::BlockedByPolicy => {
+                self.jobs
+                    .persist_assistant_response_and_terminal_state(
+                        session_id,
+                        job_id,
+                        client.user_id,
+                        rendered.clone(),
+                        metadata_json,
+                        result_json.clone(),
+                        AssistantResponseTerminal::Completed {
+                            outcome: AuditOutcome::Blocked,
+                        },
+                        execution_ctx.clone(),
+                    )
+                    .await?;
+            }
+            TerminalState::Unsupported
             | TerminalState::OutOfDomain
             | TerminalState::ContextWindowExceeded => {
-                self.jobs.complete(job_id, result_json.clone()).await?;
+                self.jobs
+                    .persist_assistant_response_and_terminal_state(
+                        session_id,
+                        job_id,
+                        client.user_id,
+                        rendered.clone(),
+                        metadata_json,
+                        result_json.clone(),
+                        AssistantResponseTerminal::Completed {
+                            outcome: AuditOutcome::Unsupported,
+                        },
+                        None,
+                    )
+                    .await?;
             }
         }
         let mut audit_event = AuditEvent::new(
@@ -322,4 +383,27 @@ impl JobRunOutcome {
             },
         }
     }
+}
+
+/// Extract capability/query identifiers and row count from the graph's
+/// `execution_summary` blob. Returns `None` when no capability was executed
+/// (clarification, unsupported, or intent-only flows).
+fn execution_audit_from_memory(
+    summary: &Value,
+    terminal_state: TerminalState,
+) -> Option<ExecutionAuditContext> {
+    let plan = summary.get("plan")?;
+    let capability_id = plan.get("capability_id")?.as_str()?;
+    let query_id = plan.get("query_id")?.as_str()?;
+    let row_count = summary
+        .get("result")
+        .and_then(|result| result.get("rows"))
+        .and_then(|rows| rows.as_array())
+        .map(|rows| rows.len() as u64);
+    Some(ExecutionAuditContext {
+        capability_id: SafeIdentifier::try_from(capability_id.to_string()).ok()?,
+        query_id: SafeIdentifier::try_from(query_id.to_string()).ok()?,
+        row_count,
+        allowed: !matches!(terminal_state, TerminalState::BlockedByPolicy),
+    })
 }

@@ -1,0 +1,1 @@
+{"id":"catalog:savings_deposit_total","kind":"catalog","title":"Total deposits","status":"available","execution_mode":"approved_catalog_query","domain_id":"savings","data_area_ids":["savings_transactions"],"parameters":[],"output_fields":[],"limitations":[]}

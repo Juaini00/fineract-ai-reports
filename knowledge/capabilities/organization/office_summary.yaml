@@ -2,14 +2,15 @@ id: organization_office_summary
 status: approved_mvp
 domain: organization
 display_name: Organization Office Summary
-description: Summarize offices in the caller's authorized scope, including office count and active staff count.
+description: Summarize offices in the caller's authorized scope, including office count and active staff
+  count.
 data_areas:
-  - organization_foundation
+- organization_foundation
 required_api_capability: organization_office_summary
 query_id: organization.office_summary
 metrics:
-  - organization.office_count
-  - organization.active_staff_count
+- organization.office_count
+- organization.active_staff_count
 output_mode: summary
 request_shape:
   operation: summary
@@ -18,12 +19,9 @@ request_shape:
   output: summary
   pii: none
 examples:
-  - Show office summary.
-  - How many offices are in my authorized scope?
-  - Show active staff count for my offices.
-required_parameters: []
-optional_parameters:
-  - office_ids
+- Show office summary.
+- How many offices are in my authorized scope?
+- Show active staff count for my offices.
 defaults:
   authorized_scope_only: true
 guards:
@@ -32,12 +30,16 @@ guards:
 pii:
   returns_pii: false
 cost_class: low
-clarification:
-  missing_parameters: []
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: no_pii_output
-    rule: query output fields must not expose staff identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: no_pii_output
+  rule: query output fields must not expose staff identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false

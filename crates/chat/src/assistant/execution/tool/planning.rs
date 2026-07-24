@@ -7,7 +7,7 @@ use crate::{
             AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
         },
     },
-    knowledge::model::KnowledgeCatalog,
+    knowledge::{catalog::parameter_policy::EvaluationContext, model::KnowledgeCatalog},
 };
 
 use super::parameters::{
@@ -24,7 +24,13 @@ pub(super) fn plan_selected_capability(
         entities: intent.entities.clone(),
         ..Default::default()
     };
-    plan_selected_capability_verified(catalog, capability_id, intent, Some(&legacy_extraction))
+    plan_selected_capability_verified(
+        catalog,
+        capability_id,
+        intent,
+        Some(&legacy_extraction),
+        None,
+    )
 }
 
 pub(super) fn plan_selected_capability_verified(
@@ -32,6 +38,7 @@ pub(super) fn plan_selected_capability_verified(
     capability_id: &str,
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
+    ctx: Option<&EvaluationContext>,
 ) -> Result<ExecutionPlan> {
     if let Some(error) = deterministic_extraction.and_then(|value| value.temporal_error.as_ref()) {
         bail!("{}: {}", error.code, error.message);
@@ -47,7 +54,13 @@ pub(super) fn plan_selected_capability_verified(
         .iter()
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
-    let params = params_from_verified(query, intent, deterministic_extraction)?;
+    let params = params_from_verified(
+        query,
+        intent,
+        deterministic_extraction,
+        &capability.parameter_policies,
+        ctx,
+    )?;
 
     Ok(ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,

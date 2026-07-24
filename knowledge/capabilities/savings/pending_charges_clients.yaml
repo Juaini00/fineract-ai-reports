@@ -1,0 +1,100 @@
+id: savings_pending_charges_clients
+status: approved_mvp
+domain: savings
+display_name: Savings Clients With Unpaid Charges
+description: List clients who still have unpaid, non-waived savings account charges outstanding within
+  the caller's authorized office scope, with amounts paid, waived, written off and still outstanding.
+  Outstanding-ness is not filtered by due date, so recurring charges whose next occurrence is in the
+  future are still reported; the business date is used only to compute days_overdue.
+data_areas:
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_charges_fees
+required_api_capability: savings_pending_charges_clients
+query_id: savings.pending_charges_clients
+metrics:
+- savings.charge_amount_outstanding
+output_mode: list
+request_shape:
+  operation: list
+  subject: client
+  grouping: none
+  output: list
+  pii: client_identity
+examples:
+- Which clients still have unpaid savings charges today?
+- List customers with outstanding savings fees.
+- Show clients with pending savings account charges as of today.
+- Beritahukan saya siapa saja yang masih memiliki charge yang belum dibayar hari ini pada savings.
+supported_intents:
+- clients with unpaid savings charges as of a date
+- outstanding savings fees per client
+defaults:
+  exclude_waived: true
+  exclude_paid: true
+guards:
+  require_office_scope: true
+  max_limit: 10000
+pii:
+  returns_pii: true
+  allowed_fields_when_can_view_pii:
+  - client_id
+  - client_display_name
+  omitted_when_cannot_view_pii:
+  - client_id
+  - client_display_name
+  never_return:
+  - account_no
+  - external_id
+cost_class: medium
+output_fields:
+  public:
+  - office_id
+  - office_name
+  - savings_account_id
+  - savings_account_charge_id
+  - charge_definition_id
+  - charge_name
+  - is_penalty
+  - charge_timing_enum
+  - currency_code
+  - amount_due_current
+  - amount_paid
+  - amount_waived
+  - amount_written_off
+  - amount_outstanding
+  - due_date
+  - days_overdue
+  pii_conditional:
+  - client_id
+  - client_display_name
+checks:
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: list_bounded
+  rule: max_limit must bound returned rows.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: unpaid_filter_declared
+  rule: SQL must filter waived = false, is_paid_derived = false, is_active = true and
+    amount_outstanding_derived > 0, and must not filter on charge_due_date, which is
+    output only.
+- id: pii_fields_declared
+  rule: client identity fields require can_view_pii.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  as_of_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 10000

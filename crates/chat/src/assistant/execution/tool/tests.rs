@@ -104,6 +104,8 @@ fn extracts_dates_currency_products_and_limit() {
             reason: "test".into(),
         },
         Some(&extraction),
+        &[],
+        None,
     )
     .unwrap();
 
@@ -127,8 +129,14 @@ fn verified_quantity_overrides_missing_llm_quantity() {
         output_fields: Vec::new(),
     };
     let extraction = extract_message_facts("show top 10 clients");
-    let params =
-        params_from_verified(&query, &intent_with_quantity(None), Some(&extraction)).unwrap();
+    let params = params_from_verified(
+        &query,
+        &intent_with_quantity(None),
+        Some(&extraction),
+        &[],
+        None,
+    )
+    .unwrap();
 
     assert_eq!(params["limit"], 10);
 }
@@ -148,6 +156,8 @@ fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
     let params = params_from_verified(
         &query,
         &intent_with_quantity(Some(Quantity::TopN { value: 20 })),
+        None,
+        &[],
         None,
     )
     .unwrap();
@@ -172,7 +182,7 @@ fn hallucinated_optional_currency_is_omitted_without_verified_extraction() {
     let mut intent = intent_with_quantity(None);
     intent.constraints.currency_code = Some("USD".into());
 
-    let params = params_from_verified(&query, &intent, None).unwrap();
+    let params = params_from_verified(&query, &intent, None, &[], None).unwrap();
 
     assert!(params.get("currency_code").is_none());
 }
@@ -186,6 +196,7 @@ fn metric_mismatch_rejected() {
         "client_top_n_by_deposit_volume",
         &intent_with_quantity(None),
         Some(&extraction),
+        None,
     )
     .unwrap_err();
 
@@ -201,6 +212,7 @@ fn metric_match_accepted() {
         "client_top_n_by_savings_account_count",
         &intent_with_quantity(None),
         Some(&extraction),
+        None,
     )
     .unwrap();
 
@@ -226,7 +238,7 @@ fn hallucinated_required_search_rejected_without_trusted_entity() {
         canonical: None,
         confidence: None,
     });
-    let error = params_from_verified(&query, &intent, None).unwrap_err();
+    let error = params_from_verified(&query, &intent, None, &[], None).unwrap_err();
 
     assert!(error.to_string().contains("missing parameter search"));
 }
@@ -244,8 +256,14 @@ fn trusted_named_tony_fills_search() {
         output_fields: Vec::new(),
     };
     let extraction = extract_message_facts("find client named Tony");
-    let params =
-        params_from_verified(&query, &intent_with_quantity(None), Some(&extraction)).unwrap();
+    let params = params_from_verified(
+        &query,
+        &intent_with_quantity(None),
+        Some(&extraction),
+        &[],
+        None,
+    )
+    .unwrap();
 
     assert_eq!(params["search"], "Tony");
 }
@@ -293,6 +311,153 @@ fn intent_with_quantity(quantity: Option<Quantity>) -> AssistantIntent {
         confidence: 0.9,
         reason: "test".into(),
     }
+}
+
+#[test]
+fn defaults_business_today_when_policy_declares_it() {
+    use crate::knowledge::catalog::parameter_policy::{
+        DefaultExpr, EvaluationContext, ParameterPolicy, ParameterType,
+    };
+    let query = QueryKnowledge {
+        id: "test.query".into(),
+        database: "fineract".into(),
+        sql_file: "test.sql".into(),
+        data_areas: Vec::new(),
+        tables: Vec::new(),
+        metrics: Vec::new(),
+        parameters: vec![parameter("from_date", true)],
+        output_fields: Vec::new(),
+    };
+    let policies = vec![ParameterPolicy {
+        name: "from_date".into(),
+        kind: ParameterType::Date,
+        required: false,
+        default: Some(DefaultExpr::BusinessToday),
+        fill_when_missing: true,
+        user_may_override: true,
+        hard_cap: None,
+    }];
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+    let ctx = EvaluationContext {
+        business_today: today,
+        wall_today: today,
+        authorized_office_ids: Vec::new(),
+    };
+
+    let params = params_from_verified(
+        &query,
+        &intent_with_quantity(None),
+        None,
+        &policies,
+        Some(&ctx),
+    )
+    .unwrap();
+
+    assert_eq!(params["from_date"], "2026-07-24");
+}
+
+#[test]
+fn defaults_unbounded_limit_when_policy_declares_it() {
+    use crate::knowledge::catalog::parameter_policy::{
+        DefaultExpr, EvaluationContext, ParameterPolicy, ParameterType,
+    };
+    let query = QueryKnowledge {
+        id: "test.query".into(),
+        database: "fineract".into(),
+        sql_file: "test.sql".into(),
+        data_areas: Vec::new(),
+        tables: Vec::new(),
+        metrics: Vec::new(),
+        parameters: vec![parameter("limit", true)],
+        output_fields: Vec::new(),
+    };
+    let policies = vec![ParameterPolicy {
+        name: "limit".into(),
+        kind: ParameterType::Integer,
+        required: false,
+        default: Some(DefaultExpr::Unbounded),
+        fill_when_missing: true,
+        user_may_override: true,
+        hard_cap: Some(100),
+    }];
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+    let ctx = EvaluationContext {
+        business_today: today,
+        wall_today: today,
+        authorized_office_ids: Vec::new(),
+    };
+
+    let params = params_from_verified(
+        &query,
+        &intent_with_quantity(None),
+        None,
+        &policies,
+        Some(&ctx),
+    )
+    .unwrap();
+
+    assert_eq!(params["limit"], i64::MAX);
+}
+
+#[test]
+fn defaults_authorized_scope_when_policy_declares_it() {
+    use crate::knowledge::catalog::parameter_policy::{
+        DefaultExpr, EvaluationContext, ParameterPolicy, ParameterType,
+    };
+    let query = QueryKnowledge {
+        id: "test.query".into(),
+        database: "fineract".into(),
+        sql_file: "test.sql".into(),
+        data_areas: Vec::new(),
+        tables: Vec::new(),
+        metrics: Vec::new(),
+        parameters: vec![parameter("office_ids", true)],
+        output_fields: Vec::new(),
+    };
+    let policies = vec![ParameterPolicy {
+        name: "office_ids".into(),
+        kind: ParameterType::IntegerArray,
+        required: false,
+        default: Some(DefaultExpr::AuthorizedScope),
+        fill_when_missing: true,
+        user_may_override: false,
+        hard_cap: None,
+    }];
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+    let ctx = EvaluationContext {
+        business_today: today,
+        wall_today: today,
+        authorized_office_ids: vec![1, 2],
+    };
+
+    let params = params_from_verified(
+        &query,
+        &intent_with_quantity(None),
+        None,
+        &policies,
+        Some(&ctx),
+    )
+    .unwrap();
+
+    assert_eq!(params["office_ids"], serde_json::json!([1, 2]));
+}
+
+#[test]
+fn still_bails_when_no_policy_and_no_default() {
+    let query = QueryKnowledge {
+        id: "test.query".into(),
+        database: "fineract".into(),
+        sql_file: "test.sql".into(),
+        data_areas: Vec::new(),
+        tables: Vec::new(),
+        metrics: Vec::new(),
+        parameters: vec![parameter("from_date", true)],
+        output_fields: Vec::new(),
+    };
+    let error =
+        params_from_verified(&query, &intent_with_quantity(None), None, &[], None).unwrap_err();
+
+    assert!(error.to_string().contains("missing parameter from_date"));
 }
 
 fn parameter(name: &str, required: bool) -> crate::knowledge::model::QueryParameter {

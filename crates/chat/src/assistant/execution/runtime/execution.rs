@@ -111,11 +111,20 @@ pub(super) async fn execute_selected_capability(
                 .get("deterministic_extraction")
                 .cloned()
                 .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok());
+            let eval_ctx =
+                canonical.map(
+                    |c| crate::knowledge::catalog::parameter_policy::EvaluationContext {
+                        business_today: c.business_today,
+                        wall_today: chrono::Utc::now().date_naive(),
+                        authorized_office_ids: client.office_ids.clone(),
+                    },
+                );
             match crate::assistant::plan_selected_capability_verified(
                 catalog,
                 &capability_id,
                 intent,
                 deterministic_extraction.as_ref(),
+                eval_ctx.as_ref(),
             ) {
                 Ok(plan) => (plan, client.clone()),
                 Err(error) => {

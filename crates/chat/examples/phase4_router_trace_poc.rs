@@ -40,6 +40,10 @@ async fn main() -> anyhow::Result<()> {
             user_id: API_KEY_ID,
             legacy_api_key_id: None,
             graph_state: None,
+            correlation_id: None,
+            context_contract_version: None,
+            catalog_version_id: None,
+            index_version_id: None,
         }),
     ));
 

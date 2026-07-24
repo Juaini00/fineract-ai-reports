@@ -103,22 +103,19 @@ impl LlmClient for RigLlmClient {
             .and_then(|choice| choice.message.content.as_deref())
             .context("LLM response missing message content")?;
         let value = parse_structured_content(content)?;
-        let usage = TokenUsage {
-            input_tokens: wire
-                .usage
-                .as_ref()
-                .and_then(|u| u.prompt_tokens)
-                .unwrap_or(0),
-            output_tokens: wire
-                .usage
-                .as_ref()
-                .and_then(|u| u.completion_tokens)
-                .unwrap_or(0),
+        let usage = match wire.usage {
+            Some(ChatUsage {
+                prompt_tokens: Some(input_tokens),
+                completion_tokens: Some(output_tokens),
+            }) => TokenUsage::provider_reported(input_tokens, output_tokens),
+            _ => TokenUsage::default(),
         };
-        let cost_usd = llm_pricing(&self.llm.provider, &self.llm.model).map(|price| {
-            (usage.input_tokens as f64 * price.input_usd_per_1m
-                + usage.output_tokens as f64 * price.output_usd_per_1m)
-                / 1_000_000.0
+        let cost_usd = usage.total_tokens().and_then(|_| {
+            llm_pricing(&self.llm.provider, &self.llm.model).map(|price| {
+                (usage.input_tokens.unwrap_or_default() as f64 * price.input_usd_per_1m
+                    + usage.output_tokens.unwrap_or_default() as f64 * price.output_usd_per_1m)
+                    / 1_000_000.0
+            })
         });
         Ok(LlmResponse {
             value,
@@ -160,10 +157,11 @@ impl LlmClient for RigLlmClient {
             .unwrap_or_default();
         Ok(EmbeddingResponse {
             vector,
-            usage: TokenUsage {
-                input_tokens: wire.usage.and_then(|u| u.prompt_tokens).unwrap_or(0),
-                output_tokens: 0,
-            },
+            usage: wire
+                .usage
+                .and_then(|usage| usage.prompt_tokens)
+                .map(|input_tokens| TokenUsage::provider_reported(input_tokens, 0))
+                .unwrap_or_default(),
             cost_usd: None,
             provider: config.provider.clone(),
             model: config.model.clone(),

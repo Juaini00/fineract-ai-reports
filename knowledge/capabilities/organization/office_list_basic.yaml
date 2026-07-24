@@ -2,13 +2,14 @@ id: office_list_basic
 status: approved_mvp
 domain: organization
 display_name: Office List
-description: List offices in the caller's authorized scope, ordered by opening date, with no ranking metric required.
+description: List offices in the caller's authorized scope, ordered by opening date, with no ranking metric
+  required.
 data_areas:
-  - organization_foundation
+- organization_foundation
 required_api_capability: office_list_basic
 query_id: organization.office_list_basic
 metrics:
-  - organization.office_count
+- organization.office_count
 output_mode: list
 request_shape:
   operation: list
@@ -17,18 +18,14 @@ request_shape:
   output: list
   pii: none
 examples:
-  - berikan 3 office yg ada pada system saat ini
-  - List the offices in my authorized scope.
-  - Show me all offices.
+- berikan 3 office yg ada pada system saat ini
+- List the offices in my authorized scope.
+- Show me all offices.
 supported_intents:
-  - plain browse/list of offices with no ranking metric
+- plain browse/list of offices with no ranking metric
 unsupported_intents:
-  - offices ranked or filtered by a metric
-  - staff or client identity
-required_parameters:
-  - limit
-optional_parameters:
-  - office_ids
+- offices ranked or filtered by a metric
+- staff or client identity
 defaults:
   authorized_scope_only: true
   default_limit: 50
@@ -38,14 +35,23 @@ guards:
 pii:
   returns_pii: false
 cost_class: low
-clarification:
-  missing_parameters: []
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: no_pii_output
-    rule: query output fields must not expose staff or client identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: no_pii_output
+  rule: query output fields must not expose staff or client identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 200

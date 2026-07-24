@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::assistant::execution::runtime::CanonicalRuntimeContext;
 use crate::assistant::llm::planner_client::LlmPlannerClient;
+use crate::assistant::temporal::BusinessDateProvider;
 use crate::assistant::{
     AssistantGraphRuntime, AssistantGraphTopology, CanonicalStateRepository, ContextBuilder,
     ContextWindowPolicy, DeterministicExtraction, EffectiveConstraints, ExtractionProvenance,
@@ -37,11 +38,13 @@ use crate::job::model::{
     ChatJob, ChatJobAuditTimeline, CreateChatJobInput, CreatedChatJob, RespondToChatJobInput,
 };
 use crate::job::repository::{
-    JobRepository, PersistResponseOutcome, assistant_memory::JobMemoryRepository,
+    AssistantResponseTerminal, JobRepository, PersistResponseOutcome,
+    assistant_memory::JobMemoryRepository,
 };
 use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
+use crate::management::model::AuditOutcome;
 use crate::policy::authorization::project_admin_principal;
 use clarification_response::validate_submission;
 
@@ -72,6 +75,7 @@ pub struct JobService {
     audit: AuditHandle,
     redis_url: String,
     redis: Option<redis::Client>,
+    pub(super) business_date: Arc<dyn BusinessDateProvider>,
 }
 
 impl JobService {
@@ -89,6 +93,7 @@ impl JobService {
         redis_url: String,
         redis: Option<redis::Client>,
         audit: AuditHandle,
+        business_date: Arc<dyn BusinessDateProvider>,
     ) -> Self {
         let test_llm_enabled =
             llm_config.provider == "test" && llm_config.api_key == "__ai_report_test_llm__";
@@ -130,6 +135,7 @@ impl JobService {
             audit,
             redis_url,
             redis,
+            business_date,
         }
     }
 
@@ -285,10 +291,11 @@ impl JobService {
         let PersistResponseOutcome::Inserted(message) = outcome else {
             return Ok(match outcome {
                 PersistResponseOutcome::NotFound => RespondToChatJobOutcome::NotFound,
-                PersistResponseOutcome::NotActive if structured => {
-                    RespondToChatJobOutcome::NotActive
-                }
-                PersistResponseOutcome::NotActive => RespondToChatJobOutcome::NotFound,
+                // Ownership and existence were already established above, so a
+                // job that is merely inactive must not be reported as missing:
+                // clients that see 404 here would spawn a replacement job,
+                // which the clarification contract forbids.
+                PersistResponseOutcome::NotActive => RespondToChatJobOutcome::NotActive,
                 PersistResponseOutcome::Stale => RespondToChatJobOutcome::Stale,
                 PersistResponseOutcome::Inserted(_) => unreachable!(),
             });

@@ -5,6 +5,9 @@ use app_core::auth::service::AuthService;
 use axum::{Router, extract::FromRef};
 
 use crate::assistant::llm::planner_client::LlmPlannerClient;
+use crate::assistant::temporal::{
+    AuditingBusinessDateProvider, BusinessDateProvider, FineractBusinessDateProvider,
+};
 use crate::audit::spawn_audit_worker;
 use crate::conversation::repository::{MessageRepository, SessionRepository};
 use crate::conversation::service::{MessageService, SessionService};
@@ -13,6 +16,7 @@ use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeVal
 use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::sync::KnowledgeSyncService;
 use crate::knowledge::model::KnowledgeCatalog;
+use crate::management::outbox::spawn_outbox_dispatcher;
 
 pub mod dto;
 pub mod handlers;
@@ -65,10 +69,16 @@ impl ChatAppState {
         let pool = core.pools.app.clone();
         let session_repo = SessionRepository::new(pool.clone());
         let message_repo = MessageRepository::new(pool.clone());
-        let job_repo = JobRepository::new(pool, session_repo.clone());
+        let job_repo = JobRepository::new(pool, session_repo.clone(), message_repo.clone());
         let runtime_embedding_client = VoyageEmbeddingClient::new(&core.config.voyage_ai)?;
         let llm_planner = LlmPlannerClient::new(&core.config.llm)?;
         let audit = spawn_audit_worker(core.pools.app.clone());
+        spawn_outbox_dispatcher(core.pools.app.clone());
+        let business_date: Arc<dyn BusinessDateProvider> =
+            Arc::new(AuditingBusinessDateProvider::new(
+                FineractBusinessDateProvider::new(core.pools.fineract.clone()),
+                core.pools.app.clone(),
+            ));
 
         let chat = ChatServices {
             sessions: SessionService::new(session_repo),
@@ -87,6 +97,7 @@ impl ChatAppState {
                 core.config.redis.url.clone(),
                 core.pools.redis.clone(),
                 audit,
+                business_date,
             ),
         };
 
@@ -109,5 +120,6 @@ pub fn router(state: ChatAppState) -> Router {
         .merge(routes::session::router())
         .merge(routes::job::router())
         .merge(routes::catalog::router())
+        .merge(routes::management::router())
         .with_state(state)
 }

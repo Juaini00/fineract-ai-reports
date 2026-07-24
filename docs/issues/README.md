@@ -32,4 +32,5 @@ Resolved: YYYY-MM-DD or blank
 - [Robust verified payload extraction](./active/003-verified-payload-extraction.md)
 - [API key/session ownership model mismatch](./active/004-api-key-session-ownership.md)
 - [Unified agentic clarification contract and job-scoped workflow](./active/005-unified-agentic-clarification-contract.md)
+- [Management observability and audit contract](./active/006-management-observability-and-audit-contract.md)
 - [Hardcode cleanup issues](./active/hardcode-cleanup-issues.md)

@@ -10,10 +10,15 @@ use uuid::Uuid;
 
 use crate::conversation::model::ChatMessage;
 use crate::conversation::repository::SessionRepository;
-use crate::conversation::repository::message::ChatMessageRow;
+use crate::conversation::repository::message::{ChatMessageRow, MessageRepository};
 use crate::job::model::{
     ChatJob, ChatJobAuditEvent, CreatedChatJob, ValidatedClarificationSubmission,
 };
+use crate::management::model::{
+    AuditAggregateType, AuditEventType, AuditOutcome, AuditSummary, NormalizedErrorCode,
+    PolicyResult, SafeIdentifier, SanitizedError,
+};
+use crate::management::{ManagementAuditEvent, enqueue};
 
 #[derive(Debug)]
 pub enum PersistResponseOutcome {
@@ -23,15 +28,36 @@ pub enum PersistResponseOutcome {
     Stale,
 }
 
+pub enum AssistantResponseTerminal {
+    Completed { outcome: AuditOutcome },
+    Failed { error_json: serde_json::Value },
+}
+
+/// Runtime execution facts extracted from `memory.execution_summary`, passed
+/// alongside the terminal state so policy/execution audit events land in the
+/// same transaction as the terminal-state write.
+#[derive(Clone)]
+pub struct ExecutionAuditContext {
+    pub capability_id: SafeIdentifier,
+    pub query_id: SafeIdentifier,
+    pub row_count: Option<u64>,
+    pub allowed: bool,
+}
+
 #[derive(Clone)]
 pub struct JobRepository {
     pool: PgPool,
     sessions: SessionRepository,
+    messages: MessageRepository,
 }
 
 impl JobRepository {
-    pub fn new(pool: PgPool, sessions: SessionRepository) -> Self {
-        Self { pool, sessions }
+    pub fn new(pool: PgPool, sessions: SessionRepository, messages: MessageRepository) -> Self {
+        Self {
+            pool,
+            sessions,
+            messages,
+        }
     }
 
     /// Create a job atomically with its user message. Creates the session
@@ -130,6 +156,22 @@ impl JobRepository {
         .execute(&mut *tx)
         .await?;
 
+        enqueue(
+            &mut tx,
+            ManagementAuditEvent {
+                aggregate_type: AuditAggregateType::ChatJob,
+                aggregate_id: job_id,
+                job_id: Some(job_id),
+                session_id: Some(session_id),
+                actor_user_id: Some(user_id),
+                event_type: AuditEventType::ChatJobCreated,
+                outcome: AuditOutcome::Success,
+                summary: AuditSummary::JobCreated,
+                sanitized_error: None,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
         tx.commit().await?;
 
         Ok(Some(CreatedChatJob {
@@ -255,7 +297,13 @@ impl JobRepository {
         Ok(Some(rows.into_iter().map(Into::into).collect()))
     }
 
-    pub async fn wait_for_user_input(&self, job_id: Uuid) -> Result<()> {
+    pub async fn wait_for_user_input_and_record_clarification_requested(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        actor_user_id: Uuid,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
             UPDATE chat_jobs
@@ -267,8 +315,25 @@ impl JobRepository {
             "#,
         )
         .bind(job_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        enqueue(
+            &mut tx,
+            ManagementAuditEvent {
+                aggregate_type: AuditAggregateType::ChatJob,
+                aggregate_id: job_id,
+                job_id: Some(job_id),
+                session_id: Some(session_id),
+                actor_user_id: Some(actor_user_id),
+                event_type: AuditEventType::ChatClarificationRequested,
+                outcome: AuditOutcome::Clarification,
+                summary: AuditSummary::ClarificationRequested,
+                sanitized_error: None,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -485,6 +550,22 @@ impl JobRepository {
         .execute(&mut *tx)
         .await?;
 
+        enqueue(
+            &mut tx,
+            ManagementAuditEvent {
+                aggregate_type: AuditAggregateType::ChatJob,
+                aggregate_id: job_id,
+                job_id: Some(job_id),
+                session_id: Some(target.session_id),
+                actor_user_id: Some(user_id),
+                event_type: AuditEventType::ChatClarificationReceived,
+                outcome: AuditOutcome::Clarification,
+                summary: AuditSummary::ClarificationReceived,
+                sanitized_error: None,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
         tx.commit().await?;
 
         Ok(PersistResponseOutcome::Inserted(message_row.into()))
@@ -576,12 +657,86 @@ impl JobRepository {
         Ok(())
     }
 
-    pub async fn complete_with_assistant_response(
+    pub async fn persist_assistant_response_and_terminal_state(
         &self,
+        session_id: Uuid,
         job_id: Uuid,
+        actor_user_id: Uuid,
+        content: String,
+        metadata_json: serde_json::Value,
         result_json: serde_json::Value,
-    ) -> Result<()> {
-        self.complete(job_id, result_json).await
+        terminal: AssistantResponseTerminal,
+        execution: Option<ExecutionAuditContext>,
+    ) -> Result<ChatMessage> {
+        let mut tx = self.pool.begin().await?;
+        let message = self
+            .messages
+            .insert_assistant_message_in_transaction(
+                &mut tx,
+                session_id,
+                job_id,
+                content,
+                metadata_json,
+            )
+            .await?;
+        let (event_type, outcome, summary, sanitized_error) = match terminal {
+            AssistantResponseTerminal::Completed { outcome } => {
+                sqlx::query(
+                    "UPDATE chat_jobs SET status = 'completed', current_step = 'response', result_json = $1, error_json = NULL, completed_at = now(), updated_at = now() WHERE id = $2",
+                )
+                .bind(result_json)
+                .bind(job_id)
+                .execute(&mut *tx)
+                .await?;
+                (
+                    AuditEventType::ChatJobCompleted,
+                    outcome,
+                    AuditSummary::JobCompleted,
+                    None,
+                )
+            }
+            AssistantResponseTerminal::Failed { error_json } => {
+                sqlx::query(
+                    "UPDATE chat_jobs SET status = 'failed', current_step = 'response', result_json = $1, error_json = $2, failed_at = now(), updated_at = now() WHERE id = $3",
+                )
+                .bind(result_json)
+                .bind(error_json)
+                .bind(job_id)
+                .execute(&mut *tx)
+                .await?;
+                (
+                    AuditEventType::ChatJobFailed,
+                    AuditOutcome::Failed,
+                    AuditSummary::JobFailed,
+                    Some(SanitizedError {
+                        code: NormalizedErrorCode::Unknown,
+                    }),
+                )
+            }
+        };
+        enqueue(
+            &mut tx,
+            ManagementAuditEvent {
+                aggregate_type: AuditAggregateType::ChatJob,
+                aggregate_id: job_id,
+                job_id: Some(job_id),
+                session_id: Some(session_id),
+                actor_user_id: Some(actor_user_id),
+                event_type,
+                outcome,
+                summary,
+                sanitized_error,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        if let Some(execution) = execution {
+            for event in execution_lifecycle_events(session_id, job_id, actor_user_id, &execution) {
+                enqueue(&mut tx, event).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(message)
     }
 
     pub async fn store_assistant_response_result(
@@ -727,4 +882,70 @@ impl From<ChatJobRow> for ChatJob {
             cancelled_at: row.cancelled_at,
         }
     }
+}
+
+fn execution_lifecycle_events(
+    session_id: Uuid,
+    job_id: Uuid,
+    actor_user_id: Uuid,
+    execution: &ExecutionAuditContext,
+) -> Vec<ManagementAuditEvent> {
+    let now = Utc::now();
+    let base = |event_type, outcome, summary| ManagementAuditEvent {
+        aggregate_type: AuditAggregateType::ChatJob,
+        aggregate_id: job_id,
+        job_id: Some(job_id),
+        session_id: Some(session_id),
+        actor_user_id: Some(actor_user_id),
+        event_type,
+        outcome,
+        summary,
+        sanitized_error: None,
+        occurred_at: now,
+    };
+    let policy_result = if execution.allowed {
+        PolicyResult::Allowed
+    } else {
+        PolicyResult::Denied
+    };
+    let mut events = vec![base(
+        AuditEventType::PolicyEvaluated,
+        if execution.allowed {
+            AuditOutcome::Success
+        } else {
+            AuditOutcome::Blocked
+        },
+        AuditSummary::PolicyEvaluated {
+            capability_id: execution.capability_id.clone(),
+            result: policy_result,
+        },
+    )];
+    if execution.allowed {
+        events.push(base(
+            AuditEventType::ExecutionAuthorized,
+            AuditOutcome::Success,
+            AuditSummary::Execution {
+                query_id: execution.query_id.clone(),
+                row_count: None,
+            },
+        ));
+        events.push(base(
+            AuditEventType::ExecutionCompleted,
+            AuditOutcome::Success,
+            AuditSummary::Execution {
+                query_id: execution.query_id.clone(),
+                row_count: execution.row_count,
+            },
+        ));
+    } else {
+        events.push(base(
+            AuditEventType::ExecutionBlocked,
+            AuditOutcome::Blocked,
+            AuditSummary::Execution {
+                query_id: execution.query_id.clone(),
+                row_count: None,
+            },
+        ));
+    }
+    events
 }

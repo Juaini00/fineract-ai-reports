@@ -238,6 +238,13 @@ pub struct CapabilityKnowledge {
 
     #[serde(default)]
     pub guards: CapabilityGuards,
+
+    /// Per-parameter policy replacing the legacy `required_parameters` /
+    /// `optional_parameters` / `clarification.missing_parameters` triad.
+    /// Populated by the loader after YAML deserialization; empty until
+    /// migration Phase 3 rewrites each capability YAML.
+    #[serde(default, skip)]
+    pub parameter_policies: Vec<crate::knowledge::catalog::parameter_policy::ParameterPolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

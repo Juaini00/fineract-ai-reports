@@ -5,6 +5,7 @@ pub mod llm;
 pub mod presentation;
 pub mod retrieval;
 pub mod state;
+pub mod temporal;
 pub mod understanding;
 
 pub use context::{
@@ -19,7 +20,9 @@ pub use state::{graph, memory};
 pub use understanding::{clarification_resolver, extraction, intent};
 
 pub use crate::audit::llm_trace_repository as llm_trace_repo;
-pub use crate::audit::llm_trace_repository::{LlmTrace, LlmTraceRecord, LlmTraceRepository};
+pub use crate::audit::llm_trace_repository::{
+    LlmTrace, LlmTraceRecord, LlmTraceRepository, LlmTraceUsageStatus,
+};
 pub use crate::conversation::repository::assistant_memory as session_memory_repo;
 pub use crate::conversation::repository::assistant_memory::SessionMemoryRepository;
 pub use crate::job::repository::assistant_memory as job_memory_repo;
