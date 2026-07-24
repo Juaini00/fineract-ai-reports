@@ -420,8 +420,12 @@ Assert that no capability which previously demanded `from_date`/`to_date` still 
 unless its policy block explicitly marks those `required: true` with no default.
 This is the guard the plan's self-review checklist calls for.
 
+**E4. The inverse guarantee.** See F8: scope widens to both directions, because a
+defaultless `required: true` parameter does not ask either.
+
 **Acceptance:**
 - A capability with all-defaulted parameters provably completes in one turn.
+- A capability with a defaultless required parameter provably asks for it in one turn.
 - The validator rejects a configuration that would reintroduce the E2 behaviour.
 
 ---
@@ -1036,18 +1040,19 @@ this issue (the link to the frontend issue), no code.
 
 ### W-O — Latent contract violations
 
-**Objective:** Close seven places where a contract is declared — in YAML, in a Rust type,
+**Objective:** Close eight places where a contract is declared — in YAML, in a Rust type,
 or in the HTTP surface — and no code honours it, so that what the system says is what the
 system does.
 
-F1..F6 share one failure mode: a declared-but-unhonoured contract. That is worse than an
-absent contract for an analyst-facing system, because every reader of the YAML, every
-capability author and every reviewer of a new capability treats the declaration as the
-protection. A `hard_cap: 100` in a capability YAML reads as a row ceiling and is not one.
-A `sensitivity: pii` label reads as a disclosure gate and does not fire. A `timeout_ms:
-3000` reads as a latency budget and never reaches the executor. The catalog is the review
-surface for this system's safety properties, so an inert field in it is a false negative
-in every future review, not just a missing feature.
+F1..F6 and F8 share one failure mode: a declared-but-unhonoured contract. That is worse
+than an absent contract for an analyst-facing system, because every reader of the YAML,
+every capability author and every reviewer of a new capability treats the declaration as
+the protection. A `hard_cap: 100` in a capability YAML reads as a row ceiling and is not
+one. A `sensitivity: pii` label reads as a disclosure gate and does not fire. A
+`timeout_ms: 3000` reads as a latency budget and never reaches the executor. A
+`required: true` with no default reads as "the system will ask" and it does not ask. The
+catalog is the review surface for this system's safety properties, so an inert field in it
+is a false negative in every future review, not just a missing feature.
 
 Each finding below was verified against the code named beside it. Where the prior audit
 overstated or understated a claim, the correction is stated.
@@ -1354,6 +1359,90 @@ confirm the two tests, and tick the acceptance criterion.
 Do not add a third outcome; 409 `clarification_not_active` already exists and already
 carries the right meaning for both submission styles.
 
+#### F8 — A required parameter with no default never produces a clarification
+
+**Confirmed.** Exactly one parameter in the whole catalogue is declared `required: true`
+with no `default`: `search` on `client_name_lookup`
+(`knowledge/capabilities/client/name_lookup.yaml:53-55`, mirrored as a required query
+parameter at `knowledge/queries/client/name_lookup.yaml:17-19`). All 104 parameter
+declarations across the 30 capability YAMLs were scanned; that is the only one. It is
+therefore the single place in the system where the "ask the analyst" path can be
+exercised, and it never fires.
+
+Reproduced against the real runtime with that capability's own YAML example,
+`"Search client by display name."` The reranker selects `client_name_lookup` at confidence
+0.9, the plan executes with `params: {"search": "by"}`, and the job reaches terminal status
+`completed` with `clarification: null` and the message `"No matching client was found in
+your authorized office scope."`
+
+**Mechanism, in two independent parts. Both must be fixed; either one alone leaves the
+path broken.**
+
+1. **The parameter is never missing, because a heuristic invents it.**
+   `extract_person_name` (`crates/chat/src/assistant/understanding/extraction/token.rs:43-51`)
+   has a second pass that returns the token following `client` or `find` as a person name,
+   excluding only `client`, `name` and `named`. On `"Search client by display name."` that
+   token is `by`. `params_from_verified` maps `search` from that entity
+   (`crates/chat/src/assistant/execution/tool/parameters.rs:258`), so the
+   `bail!("missing parameter {}")` at `:268` is never reached, and neither is the
+   re-clarification branch it feeds
+   (`crates/chat/src/assistant/execution/runtime/execution.rs:130-181`).
+   `display_name ILIKE '%by%'` matched nothing, so the analyst received a confident empty
+   table instead of a question.
+2. **Even without the heuristic, the ask is error recovery, not a pre-execution check.**
+   `ClarificationPlanner` is the only code that knows `search` is a required analyst input:
+   `required_inputs` (`crates/chat/src/assistant/context/clarification_planner.rs:144-165`)
+   walks the query's required parameters and matches them against the input registry, where
+   `knowledge/parameters/search.yaml` declares the field. `complete_semantic_route` reaches
+   that planner only on a `Clarify` verdict or when the reranker names no capability
+   (`crates/chat/src/assistant/execution/runtime/semantic.rs:360-391`). A `Select` verdict
+   goes straight to `execute_selected_capability`
+   (`crates/chat/src/assistant/execution/runtime/semantic.rs:342-359`). So a
+   confidently-routed request never consults the planner, and a missing required parameter
+   can only surface as a planning `bail!` that is afterwards translated back into a
+   clarification. The declared input is not a precondition of execution; it is a fallback
+   from a failure.
+
+**Why this matters, and why it widens W-E.** W-E is scoped as "guarantee that a
+fully-defaulted capability never asks the analyst anything". F8 is the inverse half of the
+same contract and it is broken in the opposite direction: a capability that explicitly
+demands a parameter does not ask either, and answers with an authoritative-looking empty
+result. That is worse than a question. A question tells the analyst the system needs
+something; `"No matching client was found in your authorized office scope."` tells the
+analyst there is no such client, and the analyst stops looking. W-E's scope must widen to
+cover both directions — a defaulted parameter never asks, and a defaultless required
+parameter always asks — because a one-directional guarantee is what lets this half stay
+broken while looking finished.
+
+**Not caused by `27669e1`.** Verified at `197c331`, the commit immediately before:
+`extract_person_name` is byte-identical there, and `27669e1` touched only
+`execution/runtime/execution.rs` and `execution/tool/{mod,parameters,planning,tests}.rs` —
+none of the extraction, clarification-planner or routing code above. `27669e1` added
+policy-default filling for parameters that declare a default; `search` declares none, so it
+was already reaching execution without a clarification. This is pre-existing, in the same
+sense F7 is.
+
+**Corroborating evidence already in the tree.** The doc comment on
+`date_parameters_with_a_policy_default_are_auto_filled_without_asking`
+(`crates/chat/tests/chat_jobs.rs`, commit `b812803`) records the same conclusion from the
+other side: "No approved capability currently reaches the clarification path for a missing
+required parameter". F7's text above still describes that commit as adding
+`required_parameter_without_default_asks_and_answer_continues_same_job`; that test was not
+added, because the path it would cover does not work. Correct F7's provenance note when
+W-O is executed.
+
+**Fix direction.** Two changes, both required.
+Narrow or delete the `client`/`find` adjacency rule in `extract_person_name`. A one-token
+person name should come from an explicit `named X` pattern or from an LLM entity with a
+confidence, not from positional adjacency to a domain noun, which will scavenge a
+preposition from any phrasing that does not name a person.
+Then check required inputs before execution, not after a planning failure: run
+`required_inputs` against the selected capability on the `Select` path as well, and emit a
+`collect_fields` clarification when an input is unsatisfied. The planner, the registry and
+the payload shape all already exist; only the call site on the confident path is missing.
+Do not fix this by making the executor tolerate an empty search term — an empty `ILIKE`
+pattern matches every client, which is a worse answer than no answer.
+
 **Files likely touched:** `crates/chat/src/assistant/presentation/builder.rs` (F1, F4),
 `crates/chat/src/assistant/presentation/renderer.rs` (F6),
 `crates/chat/src/knowledge/model.rs` (F1, F3),
@@ -1365,6 +1454,9 @@ carries the right meaning for both submission styles.
 `crates/chat/src/assistant/understanding/intent.rs` (F5),
 `crates/core/src/config/mod.rs` (F3, giving `default_timeout_ms` a reader),
 `crates/chat/src/job/service/mod.rs` and `crates/chat/tests/chat_jobs.rs` (F7),
+`crates/chat/src/assistant/understanding/extraction/token.rs`,
+`crates/chat/src/assistant/execution/runtime/semantic.rs` and
+`crates/chat/src/assistant/context/clarification_planner.rs` (F8),
 `knowledge/capabilities/**/*.yaml` and `knowledge/queries/**/*.yaml` (F1, F3, removing or
 honouring the dropped blocks).
 
@@ -1397,6 +1489,12 @@ honouring the dropped blocks).
 - Responding to a job that exists, belongs to the caller and is no longer active returns
   409 `clarification_not_active`, never 404, for both structured and legacy plain-message
   submissions. A test covers both submission styles.
+- A capability with a `required: true` parameter that has no default asks for it on the
+  confident routing path, not only after a planning failure. A runtime test drives
+  `client_name_lookup` with a message naming no person and asserts terminal
+  `waiting_for_user_input` with a `collect_fields` clarification carrying the `search`
+  field, and a second test asserts no execution ran with a search term the analyst never
+  supplied. (F8)
 
 **Ordering within W-O.** F1 and F2 are correctness and safety and must land **before** the
 analyst capabilities they are supposed to protect, meaning before W-A2 and W-A3 add or
@@ -1407,7 +1505,8 @@ capping 40. F7 sits with them: it is the client contract, its fix has already la
 leaving it unverified while W-E makes more capabilities auto-complete widens the window in
 which a client can be told a live job is gone. F3 through F6 are correctness of
 presentation and of declared metadata; they can follow W-A3 and land alongside W-G and W-I
-without blocking anything.
+without blocking anything. F8 lands with W-E, because it is the other half of the same
+guarantee and both halves must be asserted by the same test pass.
 
 ---
 
@@ -2225,6 +2324,12 @@ This issue is resolved when all of the following hold:
     plain-message submissions, with a test covering each. The product question of when a
     terminal job may accept a further message is answered and recorded against W-H.
     (W-O, F7, with W-H)
+28. A capability that declares a `required: true` parameter with no default asks for it on
+    the confident routing path, not only as recovery from a planning failure, and no
+    execution runs on a parameter value the analyst never supplied. A test drives
+    `client_name_lookup` with a message naming no person and asserts a `collect_fields`
+    clarification carrying the `search` field. Criterion 2 and this one are the two halves
+    of one guarantee and are asserted together. (W-O, F8, with W-E)
 
 ## Open questions
 
@@ -2488,7 +2593,9 @@ This issue is resolved when all of the following hold:
    (cell escaping) are the same files and the same test module, so they land here rather
    than as a separate pass. F6 alone is a two-line change and may be pulled forward at any
    time if a corrupted table is observed before this step.
-11. **W-E** — lock in the no-clarification guarantee with tests.
+11. **W-E + W-O F8** — lock in both directions of the clarification guarantee with tests.
+   F8 belongs here because it is the same guarantee read backwards, and asserting only the
+   "never asks" half is what let the "always asks" half stay broken.
 12. **W-L** — after W-A3 and W-I, because it asserts over the finished capability set and
    over the audit event types W-I introduces. Its tests are cheap and mostly guard against
    regression, so it is late by dependency, not by priority.
@@ -2506,5 +2613,5 @@ This issue is resolved when all of the following hold:
 
 W-O is deliberately split rather than sequenced as one block. F1, F2 and F7 are safety and
 belong at step 3, before the capabilities they protect exist. F3 rides with W-I, F4 and F6
-with W-G, F5 with W-H, because in each case they touch the same files as work already
-scheduled there and splitting them out would mean editing those files twice.
+with W-G, F5 with W-H, F8 with W-E, because in each case they touch the same files as work
+already scheduled there and splitting them out would mean editing those files twice.
