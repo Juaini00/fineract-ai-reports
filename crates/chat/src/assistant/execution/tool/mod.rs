@@ -13,7 +13,7 @@ use crate::{
         AssistantIntent, DeterministicExtraction, EffectiveConstraints, PlannerInputSnapshot,
         execution::plan::{ExecutionPlan, PolicyDecision},
     },
-    knowledge::model::KnowledgeCatalog,
+    knowledge::{catalog::parameter_policy::EvaluationContext, model::KnowledgeCatalog},
 };
 
 #[cfg(test)]
@@ -99,12 +99,14 @@ pub fn plan_selected_capability_verified(
     capability_id: &str,
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
+    ctx: Option<&EvaluationContext>,
 ) -> Result<ExecutionPlan> {
     planning::plan_selected_capability_verified(
         catalog,
         capability_id,
         intent,
         deterministic_extraction,
+        ctx,
     )
 }
 
