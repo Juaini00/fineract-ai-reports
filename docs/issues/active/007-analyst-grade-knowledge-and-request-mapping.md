@@ -2,7 +2,7 @@
 
 Status: active — requirements defined; execution pending
 Severity: high
-Area: knowledge | catalog | retrieval | clarification | temporal | LLM extraction | SQL | client contract
+Area: knowledge | catalog | retrieval | clarification | temporal | LLM extraction | SQL | client contract | presentation | currency | performance | observability
 Created: 2026-07-24
 Resolved:
 
@@ -166,6 +166,13 @@ issue's backend workstreams (see W-F).
 - Cost quotas or request blocking.
 - Frontend implementation (tracked, not executed here).
 - A general Fineract operational/security audit surface.
+- **CSV/Excel export.** The structured response payload is the export surface for now;
+  a client can serialise `table.columns` + `table.rows`. Rationale and the contents of the
+  follow-up are in W-K.
+- **Conversational drill-down** on a prior result set. Recommended as a follow-up in W-H;
+  this issue only keeps the ground prepared for it.
+- **Result streaming or API-layer pagination.** `hard_cap` plus a truncation warning is
+  the answer for this phase. See W-I decision 4 for the trigger to revisit.
 
 ---
 
@@ -173,7 +180,8 @@ issue's backend workstreams (see W-F).
 
 Each workstream is independently executable and independently reviewable. Suggested
 order is W-A → W-B → W-C → W-D → W-E, but W-A and W-B can run in parallel (disjoint
-file sets), as can W-C and W-D.
+file sets), as can W-C and W-D. W-G through W-N are defined under
+"Additional scope areas" below; the combined ordering is at the end of this document.
 
 ### W-A — Analyst question inventory and catalog completeness
 
@@ -432,6 +440,577 @@ enough for a client to highlight the offending input.
 
 Frontend implementation (the actual date-range picker) is tracked in the dashboard
 repo, not here. E5 stays open until that lands.
+
+---
+
+## Additional scope areas
+
+W-A..W-F cover the catalog, the business date, the mapping layer and the retrieval
+suite. They stop at the point where rows leave the executor. The eight workstreams
+below cover everything downstream of that point plus the scope decisions the appendix
+forced. Each is written to the same shape: objective, decisions to make, files, and
+acceptance criteria.
+
+Every claim about existing behaviour in this section was read out of the code named
+beside it, not inferred.
+
+### W-G — Presentation and rendering for analyst-grade output
+
+**Objective:** Make a 14-column, multi-thousand-row analyst answer readable, without
+inventing a second response contract.
+
+**What the code does today** (`crates/chat/src/assistant/presentation/`, 978 lines
+across five files):
+
+- `ResponseBuilder::from_tool_result` (`builder.rs:19–85`) always emits
+  `response_type: Table`, `title: "Lookup results"`, and
+  `message: format!("Found {row_count} row(s).")`. It never reads `plan.output_mode`.
+  All six declared `output_mode` values (`list`, `summary`, `total`, `top_n`,
+  `monthly_breakdown`, `monthly_top_n`, counted across the 30 capability YAMLs) reach
+  exactly the same builder branch and produce the same shape.
+- `sections`, `cards` and `actions` are hard-coded empty on that path. `warnings` is
+  populated with exactly one code, `pii_hidden`, and nothing else.
+- `MarkdownRenderer::render_table` (`renderer.rs:129–155`) writes one pipe-delimited
+  markdown row per result row into `response.rendered_markdown`, with **no row cap and
+  no width awareness**. That string is then persisted with the response. A 5 000-row,
+  14-column answer becomes a single multi-megabyte markdown blob in `chat_messages`.
+- `cell` (`renderer.rs:157`) stringifies a `serde_json::Number` verbatim. Fineract money
+  is `numeric(19,6)`, so an amount renders as `100.000000`. There is no rounding layer.
+  See W-J.
+- `cell` does not escape `|`. A charge name containing a pipe silently corrupts the
+  table. Low likelihood on Fineract charge names, but it is a correctness bug in a
+  renderer that is about to get much wider.
+- `TableColumn.label` is `field.name.replace('_', " ")` (`builder.rs:317–329`), so
+  column labels and column **order** are entirely determined by the `output_fields`
+  order in the query YAML.
+- `is_hidden` (`builder.rs:331`) is `!can_view_pii && field.sensitivity == "pii"`.
+  **`pii_conditional` hides nothing.** W-A2's text says `client_id` /
+  `client_display_name` "remain `pii_conditional`"; the shipped
+  `knowledge/queries/savings/pending_charges_clients.yaml` actually labels
+  `client_display_name` as `pii`, which is the only value the renderer acts on. W-A2
+  must not change it to `pii_conditional` without also teaching `is_hidden` about that
+  value, or PII gating becomes a no-op.
+
+**Decisions to make:**
+
+1. **Does markdown degrade acceptably at 14 columns?** It does not break, but it is
+   unusable as prose. Recommendation: treat `rendered_markdown` as a *fallback* for
+   clients that cannot render a table, cap it at a small number of rows (a leading
+   sample, say 50), and state in the client contract that `table.columns` /
+   `table.rows` is the authoritative surface for analyst-grade results. Capping it also
+   removes the multi-megabyte persisted-blob problem above.
+2. **Summary line before the detail table.** Recommendation: this is a *renderer and
+   builder* concern, not a new `output_mode`. `ResponseCard { label, value, unit }`
+   already exists (`response.rs:79–84`) and the renderer already prints cards under a
+   `## Metrics` heading (`renderer.rs:29–41`); the table path simply never populates
+   them. Emit one card per currency (`"Total outstanding (USD)"`, value, unit `USD`)
+   plus a row-count card, and let `message` carry the one-line sentence. No new shape,
+   no new YAML field. Adding an `output_mode` for this would mean every capability
+   author re-declares a formatting preference that is derivable from the column kinds.
+3. **Per-client grouping.** One client can hold several outstanding charges, so a flat
+   table repeats client identity. Recommendation: keep the flat table and sort by
+   client, do not introduce a nested row shape. A nested representation would need a new
+   `ResponseTable` variant, a new renderer branch and a new client contract, to solve a
+   problem the client can solve by grouping on `client_id`, which the flat table already
+   carries. Revisit only if the inventory in W-A1 produces a question whose answer is
+   genuinely hierarchical rather than merely repetitive.
+4. **Does the structured contract need a new shape?** Recommendation: no.
+   `table` + `cards` + `sections` + `warnings` covers summary line, detail, per-currency
+   subtotals and truncation notice. State this explicitly in the issue so a later
+   executor does not add one. If W-A3 produces a capability that genuinely cannot be
+   expressed this way, that is the trigger to revisit, and it must be named.
+5. **Column ordering and essential-versus-supplementary.** Order is the query YAML
+   `output_fields` order, so this is decided in the catalog, not in code. Define an
+   ordering convention and record it alongside the W-A1 inventory: identity first
+   (`client_display_name`, `client_id`), then subject (`charge_name`, `is_penalty`,
+   `charge_timing_enum`), then the money block, then dates, then supplementary ids
+   (`savings_account_id`, `charge_definition_id`, `office_id`). Decide whether the
+   contract needs a per-column `priority` or `essential` flag for narrow viewports, or
+   whether "the first N columns are the essential ones" is a sufficient convention.
+   Recommendation: the convention, no new field, because a flag is one more thing to
+   keep coherent across 30-plus YAMLs for a client-side layout concern.
+
+**Files likely touched:** `crates/chat/src/assistant/presentation/builder.rs`,
+`crates/chat/src/assistant/presentation/renderer.rs`,
+`crates/chat/src/assistant/presentation/response.rs` (only if a card/warning code
+enum is added), `docs/current/management-dashboard-integration.md`,
+`knowledge/queries/**/*.yaml` (column order only).
+
+**Acceptance:**
+- A 14-column, 1 000-row result renders with a bounded `rendered_markdown` and a
+  complete `table.rows`, proven by a unit test asserting the markdown row count is
+  capped while `table.rows.len()` is not.
+- A result spanning three currencies emits one card per currency and no grand total.
+- `cell` escapes `|`, with a test.
+- The PII gating question is resolved: either `pii_conditional` is understood by
+  `is_hidden`, or the catalog uses `pii` and W-A2's wording is corrected. A test asserts
+  a `can_view_pii = false` caller cannot see `client_display_name`.
+- The client contract document states which of `table` and `rendered_markdown` is
+  authoritative.
+
+---
+
+### W-H — Multi-turn follow-up and context reference
+
+**Objective:** Decide whether conversational drill-down belongs to this issue, and if
+not, leave the ground prepared rather than half-built.
+
+**What the code does today:** `ContextReference` (`understanding/intent.rs:191–199`)
+declares four variants: `None`, `PreviousJob`, `PendingClarification`, `SessionTopic`.
+Grepping the whole crate for the variant names shows `PendingClarification` is the only
+one ever constructed in production code
+(`execution/runtime/clarification.rs:157` and `:293`); `PreviousJob` and `SessionTopic`
+are **never produced and never consumed anywhere**. They are declared intent, not
+behaviour. Nothing carries a prior result set forward. Every job re-executes from
+scratch, and a follow-up like "dari list itu mana yang paling besar?" has no path to the
+prior list at all.
+
+**Decisions to make:**
+
+1. **Re-execute versus cache.** Recommendation: re-execute with a narrowed filter. It is
+   always correct, it costs one extra query on a data set the appendix measures in the
+   low hundreds of rows, and it cannot go stale across a business-date rollover. Caching
+   a prior result set introduces a second source of truth for "as of when", which is
+   exactly the class of bug W-B exists to remove. If a future measurement shows the
+   re-execution cost is real, cache then, keyed on the business date so a rollover
+   invalidates it.
+2. **What a follow-up means mechanically.** "yang di kantor Jakarta saja" and "yang
+   sudah lewat 90 hari" are the same capability with an extra bound parameter.
+   "mana yang paling besar?" is an ordering plus a limit on the same capability. So the
+   minimum viable drill-down is: carry the prior `capability_id` and its resolved
+   parameters forward, apply the new constraint on top, and re-execute. That is a
+   resolver concern (W-C2 precedence), not a new subsystem. Note that this needs a
+   capability whose parameter set actually admits an office or an age filter, which is a
+   W-A input, not a runtime one.
+3. **Audit trail for a refinement.** Whatever is built, the audit record must make the
+   lineage explicit: the refining job records the prior `job_id`, the inherited
+   parameters with `source = prior_job`, and the newly supplied constraint with its own
+   source. Without that, `/management/audit/jobs/{job_id}` shows a query with parameters
+   nobody can trace to a user utterance, which defeats the point of issue 006. Decide
+   whether this is a new `PayloadSource` variant (`prior_job`) on the W-C2 enum, a new
+   audit event type, or both. Recommendation: a new `PayloadSource` variant only, since
+   the existing `execution.authorized` event already carries the resolved parameters.
+4. **In scope or not?** Recommendation: **out of scope for this issue, tracked as a
+   follow-up.** This issue's stated goal is that a complex analyst question is answered
+   *in one turn*. Drill-down is a different product behaviour, it depends on W-C2 landing
+   first, and folding it in would make W-C's acceptance criteria unbounded. The
+   preparation this issue owes it is small and should be done here: do not delete the
+   unused `ContextReference` variants, and make sure W-C2's `PayloadSource` enum is
+   shaped so a `prior_job` source can be added without a contract break.
+
+**Files likely touched (preparation only):**
+`crates/chat/src/assistant/understanding/intent.rs` (documentation comment marking the
+two variants as reserved), `crates/chat/src/assistant/understanding/resolver.rs` (W-C2,
+enum shape), the follow-up issue file.
+
+**Acceptance:**
+- The issue states plainly that drill-down is a follow-up, and names it.
+- `ContextReference::PreviousJob` and `SessionTopic` carry a comment saying they are
+  reserved for that follow-up, so a dead-code sweep does not remove them.
+- The W-C2 `PayloadSource` enum is non-exhaustive or otherwise extensible without a
+  contract break, with a test asserting an unknown source value deserialises safely.
+
+---
+
+### W-I — Performance and unbounded query budget
+
+**Objective:** Put a real ceiling under `limit: unbounded` before analyst-grade
+capabilities make it load-bearing.
+
+**What the code does today, and it is worse than the brief assumes:**
+
+- `unbounded` resolves to `i64::MAX` bound into `LIMIT $n`
+  (`execution/tool/parameters.rs:296–302`, carrying its own `ponytail:` note).
+- **`hard_cap` is parsed but never enforced.** `loader.rs:179` reads it into
+  `ParameterPolicy::hard_cap`, `parameter_policy.rs:161` validates that it only appears
+  on integer parameters, and that is the end of it. The only other mention in the whole
+  workspace is a comment at `execution/tool/parameters.rs:299` asserting that "catalog
+  `hard_cap` is enforced elsewhere". It is not. Ten capability YAMLs declare a
+  `hard_cap` (values 100 to 10 000, including `savings_pending_charges_clients` at
+  10 000) and every one of them is decorative.
+- **`timeout_ms` is declared but never loaded.** Every query YAML carries
+  `timeout_ms` (3 000 to 8 000) and `cost_class`, but `QueryKnowledge` has no such
+  fields, so the loader discards them. There is no per-query timeout at execution. The
+  only timeouts in the system are `QUERY_DEFAULT_TIMEOUT_MS` and the LLM client
+  timeouts in `crates/core/src/config/mod.rs`. The brief's assumption that "the existing
+  `timeout_ms` in query YAML is the hook" is half right: the YAML surface exists, the
+  hook does not.
+- `DEFAULT_REPORT_LIMIT = 10` (`execution/tool/parameters.rs:5`) is the fallback for a
+  required, unspecified `limit`.
+
+**Decisions to make:**
+
+1. **Enforce `hard_cap`, and decide where.** Recommendation: clamp at the resolver
+   boundary (W-C2), where the parameter value and its policy are both in hand, and
+   record the clamp as a resolved-parameter annotation so it reaches the audit trail.
+   Clamping inside SQL is not possible without editing 30 approved queries; clamping in
+   the executor is possible but loses the reason.
+2. **A global backstop.** `hard_cap` is per capability and optional; 20 of the 30
+   capability YAMLs declare none. Recommendation: yes, add a configured global ceiling
+   (an env-backed constant alongside `QUERY_DEFAULT_TIMEOUT_MS`) that applies when no
+   `hard_cap` is declared. Without it, a new analyst capability authored without a
+   `hard_cap` inherits `i64::MAX`, and the first capability with a wide join becomes an
+   incident. Decide the number. Given the appendix's measured scale (204 savings charge
+   rows, 116 loans, 299 overdue instalments in the only populated database), anything in
+   the tens of thousands is generous.
+3. **Latency budget.** Recommendation: load `timeout_ms` into `QueryKnowledge` and apply
+   it per query, defaulting to `QUERY_DEFAULT_TIMEOUT_MS` when absent. On exceed, fail
+   the job with a sanitized message and an `execution.blocked` (or a new `execution.
+   timed_out`) audit event. Do not return partial rows: a partial analyst answer is the
+   same class of error as the under-reporting SQL in Appendix A.1.3.
+4. **Streaming or pagination at the API layer.** Recommendation: **neither, this phase.**
+   `hard_cap` plus an explicit truncation warning is sufficient at the measured data
+   scale, and both alternatives change the client contract. Streaming would also
+   interact badly with the existing Redis-backed SSE job stream, which carries job
+   *state*, not result pages. Record this as a deliberate deferral with the trigger for
+   revisiting: a capability whose uncapped result exceeds the global backstop in
+   production.
+5. **`LIMIT 9223372036854775807` versus omitting LIMIT.** Postgres treats a `LIMIT`
+   larger than the row count as no limit, and the planner's row estimate comes from
+   statistics, not from the literal, so on tables of this size (204 charge rows, 198
+   savings accounts, 116 loans) there is no measurable plan difference. The existing
+   `ponytail:` note stands: keep the sentinel, revisit if a plan regression is actually
+   observed on a table large enough to matter. Enforcing `hard_cap` (decision 1) removes
+   most of the exposure anyway, because the bound value stops being `i64::MAX`.
+6. **Truncation warning.** Recommendation: yes, mandatory. When the clamp bites, emit a
+   `ResponseWarning { code: "result_truncated", message: "Showing the first N rows of
+   M." }`. An analyst who does not know the list is cut is being under-reported to,
+   which Appendix A.1.3 already establishes as the worst failure mode here. This needs
+   the true row count, so either the query returns `count(*) OVER ()` or the executor
+   fetches `hard_cap + 1` and reports "more than N". Recommendation: fetch `cap + 1`, no
+   SQL change, warning says "more than N".
+
+**Files likely touched:** `crates/chat/src/knowledge/model.rs` (`QueryKnowledge`
+gains `timeout_ms`, `cost_class`), `crates/chat/src/knowledge/catalog/loader.rs`,
+`crates/chat/src/assistant/understanding/resolver.rs`,
+`crates/chat/src/assistant/execution/tool/`, `crates/core/src/config/mod.rs`,
+`crates/chat/src/assistant/presentation/builder.rs`.
+
+**Acceptance:**
+- A capability with `hard_cap: 100` provably returns at most 100 rows, with a test.
+- A capability with no `hard_cap` is bounded by the global backstop, with a test.
+- The stale comment at `execution/tool/parameters.rs:299` is either made true or
+  removed.
+- `timeout_ms` from the query YAML is loaded and applied, with a test that a query
+  exceeding it fails cleanly and emits an audit event, and leaks no SQL.
+- A truncated result carries `result_truncated` in `warnings`.
+
+---
+
+### W-J — Currency and money semantics
+
+**Objective:** Stop rendering `100.000000`, and make it structurally impossible to sum
+across currencies.
+
+**What the code does today:** nothing currency-aware. `TableColumnKind::Money` exists in
+the enum (`presentation/response.rs:76`) but `table_column` (`builder.rs:317–329`) only
+ever maps `"decimal"` to `TableColumnKind::Decimal`, so `Money` is never produced.
+`cell` prints the raw JSON number. There is no rounding, no symbol, no per-currency
+grouping, and no aggregation of any kind on the table path.
+
+**Decisions to make:**
+
+1. **Decimal places and rounding, and which source.** Appendix A.5 is explicit:
+   `m_savings_account.currency_digits` is `NOT NULL` and is the precision the account was
+   booked at, while `m_organisation_currency.decimal_places` is current tenant config and
+   can drift. Recommendation: carry the account-level digits in `output_fields` (the
+   corrected SQL in A.1.6 already selects `cur.decimal_places`; change it to
+   `sa.currency_digits`, or select both and name them distinctly) and round in the
+   presentation layer, not in SQL. Rounding in SQL bakes a display decision into an
+   approved query and has to be repeated in every capability.
+2. **Where the rounding happens.** Recommendation: the builder, driven by
+   `TableColumnKind::Money` plus a per-row currency column, producing a formatted string
+   for `rendered_markdown` while `table.rows` keeps the unrounded numeric value. The
+   client should be able to reformat; the markdown fallback should already be readable.
+   Decide whether `table.rows` carries the raw number or the formatted string, and say so
+   in the client contract. Recommendation: raw number, formatting is presentation.
+3. **Multi-currency result sets.** Appendix A.5 point 6 measured a single office holding
+   USD, EUR and AED accounts, and the A.1.6 sample output shows three currencies in four
+   rows. Rule, non-negotiable: **a single summed total across currencies must never be
+   emitted.** Recommendation: per-currency subtotal cards (W-G decision 2), no grand
+   total, plus a `multi_currency` warning when the result spans more than one
+   `currency_code` so a client rendering only the first card does not mislead. Decide
+   whether the warning is unconditional or only when a total is requested.
+   Recommendation: unconditional, it is one line and it is the safe default.
+4. **The currency LEFT JOIN fan-out.** Appendix A.5 point 5:
+   `m_organisation_currency.code` has no unique constraint, so
+   `LEFT JOIN m_organisation_currency ON code = sa.currency_code` can duplicate rows.
+   It does not today, on either database. Recommendation: harden the join before A.1.6
+   becomes an approved query, using `LEFT JOIN LATERAL (SELECT ... WHERE code = ...
+   LIMIT 1) cur ON true`. This is a two-line change against a real, if currently latent,
+   correctness bug in a query whose entire purpose is reporting debt accurately. Add a
+   catalog `check` entry asserting no unconstrained equality join to
+   `m_organisation_currency`, so the next author does not reintroduce it.
+5. **Symbol and display name: payload or client lookup?** Recommendation: payload.
+   `display_symbol` is nullable (AED has none in `fineract_default`), so the fallback to
+   `code` has to be implemented somewhere, and implementing it once in the backend beats
+   implementing it in every client. It also keeps the tenant's enabled-currency
+   configuration out of the client, which would otherwise need its own endpoint. The
+   cost is two extra columns per money-bearing capability, which is acceptable.
+
+**Files likely touched:** `crates/chat/src/assistant/presentation/builder.rs`,
+`renderer.rs`, `queries/savings/pending_charges_clients.sql` and its query YAML,
+`docs/current/management-dashboard-integration.md`.
+
+**Acceptance:**
+- A money column renders at the account's `currency_digits`, not six decimals, with a
+  test covering a 2-decimal and a 0-decimal currency.
+- A result spanning two currencies produces two subtotal cards, no grand total, and a
+  `multi_currency` warning. A test asserts no single field in the response equals the
+  cross-currency sum.
+- `display_symbol IS NULL` falls back to `currency_code`, never to a hardcoded symbol,
+  with a test using AED.
+- The approved SQL uses a fan-out-safe currency join, and a catalog check enforces it.
+
+---
+
+### W-K — Export
+
+**Objective:** Close the question rather than leave it implied.
+
+**Evidence in the repo:** `ResponseActionType::Export` exists in the enum
+(`presentation/response.rs:118`) and is **never constructed anywhere** in the workspace.
+No endpoint, no DTO, no test, no documentation mentions CSV or spreadsheet export. Issue
+006 explicitly states that "unbounded audit exports are not part of the first client
+contract" (`006:258`), which is the closest thing to a precedent and it points the same
+way.
+
+**Recommendation: explicit non-goal for this issue, with a named follow-up.** The
+rationale is not that export is unimportant but that it is a second delivery channel for
+PII-bearing data, and a second channel needs its own authorisation, its own audit event,
+its own row ceiling and its own retention answer. Bolting it onto a catalog-and-mapping
+issue would either get those wrong or double the issue's size. The structured response
+payload is the export surface for now: `table.columns` plus `table.rows` is already a
+complete, PII-filtered, machine-readable projection, and a client can serialise it to
+CSV in a dozen lines without any backend change.
+
+**What the follow-up must contain, if and when it is opened:**
+
+- Export reuses the same approved SQL and the same capability id. It must not become a
+  second query path, or the approved-SQL invariant in `AGENTS.md` is broken.
+- Export applies the same `PolicyDecision`, the same office binding and the same
+  field-level PII filter. The filtered row set in `builder.rs:302` is the only thing that
+  should ever be serialised, never `tool_result.rows`.
+- Exporting a PII-bearing result needs **its own audit event**. `execution.completed`
+  records that a query ran; it does not record that a copy left the system. A new
+  `export.generated` event type carrying capability id, row count, whether PII columns
+  were included, and the office scope.
+- Export interacts with W-I: an export is exactly the case where `hard_cap` is most
+  likely to bite and least likely to be noticed.
+- `ResponseActionType::Export` stays in the enum, unused, reserved for that follow-up.
+
+**Acceptance:**
+- The Non-goals section names export, with this rationale.
+- The client contract document states that the structured payload is the export surface
+  and that clients may serialise it.
+- No export endpoint, DTO or handler is added under this issue.
+
+---
+
+### W-L — Interaction with management observability (issue 006)
+
+**Objective:** Keep the management surface truthful as the catalog grows, without
+leaking anything new.
+
+**What the code does today** (`crates/chat/src/management/knowledge.rs`, 200 lines):
+
+- `KnowledgeService::list` projects each capability to
+  `{ id: "catalog:<id>", kind, title, status, execution_mode, domain_id }`. Any new
+  capability appears automatically as long as its YAML loads.
+- `KnowledgeService::detail` returns parameters as `{ name, kind, required }` from the
+  **query** YAML, and output fields as `{ name, sensitivity }`. It returns **no SQL, no
+  expression, no default, no `hard_cap`**. A derived column such as `days_overdue` is
+  therefore already safe: it appears by name and sensitivity only, exactly like any other
+  column, and the `CASE WHEN ... END` expression that produces it never leaves the
+  server. This is a property of the projection being an allowlist, so it holds for any
+  future derived column too. The acceptance criterion below exists to keep it that way.
+- `detail` returns `None`, hence a 404, when `capability.query_id` has no matching entry
+  in `catalog.queries` (`knowledge.rs:88–94`). A capability YAML added without its query
+  YAML disappears from detail while still appearing in the list.
+- `limitations` is hard-coded to an empty vector (`knowledge.rs:120`). It is an unused
+  hook.
+- The dashboard summary (`management/dashboard.rs:256–288`) calls `KnowledgeService::list`
+  with a hard-coded `limit: Some(1000)` and counts the returned page. The HTTP endpoint
+  is separately capped at `MANAGEMENT_MAX_PAGE_SIZE = 100` with cursor paging. There are
+  30 capability YAMLs today, so both counts are correct, and the dashboard number stays
+  correct until the catalog passes 1 000 capabilities, at which point it silently
+  under-counts.
+
+**Decisions to make:**
+
+1. **Sensitivity for derived columns.** `days_overdue`, `amount_levied_total`,
+   `charge_timing_enum` have no direct schema counterpart, so their `sensitivity` is an
+   authoring decision rather than a lookup. Recommendation: `public_business` for all
+   three. None of them identifies a person; `days_overdue` is a property of a charge, not
+   of a client, and it is only linkable to a person through the already-gated
+   `client_display_name`. Record the reasoning in the W-A1 inventory so the next derived
+   column is labelled by the same rule rather than by guesswork.
+2. **New audit event types for analyst-grade execution.** Recommendation: two, both
+   thin. `execution.result_truncated` when the W-I clamp bites, because an under-reported
+   answer is a data-quality event that must be reconstructable after the fact; and
+   `execution.timed_out` if W-I decision 3 lands a per-query timeout, because a timeout
+   is otherwise indistinguishable from a generic failure in `chat.job_failed`. Decide
+   whether "unbounded query executed" deserves its own event. Recommendation: no, it is
+   already derivable from the resolved parameters on `execution.authorized`, and one more
+   event per job is real outbox volume for no new information. Export events are W-K's
+   problem, not this issue's.
+3. **Keep the projection an allowlist.** The safe projection must stay explicit
+   field-by-field. The failure mode to guard against is somebody adding a
+   `#[serde(flatten)]` or a `sql` field to `KnowledgeDetailResponse` for convenience.
+4. **The dashboard 1 000 ceiling.** Recommendation: leave the number, add a comment
+   naming it as the ceiling, and revisit if the catalog approaches it. Fixing it properly
+   means a counting query rather than a list-and-count, which is more code than the
+   problem currently deserves.
+
+**Files likely touched:** `crates/chat/src/management/knowledge.rs` (tests only, if the
+projection is already correct), `crates/chat/src/management/model.rs` (new
+`AuditEventType` variants), `crates/chat/src/management/dashboard.rs` (comment),
+`crates/chat/tests/fixtures/management/knowledge-detail.json`,
+`docs/current/management-client-integration.md`.
+
+**Acceptance:**
+- Every capability added by W-A3 appears in `GET /management/knowledge` and resolves in
+  `GET /management/knowledge/{id}`, asserted by a test that iterates the loaded catalog
+  rather than by a hard-coded list.
+- A test asserts that the serialised `KnowledgeDetailResponse` for a capability with a
+  derived column contains no SQL keyword and no substring of the approved SQL file.
+- A test asserts every capability id in the list endpoint resolves to a 200 on the detail
+  endpoint, catching the missing-query-YAML 404.
+- Any new `AuditEventType` variant round-trips through
+  `management_audit_outbox` and appears in `GET /management/audit`, matching the existing
+  `business_date.fallback_used` test.
+- The dashboard knowledge counts equal the capability count in the loaded catalog.
+
+---
+
+### W-M — Loan domain scope decision
+
+**Objective:** Decide where the five loan capabilities live before W-A3 starts, so W-A3
+has a bounded definition of done.
+
+**The state, from Appendix A.2:** `knowledge/capabilities/` contains `client/`,
+`organization/` and `savings/` only. Zero loan capabilities, zero loan queries, zero loan
+metrics. Meanwhile `fineract_default` holds 116 loans, 87 of them active, 86 rows in
+`m_loan_arrears_aging` and 299 overdue instalments. The appendix recommends five
+capabilities in priority order: `loans_in_arrears_clients`, `loan_overdue_installments`,
+`loan_outstanding_balances_clients`, `loan_unpaid_charges_clients`,
+`loan_portfolio_summary_by_office`.
+
+**The decision:** fold these into W-A3, or split them into a dedicated follow-up issue.
+
+**Recommendation: split into a dedicated follow-up issue, 008.** The reasoning:
+
+1. **W-A3 becomes unbounded otherwise.** Five capabilities is five capability YAMLs, five
+   query YAMLs, five approved SQL files, an unknown number of new metric YAMLs, plus
+   bilingual retrieval assertions for each in W-D1. That is comparable in size to
+   everything else in W-A combined, and it would sit behind W-A1's inventory, which is
+   itself the gate for W-D. Splitting keeps W-A3's definition of done as "close the gaps
+   A1 found in savings and client", which is what W-A's own acceptance criterion already
+   says.
+2. **The loan domain carries its own unresolved design questions, and they are not the
+   savings ones.** `m_loan` has no `office_id` (A.2.2), so every loan capability has to
+   route office scope through `m_client` or `m_group`, and the group case is a real branch
+   rather than the empty set it turned out to be for savings charges (A.3.2 measured zero
+   group-owned savings charges; nobody has measured the loan equivalent).
+   `m_loan_arrears_aging` is batch-maintained by a Fineract scheduled job whose freshness
+   the reporting service cannot observe, while `m_loan_repayment_schedule` is
+   authoritative but more expensive (A.2.3, A.2.4). Choosing between them, per capability,
+   and documenting the freshness caveat in each `description`, is a design conversation
+   that does not belong inside a savings-focused workstream.
+3. **`loan_status_id` is inferred, not confirmed** (A.2.2). Shipping five capabilities
+   that all filter `loan_status_id = 300` on an inferred label is a bigger bet than
+   shipping one savings capability with an inferred `charge_time_enum` in its output.
+4. **Nothing is lost by splitting,** because Appendix A.2 is the reference either way and
+   it stays in this issue.
+
+**What issue 008 must contain so nothing is lost:**
+
+- The five capabilities in the A.2.1 priority order, each with the source table named.
+- The office-scope decision per ownership type, from the A.3.1 table, including the
+  group-owned loan branch and a measurement of how many loans are group-owned.
+- The `m_loan_arrears_aging` versus `m_loan_repayment_schedule` choice per capability,
+  with the batch-freshness caveat required in each `description`.
+- Confirmation of `loan_status_id` against Fineract source before any capability filters
+  on it, or output of the raw value alongside any label.
+- The `days_in_arrears` clamp convention, matching the resolved `days_overdue` convention
+  in this issue's Open questions.
+- The A.2.5 finding that 33 of 38 unpaid loan charges have
+  `due_for_collection_as_of_date IS NULL`, so `loan_unpaid_charges_clients` must not
+  filter on the due date, for the same reason A.1.3 gives for savings.
+- Delinquency buckets read from `m_delinquency_range` rather than hardcoded (A.2.6).
+- Inheritance of W-G, W-I, W-J and W-L: loan capabilities are wider and more
+  money-dense than savings ones, so they are the first real test of the presentation and
+  currency work.
+
+**Acceptance:**
+- The decision is recorded, either way, before W-A3 begins.
+- If split, issue 008 exists with the contents above, and W-A1's inventory still
+  enumerates loan questions and marks them `missing`, so the gap remains visible from
+  this issue.
+- If folded in, W-A3's acceptance criteria are extended to name the five capabilities
+  explicitly rather than leaving them implied by the inventory.
+
+---
+
+### W-N — Frontend dependency
+
+**Objective:** Make the cross-repo dependency explicit and decide whether it gates this
+issue.
+
+**State:** E5 is a submission-shape mismatch. The dashboard posts `answers.date_range`
+as a plain string; the backend contract requires `{ from, to }`. Nothing in this
+repository can fix that. Grepping `AGENTS.md` and the whole `docs/` tree returns no
+reference to the dashboard repository by name, so the cross-repo dependency is currently
+recorded nowhere except this issue. A corresponding issue must exist in the
+`ai_report_dashboard` repository, and its identifier should be linked here once it does.
+
+**What the frontend must implement for analyst-grade output to be usable:**
+
+1. **A `{from, to}` date-range control** that submits the object shape, per W-F1. This is
+   the only item that unblocks a currently observed failure.
+2. **Wide-table rendering.** A 14-column table needs horizontal scroll or column
+   selection. Per W-G, `table.columns` and `table.rows` are the authoritative surface;
+   `rendered_markdown` will be a capped fallback and must not be the primary render path
+   for analyst results.
+3. **Multi-currency display.** Per-currency subtotal cards rendered as separate values,
+   never summed client-side. If the client aggregates the `cards` array, it reintroduces
+   exactly the bug W-J exists to prevent.
+4. **A truncation indicator** wired to the `result_truncated` warning from W-I, visible
+   rather than buried, because a silently truncated debt list is an under-report.
+5. **Money formatting from the payload**, using the currency digits and symbol the
+   response carries, rather than a client-side currency table.
+
+**Backend obligations are limited to W-F**: publish the exact `answers.<field>` value
+shapes per `field_type` with worked request/response pairs, and make
+`clarification_validation_error` `details.fields` precise enough to highlight the
+offending input. Plus, from W-G and W-J, publishing the response shape items 2 to 5
+depend on.
+
+**Decision: is this issue resolved independently of the frontend?**
+
+**Recommendation: yes, backend resolution is independent, and E5 is tracked to closure in
+the dashboard repository rather than here.** The reasoning: every acceptance criterion in
+this issue is verifiable by `cargo test` and by inspecting the response payload, with no
+browser involved. Making backend resolution wait on a repository this one cannot commit
+to would leave a correct, tested backend sitting in an "active" issue indefinitely, which
+degrades the issue tracker's signal. The honest structure is that this issue resolves on
+its own criteria, E5 remains listed as evidence with a pointer to the frontend issue, and
+the frontend issue closes when the picker lands. The counter-argument, that an analyst
+still cannot use the feature until the frontend ships, is real but is an argument about
+release readiness, not about whether this issue's work is done. If a single
+end-to-end gate is wanted, it should be a separate release checklist item that references
+both issues, not a cross-repo block on this one.
+
+**Files likely touched:** `docs/current/management-dashboard-integration.md` (W-F1),
+this issue (the link to the frontend issue), no code.
+
+**Acceptance:**
+- A corresponding issue exists in the `ai_report_dashboard` repository and is linked from
+  E5 by identifier.
+- `docs/current/management-dashboard-integration.md` documents the exact value shape for
+  every `field_type`, with a worked request and response for each.
+- This issue's resolution criteria contain no item that requires frontend code to be
+  merged.
 
 ---
 
@@ -1189,6 +1768,42 @@ This issue is resolved when all of the following hold:
    `cargo clippy --workspace --all-targets -D warnings` are all green.
 9. `docs/current/management-dashboard-integration.md` documents the exact
    `answers.<field>` value shape for every `field_type`.
+10. An analyst-grade result renders readably at its full column width: a summary line and
+    per-currency subtotal cards precede the detail table, `rendered_markdown` is bounded,
+    and `table.rows` is complete. The client contract names which surface is
+    authoritative. (W-G)
+11. Field-level PII gating provably hides `client_display_name` from a
+    `can_view_pii = false` caller for every capability added or changed by this issue.
+    Whichever of `pii` and `pii_conditional` is the operative label, code and catalog
+    agree. (W-G)
+12. Conversational drill-down is explicitly in or out of scope, and if out, the follow-up
+    issue exists and the reserved `ContextReference` variants are documented as reserved.
+    (W-H)
+13. `hard_cap` is enforced at execution for every capability that declares one, a
+    configured global backstop bounds every capability that does not, and a truncated
+    result carries a `result_truncated` warning. The stale "enforced elsewhere" comment is
+    gone. (W-I)
+14. `timeout_ms` from the query YAML is loaded and applied per query, and a query that
+    exceeds it fails cleanly with a sanitized message and an audit event. (W-I)
+15. Money renders at the currency's own precision, never at six decimals; a multi-currency
+    result emits per-currency subtotals, no grand total, and a `multi_currency` warning;
+    a null `display_symbol` falls back to the currency code. A test asserts no field in
+    the response equals a cross-currency sum. (W-J)
+16. The approved SQL joins `m_organisation_currency` in a fan-out-safe way, and a catalog
+    check prevents a plain equality join being reintroduced. (W-J)
+17. Export is recorded as an explicit non-goal with its rationale, the client contract
+    states the structured payload is the export surface, and no export endpoint is added.
+    (W-K)
+18. Every capability added by this issue resolves on both `GET /management/knowledge` and
+    `GET /management/knowledge/{id}`, asserted by a test that iterates the loaded catalog.
+    A test asserts the detail projection leaks no SQL for derived columns such as
+    `days_overdue`. Dashboard knowledge counts equal the loaded capability count. (W-L)
+19. Any new audit event type introduced for analyst-grade execution round-trips through
+    `management_audit_outbox` to `GET /management/audit`. (W-L)
+20. The loan-domain scope decision is recorded before W-A3 begins, and if split, issue 008
+    exists containing everything W-M enumerates. (W-M)
+21. A corresponding frontend issue exists in `ai_report_dashboard`, is linked from E5 by
+    identifier, and no criterion above requires frontend code to be merged. (W-N)
 
 ## Open questions
 
@@ -1230,11 +1845,37 @@ This issue is resolved when all of the following hold:
 
 ### New open questions raised by Appendix A
 
-- **Which database is the real target?** `fineract_qicard_default` has 0 clients, 0 savings
-  accounts, 0 charges, 0 loans and — critically — **0 rows in `m_business_date`**
-  (Appendix A.0). If that is the production shape, `FineractBusinessDateProvider` falls back
-  to wall clock on every request and `business_date.fallback_used` fires continuously. W-B
-  must decide whether that is an alert-worthy condition or the expected dev-time state.
+- **[BLOCKING] Which database is the real deployment target?** `fineract_qicard_default`
+  has 0 clients, 0 savings accounts, 0 charges, 0 loans and, critically, **0 rows in
+  `m_business_date`** (Appendix A.0). This blocks a product decision, not just an
+  engineering one. "Today means the tenant business date" is a recorded product decision
+  in this issue, and against `fineract_qicard_default` it is unimplementable: the provider
+  resolves nothing, falls back to wall clock on **every** request, permanently, and emits
+  `business_date.fallback_used` continuously, which makes the fallback signal worthless as
+  an alert. Worse, the two databases are different Fineract *builds* (Appendix A.0 caveat
+  2), so approved SQL validated against one can fail at prepare time against the other:
+  `settlement_priority`, `value_date` and `hold_status` exist in `fineract_default` only.
+  Until this is answered, W-B cannot decide whether a fallback is an incident or the
+  expected state, and W-A cannot know which schema its SQL must satisfy. Answer needed:
+  which database ships, and if it is `fineract_qicard_default`, who populates
+  `m_business_date` and when.
+- **[BLOCKING recommendation] Should `pending_charges_clients.sql` be corrected now, as a
+  hotfix, rather than waiting for W-A2?** **Recommendation: correct it immediately, as its
+  own commit, ahead of everything else in this issue.** The shipped query under-reports
+  outstanding savings debt by roughly half (37 rows returned versus 74 actually
+  outstanding, measured on `fineract_default` at `BUSINESS_DATE = 2026-07-23`, Appendix
+  A.1.3) because its `charge_due_date <= $2::date` predicate drops recurring charges whose
+  next occurrence is in the future. Under-reporting debt is strictly worse than not
+  answering: a "no capability matches" response makes an analyst go and look, whereas a
+  confident, well-formatted list of 37 debtors makes them stop looking, and the 37 missing
+  ones are invisible by construction. Nothing in the answer signals incompleteness. The
+  fix is deleting one predicate from one SQL file plus the corresponding
+  `required_filters` line in the query YAML; it does not depend on the field-set
+  enrichment, the renaming, or the currency-join hardening that W-A2 will do later, and
+  holding it hostage to that larger change leaves a wrong answer shipped for longer. The
+  counter-argument, that a single combined change is fewer commits, is not worth half the
+  debt staying hidden. Confirm before executing: this is a recommendation, and it is a
+  behaviour change to a shipped capability.
 - **What does "amount originally due" mean for a recurring charge?** W-A2 maps
   `amount_original` ← `sac.amount`, but `amount` is the **per-occurrence** amount and
   `amount_paid_derived` is cumulative; the identity
@@ -1260,15 +1901,87 @@ This issue is resolved when all of the following hold:
   `fineract_qicard_default` (`settlement_priority`, `value_date`, `hold_status` —
   Appendix A.7). Is fixing those docs in scope for this issue, or a separate one?
 
+### New open questions raised by W-G..W-N
+
+- **[BLOCKING for W-A2] Is PII gating currently a no-op for the shipped capability?**
+  `is_hidden` in `presentation/builder.rs:331` hides a column only when
+  `sensitivity == "pii"`. W-A2's text instructs that `client_id` and
+  `client_display_name` "remain `pii_conditional`", but no code path acts on
+  `pii_conditional`, so relabelling them would silently disable hiding. The shipped
+  `knowledge/queries/savings/pending_charges_clients.yaml` uses `sensitivity: pii` today,
+  which is the working value. Decide: teach `is_hidden` about `pii_conditional`, or
+  correct W-A2's wording to say `pii`. Blocking because W-A2 edits that exact file.
+- **`hard_cap` is declared but never enforced.** Ten capability YAMLs declare a
+  `hard_cap`; the value is parsed (`catalog/loader.rs:179`), type-validated
+  (`catalog/parameter_policy.rs:161`) and then never read again. The comment at
+  `execution/tool/parameters.rs:299` asserting it "is enforced elsewhere" is false. Where
+  should the clamp live, and is a global backstop needed for the 20 capabilities that
+  declare no cap? See W-I.
+- **`timeout_ms` and `cost_class` are declared but never loaded.** Every query YAML
+  carries both; `QueryKnowledge` has neither field, so the loader discards them and no
+  per-query timeout is applied. Load them, or delete them from the YAML surface? See W-I.
+- **Is `rendered_markdown` or `table` the authoritative client surface?** The renderer
+  emits one markdown row per result row with no cap, so an unbounded analyst answer
+  becomes a multi-megabyte string persisted alongside the response. Capping it requires
+  saying which surface clients must read. See W-G.
+- **Does a truncated result need the true row count?** A `result_truncated` warning that
+  says "showing the first N" is weaker than one that says "of M". Fetching `cap + 1` gives
+  "more than N" with no SQL change; a true count needs `count(*) OVER ()` in every
+  approved query. See W-I decision 6.
+- **Which currency precision source wins?** `m_savings_account.currency_digits` (booked
+  precision, `NOT NULL`) or `m_organisation_currency.decimal_places` (current tenant
+  config, can drift). Appendix A.5 point 4 recommends the account column for arithmetic
+  and rounding. The corrected SQL in A.1.6 currently selects `cur.decimal_places`.
+  Reconcile before that SQL is approved. See W-J.
+- **Is conversational drill-down in scope?** W-H recommends no, as a follow-up, because
+  it depends on W-C2 and would make W-C unbounded. Confirm, and if confirmed, open the
+  follow-up so the two reserved `ContextReference` variants have a home.
+- **Loan capabilities: fold into W-A3 or split into issue 008?** W-M recommends splitting,
+  and lists what 008 must contain. This supersedes the "scope decision still needed" note
+  on the Loan-domain-parity question above. Confirm before W-A3 begins.
+- **Is export in scope?** W-K recommends an explicit non-goal, with the structured
+  response payload as the export surface, and a named follow-up covering audit,
+  authorisation and row ceilings. `ResponseActionType::Export` already exists in the enum
+  and is never constructed. Confirm.
+- **Does this issue resolve independently of the frontend?** W-N recommends yes, with E5
+  tracked to closure in `ai_report_dashboard` and a release checklist item, if one is
+  wanted, referencing both issues. Confirm, and record the frontend issue identifier
+  against E5 once it exists.
+
 ## Suggested execution order for a fresh session
 
-1. **W-A1** first, always. The inventory is the specification for everything after it.
-2. **W-A2 + W-A4** (savings enrichment and default review) — highest user-visible value.
-3. **W-B** (business date everywhere) — can run in parallel with W-A, disjoint files.
-4. **W-D1** (retrieval suite) — needs W-A1 to exist; will surface the real gaps.
-5. **W-A3 + W-D2** together — close catalog and scoring gaps found by D1.
-6. **W-E** — lock in the no-clarification guarantee with tests.
-7. **W-C** — the gateway architecture refactor. Deliberately last: it is cleanup that
-   makes the system auditable and maintainable, but it does not by itself fix any
-   currently-observed user-facing failure. Do not let it block W-A through W-E.
-8. **W-F1/F2** — documentation, any time after W-A2 stabilises the field shapes.
+1. **The `charge_due_date` hotfix** (Open questions, second entry) — before anything else,
+   because it is a one-predicate deletion that stops a shipped capability hiding half the
+   outstanding debt, and it blocks nothing.
+2. **W-M** (loan scope decision) and **W-K** (export in or out) — both are one-paragraph
+   decisions with no code, and both change what W-A3's "done" means. Settle them before
+   W-A1 writes an inventory against an unknown scope.
+3. **W-A1** next. The inventory is the specification for everything after it.
+4. **W-A2 + W-A4** (savings enrichment and default review) — highest user-visible value.
+   W-J decisions 1, 4 and 5 (currency precision source, fan-out-safe join, symbol in the
+   payload) land inside W-A2's SQL rewrite; doing them separately means editing the same
+   file twice.
+5. **W-B** (business date everywhere) — can run in parallel with W-A, disjoint files.
+6. **W-I** — immediately after W-A2, before the catalog grows. `hard_cap` and `timeout_ms`
+   are unenforced today, and every capability W-A3 adds inherits that gap. Enforcing on
+   30 capabilities is cheaper than on 40, and W-A2's `unbounded` default is what makes the
+   gap load-bearing.
+7. **W-D1** (retrieval suite) — needs W-A1 to exist; will surface the real gaps.
+8. **W-A3 + W-D2** together — close catalog and scoring gaps found by D1.
+9. **W-G + W-J remainder** — presentation and money formatting, once W-A3 has settled the
+   final column sets. Doing them earlier means rewriting the builder against field names
+   that are still moving.
+10. **W-E** — lock in the no-clarification guarantee with tests.
+11. **W-L** — after W-A3 and W-I, because it asserts over the finished capability set and
+   over the audit event types W-I introduces. Its tests are cheap and mostly guard against
+   regression, so it is late by dependency, not by priority.
+12. **W-C** — the gateway architecture refactor. Deliberately last among the code
+   workstreams: it is cleanup that makes the system auditable and maintainable, but it
+   does not by itself fix any currently-observed user-facing failure. Do not let it block
+   W-A through W-E.
+13. **W-H** (drill-down preparation) — with or immediately after W-C, since the only work
+   it owes this issue is that W-C2's `PayloadSource` enum stays extensible and the two
+   reserved `ContextReference` variants are documented.
+14. **W-F1/F2 + W-N** — documentation and the cross-repo link, any time after W-A2 and
+   W-G stabilise the field and response shapes. W-N carries no code, so it can also be
+   opened on day one if the frontend team wants lead time.
