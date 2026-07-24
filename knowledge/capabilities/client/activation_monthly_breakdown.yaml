@@ -2,13 +2,14 @@ id: client_activation_monthly_breakdown
 status: approved_mvp
 domain: client
 display_name: Client Activation Monthly Breakdown
-description: Return the count of client activations per month for a date range within the caller's authorized office scope.
+description: Return the count of client activations per month for a date range within the caller's authorized
+  office scope.
 data_areas:
-  - client_foundation
+- client_foundation
 required_api_capability: client_activation_monthly_breakdown
 query_id: client.activation_monthly_breakdown
 metrics:
-  - client.lifecycle_count
+- client.lifecycle_count
 output_mode: monthly_breakdown
 request_shape:
   operation: trend
@@ -17,20 +18,15 @@ request_shape:
   output: time_series
   pii: none
 examples:
-  - Monthly client activations for 2026.
-  - How many clients did we activate each month last year?
-  - Client activation trend from 2026-01-01 to 2026-06-30.
+- Monthly client activations for 2026.
+- How many clients did we activate each month last year?
+- Client activation trend from 2026-01-01 to 2026-06-30.
 supported_intents:
-  - monthly client activation counts in a date range
-  - client onboarding trend across authorized offices
+- monthly client activation counts in a date range
+- client onboarding trend across authorized offices
 unsupported_intents:
-  - client identity lookup
-  - client contact details
-required_parameters:
-  - from_date
-  - to_date
-optional_parameters:
-  - office_ids
+- client identity lookup
+- client contact details
 defaults:
   authorized_scope_only: true
 guards:
@@ -39,16 +35,28 @@ guards:
 pii:
   returns_pii: false
 cost_class: low
-clarification:
-  missing_parameters:
-    - from_date
-    - to_date
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: no_pii_output
-    rule: query output fields must not expose client identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: no_pii_output
+  rule: query output fields must not expose client identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  from_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  to_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false

@@ -163,9 +163,10 @@ impl KnowledgeValidator {
             if capability.status == "approved_mvp"
                 && capability.output_mode != "summary"
                 && capability.required_parameters.is_empty()
+                && capability.parameter_policies.is_empty()
             {
                 bail!(
-                    "approved capability {} must declare required parameters",
+                    "approved capability {} must declare parameters (legacy or new policy block)",
                     capability.id
                 );
             }
@@ -477,15 +478,26 @@ fn validate_capability_parameter_contract(
         })
         .map(|parameter| parameter.name.as_str())
         .collect::<HashSet<_>>();
-    let declared_required_parameters = capability
-        .required_parameters
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
+    let declared_required_parameters: HashSet<&str> = if capability.parameter_policies.is_empty() {
+        capability
+            .required_parameters
+            .iter()
+            .map(String::as_str)
+            .collect()
+    } else {
+        // In the new-policy world, "covered by the capability" means either
+        // declared required OR carrying a default expression.
+        capability
+            .parameter_policies
+            .iter()
+            .filter(|p| p.required || p.default.is_some())
+            .map(|p| p.name.as_str())
+            .collect()
+    };
 
-    if declared_required_parameters != required_user_parameters {
+    if !required_user_parameters.is_subset(&declared_required_parameters) {
         bail!(
-            "approved capability {} required_parameters do not match required user query parameters",
+            "approved capability {} does not cover required user query parameters",
             capability.id
         );
     }
@@ -529,10 +541,15 @@ fn validate_capability_parameter_contract(
                 capability.id
             );
         }
-        if !capability
-            .required_parameters
+        let limit_covered_by_policy = capability
+            .parameter_policies
             .iter()
-            .any(|parameter| parameter == "limit")
+            .any(|policy| policy.name == "limit");
+        if !limit_covered_by_policy
+            && !capability
+                .required_parameters
+                .iter()
+                .any(|parameter| parameter == "limit")
             && !capability
                 .optional_parameters
                 .iter()

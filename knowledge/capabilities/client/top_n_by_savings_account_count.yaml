@@ -2,14 +2,15 @@ id: client_top_n_by_savings_account_count
 status: approved_mvp
 domain: client
 display_name: Top Clients by Number of Savings Accounts
-description: Return clients holding the largest number of active savings accounts within the caller's authorized office scope.
+description: Return clients holding the largest number of active savings accounts within the caller's
+  authorized office scope.
 data_areas:
-  - client_foundation
-  - organization_foundation
+- client_foundation
+- organization_foundation
 required_api_capability: client_top_n_by_savings_account_count
 query_id: client.top_n_by_savings_account_count
 metrics:
-  - savings.account_count
+- savings.account_count
 output_mode: top_n
 request_shape:
   operation: rank
@@ -18,16 +19,12 @@ request_shape:
   output: ranking
   pii: client_identity
 examples:
-  - Top 10 clients by number of savings accounts.
-  - Which clients have the most savings accounts?
+- Top 10 clients by number of savings accounts.
+- Which clients have the most savings accounts?
 supported_intents:
-  - ranking clients by count of active savings accounts
+- ranking clients by count of active savings accounts
 unsupported_intents:
-  - individual client identity lookup by name
-required_parameters:
-  - limit
-optional_parameters:
-  - office_ids
+- individual client identity lookup by name
 defaults:
   authorized_scope_only: true
 guards:
@@ -36,15 +33,23 @@ guards:
 pii:
   returns_pii: true
 cost_class: low
-clarification:
-  missing_parameters:
-    - limit
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: pii_gated
-    rule: pii output fields must be redacted when caller lacks can_view_pii.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: pii_gated
+  rule: pii output fields must be redacted when caller lacks can_view_pii.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 100

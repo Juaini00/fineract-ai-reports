@@ -2,14 +2,15 @@ id: client_summary_by_office
 status: approved_mvp
 domain: client
 display_name: Client Summary by Office
-description: Return active, pending, closed, and total client counts per office within the caller's authorized scope.
+description: Return active, pending, closed, and total client counts per office within the caller's authorized
+  scope.
 data_areas:
-  - client_foundation
-  - organization_foundation
+- client_foundation
+- organization_foundation
 required_api_capability: client_summary_by_office
 query_id: client.summary_by_office
 metrics:
-  - client.lifecycle_count
+- client.lifecycle_count
 output_mode: top_n
 request_shape:
   operation: rank
@@ -18,17 +19,13 @@ request_shape:
   output: ranking
   pii: none
 examples:
-  - Show client breakdown per office.
-  - How many active clients does each office have?
-  - Client lifecycle counts across my offices (top 20).
+- Show client breakdown per office.
+- How many active clients does each office have?
+- Client lifecycle counts across my offices (top 20).
 supported_intents:
-  - client lifecycle counts grouped by office
+- client lifecycle counts grouped by office
 unsupported_intents:
-  - client identity lookup
-required_parameters:
-  - limit
-optional_parameters:
-  - office_ids
+- client identity lookup
 defaults:
   authorized_scope_only: true
 guards:
@@ -37,14 +34,23 @@ guards:
 pii:
   returns_pii: false
 cost_class: low
-clarification:
-  missing_parameters: []
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: no_pii_output
-    rule: query output fields must not expose client identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: no_pii_output
+  rule: query output fields must not expose client identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 10000

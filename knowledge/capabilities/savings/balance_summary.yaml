@@ -2,13 +2,13 @@ id: savings_balance_summary
 status: approved_mvp
 domain: savings
 data_areas:
-  - organization_foundation
-  - client_foundation
-  - savings_core
+- organization_foundation
+- client_foundation
+- savings_core
 required_api_capability: savings_balance_summary
 query_id: savings.balance_summary
 metrics:
-  - savings.account_balance
+- savings.account_balance
 output_mode: summary
 request_shape:
   operation: summary
@@ -17,16 +17,11 @@ request_shape:
   output: summary
   pii: none
 examples:
-  - What is the total savings balance right now?
-  - Show the savings portfolio summary.
-  - Current active savings account balance and count.
-  - Berapa saldo total tabungan aktif saat ini?
-  - Ringkasan portofolio tabungan.
-required_parameters: []
-optional_parameters:
-  - office_ids
-  - currency_code
-  - product_ids
+- What is the total savings balance right now?
+- Show the savings portfolio summary.
+- Current active savings account balance and count.
+- Berapa saldo total tabungan aktif saat ini?
+- Ringkasan portofolio tabungan.
 defaults:
   active_only: true
   client_owned_only: true
@@ -36,14 +31,24 @@ guards:
 pii:
   returns_pii: false
 cost_class: medium
-clarification:
-  missing_parameters: []
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: summary_has_no_required_user_params
-    rule: summary capabilities may have no required user parameters but must use authorized office scope.
-  - id: no_pii_output
-    rule: query output fields must not expose PII.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: summary_has_no_required_user_params
+  rule: summary capabilities may have no required user parameters but must use authorized office scope.
+- id: no_pii_output
+  rule: query output fields must not expose PII.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  currency_code:
+    type: string
+    required: false
+  product_ids:
+    type: integer_array
+    required: false
