@@ -491,6 +491,13 @@ across five files):
 - `TableColumn.label` is `field.name.replace('_', " ")` (`builder.rs:317–329`), so
   column labels and column **order** are entirely determined by the `output_fields`
   order in the query YAML.
+- `table_column` (`builder.rs:317–329`) maps only `integer`/`bigint` → `Number`,
+  `decimal` → `Decimal` and `date` → `Date`; everything else falls through to
+  `TableColumnKind::Text`. The `boolean` `is_penalty` column on
+  `knowledge/queries/savings/pending_charges_clients.yaml:64-66` therefore reaches the
+  client as text. Not wrong today — a client can render `true`/`false` as a string — but
+  the kind is the only typing signal in the contract, so a checkbox or badge rendering
+  needs a `Boolean` kind. Decide when adding it, not by accident.
 - `is_hidden` (`builder.rs:331`) is `!can_view_pii && field.sensitivity == "pii"`.
   **`pii_conditional` hides nothing.** W-A2's text says `client_id` /
   `client_display_name` "remain `pii_conditional`"; the shipped
@@ -1065,7 +1072,7 @@ YAMLs use `sensitivity: pii_conditional`, which matches nothing. They do not. Ac
 (161 fields) and `pii` (17 fields across 12 files). `pii_conditional` is never used as a
 sensitivity value anywhere in `knowledge/`. That specific claim is refuted.
 
-What is true is worse, in three parts.
+What is true is worse, in four parts.
 
 1. **The capability-level PII contract is discarded wholesale.** Every capability YAML
    declares an `output_fields:` block split into `public:` and `pii_conditional:` lists,
@@ -1101,6 +1108,26 @@ What is true is worse, in three parts.
    `is_hidden` returns `false` for every field of every chat request in production, and
    the `pii_hidden` warning is never emitted. This is the documented design (`AGENTS.md`,
    auth model table: `can_view_pii` is "not binding, forced to `true`").
+
+4. **Where the two authorities disagree, the query wins and the capability's intent is
+   lost.** `client_id` is labelled `sensitivity: public_business` on six query YAMLs
+   (`savings/pending_charges_clients.yaml:38`, `savings/activity_list.yaml:75`,
+   `savings/deposit_top_n.yaml`, `savings/deposit_monthly_top_n.yaml`,
+   `savings/withdrawal_top_n.yaml`, `savings/withdrawal_monthly_top_n.yaml`) and
+   `sensitivity: pii` on five others (all under `knowledge/queries/client/` except
+   `name_lookup.yaml`, which also says `public_business`). The catalog does not agree with
+   itself about whether a client id is identifying. Meanwhile the capability YAMLs for
+   those same six queries list `client_id` under both `pii.omitted_when_cannot_view_pii`
+   and `output_fields.pii_conditional` — for example
+   `knowledge/capabilities/savings/pending_charges_clients.yaml:42,45,70` and
+   `knowledge/capabilities/savings/activity_list.yaml:40,43,63`. Since `is_hidden`
+   (`builder.rs:331-333`) matches only the exact string `"pii"` on the *query* field, and
+   the capability block is dropped at load per part 1, `client_id` reaches a caller
+   without `can_view_pii` from every one of those six capabilities. Pre-existing,
+   consistent across the savings domain, and masked today only by the admin projection in
+   part 3. It is listed here rather than as its own finding because it is the same defect
+   as parts 1 and 2 — two declarations, one gate, no coherence check — and the fix is the
+   same single-authority decision.
 
 **Real consequence and severity.** There is no current over-disclosure. Every chat caller
 already holds an admin bearer, and an admin is entitled to the PII in question, so nobody
@@ -1495,6 +1522,15 @@ honouring the dropped blocks).
   `waiting_for_user_input` with a `collect_fields` clarification carrying the `search`
   field, and a second test asserts no execution ran with a search term the analyst never
   supplied. (F8)
+- `validate_runtime` runs under `cargo test`, not only behind `POST /catalog/validate`.
+  It is the only thing that checks a query's real prepared column list against its
+  declared `output_fields` (`crates/chat/src/knowledge/catalog/validator.rs:666-705`), and
+  its sole caller is the handler at `crates/chat/src/api/handlers/catalog.rs:25`.
+  `crates/chat/tests/` does not mention it anywhere, so the SQL-to-YAML column contract can
+  drift through an entirely green test run and only fail when someone remembers to call the
+  endpoint. Same failure mode as the rest of W-O: a contract that exists and is not checked
+  where it would be noticed. W-A2 rewrites the `pending_charges_clients` SQL, so the guard
+  needs to be in CI before that, not after.
 
 **Ordering within W-O.** F1 and F2 are correctness and safety and must land **before** the
 analyst capabilities they are supposed to protect, meaning before W-A2 and W-A3 add or
@@ -2330,6 +2366,11 @@ This issue is resolved when all of the following hold:
     `client_name_lookup` with a message naming no person and asserts a `collect_fields`
     clarification carrying the `search` field. Criterion 2 and this one are the two halves
     of one guarantee and are asserted together. (W-O, F8, with W-E)
+29. `validate_runtime` runs under `cargo test -p chat`, so every approved query is prepared
+    against the real Fineract connection and its column list is checked against its declared
+    `output_fields` on every run. Today the check exists only behind
+    `POST /catalog/validate` and no test calls it, which is how the column contract can rot
+    unobserved. In place before W-A2 rewrites any SQL. (W-O)
 
 ## Open questions
 
