@@ -1,7 +1,7 @@
 id: savings.charge_amount_outstanding
 domain: savings
 status: approved_mvp
-description: Sum of unpaid, non-waived savings charge amounts still outstanding as of a business date. Used by savings_pending_charges_clients capability.
+description: Sum of unpaid, non-waived savings charge amounts still outstanding. Outstanding-ness is established by the settlement flags and a positive outstanding amount, never by the charge due date. Used by savings_pending_charges_clients capability.
 data_areas:
   - savings_charges_fees
 source_table: m_savings_account_charge

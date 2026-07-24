@@ -2,8 +2,10 @@ id: savings_pending_charges_clients
 status: approved_mvp
 domain: savings
 display_name: Savings Clients With Unpaid Charges
-description: List clients who still have unpaid, non-waived savings account charges outstanding as of a
-  business date within the caller's authorized office scope.
+description: List clients who still have unpaid, non-waived savings account charges outstanding within
+  the caller's authorized office scope, with amounts paid, waived, written off and still outstanding.
+  Outstanding-ness is not filtered by due date, so recurring charges whose next occurrence is in the
+  future are still reported; the business date is used only to compute days_overdue.
 data_areas:
 - organization_foundation
 - client_foundation
@@ -50,11 +52,20 @@ output_fields:
   public:
   - office_id
   - office_name
-  - charge_id
+  - savings_account_id
+  - savings_account_charge_id
+  - charge_definition_id
   - charge_name
+  - is_penalty
+  - charge_timing_enum
   - currency_code
+  - amount_due_current
+  - amount_paid
+  - amount_waived
+  - amount_written_off
   - amount_outstanding
   - due_date
+  - days_overdue
   pii_conditional:
   - client_id
   - client_display_name
@@ -66,7 +77,9 @@ checks:
 - id: office_scope_required
   rule: query must declare office_ids from authorized_scope and require_office_filter=true.
 - id: unpaid_filter_declared
-  rule: SQL must filter waived = false and is_paid_derived = false.
+  rule: SQL must filter waived = false, is_paid_derived = false, is_active = true and
+    amount_outstanding_derived > 0, and must not filter on charge_due_date, which is
+    output only.
 - id: pii_fields_declared
   rule: client identity fields require can_view_pii.
 parameters:
