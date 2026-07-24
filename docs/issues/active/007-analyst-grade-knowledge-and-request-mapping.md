@@ -446,9 +446,9 @@ repo, not here. E5 stays open until that lands.
 ## Additional scope areas
 
 W-A..W-F cover the catalog, the business date, the mapping layer and the retrieval
-suite. They stop at the point where rows leave the executor. The eight workstreams
-below cover everything downstream of that point plus the scope decisions the appendix
-forced. Each is written to the same shape: objective, decisions to make, files, and
+suite. They stop at the point where rows leave the executor. The nine workstreams
+below cover everything downstream of that point, plus the scope decisions the appendix
+forced and the declared-but-unhonoured contracts W-O registers. Each is written to the same shape: objective, decisions to make, files, and
 acceptance criteria.
 
 Every claim about existing behaviour in this section was read out of the code named
@@ -465,6 +465,9 @@ across five files):
 - `ResponseBuilder::from_tool_result` (`builder.rs:19–85`) always emits
   `response_type: Table`, `title: "Lookup results"`, and
   `message: format!("Found {row_count} row(s).")`. It never reads `plan.output_mode`.
+  (See F4: `output_mode` *is* read by the classifier, the planner and retrieval; it is the
+  presentation layer specifically that ignores it, and `AnswerPlan.sections` is dead on the
+  live tool path.)
   All six declared `output_mode` values (`list`, `summary`, `total`, `top_n`,
   `monthly_breakdown`, `monthly_top_n`, counted across the 30 capability YAMLs) reach
   exactly the same builder branch and produce the same shape.
@@ -479,7 +482,8 @@ across five files):
   See W-J.
 - `cell` does not escape `|`. A charge name containing a pipe silently corrupts the
   table. Low likelihood on Fineract charge names, but it is a correctness bug in a
-  renderer that is about to get much wider.
+  renderer that is about to get much wider. (See F6: it escapes nothing at all, a newline
+  is equally corrupting, and `assert_sanitized` asserts nothing about cell contents.)
 - `TableColumn.label` is `field.name.replace('_', " ")` (`builder.rs:317–329`), so
   column labels and column **order** are entirely determined by the `output_fields`
   order in the query YAML.
@@ -489,7 +493,10 @@ across five files):
   `knowledge/queries/savings/pending_charges_clients.yaml` actually labels
   `client_display_name` as `pii`, which is the only value the renderer acts on. W-A2
   must not change it to `pii_conditional` without also teaching `is_hidden` about that
-  value, or PII gating becomes a no-op.
+  value, or PII gating becomes a no-op. (See F1 for the verified position: no query YAML
+  uses `pii_conditional` as a sensitivity anywhere; the capability-level `output_fields:`
+  and `pii:` blocks are dropped by the loader entirely; and the admin projection forces
+  `can_view_pii = true`, so `is_hidden` never fires on the chat path today.)
 
 **Decisions to make:**
 
@@ -563,7 +570,9 @@ one ever constructed in production code
 are **never produced and never consumed anywhere**. They are declared intent, not
 behaviour. Nothing carries a prior result set forward. Every job re-executes from
 scratch, and a follow-up like "dari list itu mana yang paling besar?" has no path to the
-prior list at all.
+prior list at all. (See F5: independently re-verified. There is nothing to extend, so
+drill-down is greenfield, not an increment, which is why decision 4 below should be
+accepted rather than reopened on a smaller estimate.)
 
 **Decisions to make:**
 
@@ -627,14 +636,19 @@ capabilities make it load-bearing.
   workspace is a comment at `execution/tool/parameters.rs:299` asserting that "catalog
   `hard_cap` is enforced elsewhere". It is not. Ten capability YAMLs declare a
   `hard_cap` (values 100 to 10 000, including `savings_pending_charges_clients` at
-  10 000) and every one of them is decorative.
+  10 000) and every one of them is decorative. (Corrected by F2: it is **nineteen** of
+  thirty, not ten, so eleven capabilities need the backstop, not twenty. F2 also
+  establishes that neither `guards.max_limit` nor the clarification-answer validation
+  bounds a user-supplied limit.)
 - **`timeout_ms` is declared but never loaded.** Every query YAML carries
   `timeout_ms` (3 000 to 8 000) and `cost_class`, but `QueryKnowledge` has no such
   fields, so the loader discards them. There is no per-query timeout at execution. The
   only timeouts in the system are `QUERY_DEFAULT_TIMEOUT_MS` and the LLM client
   timeouts in `crates/core/src/config/mod.rs`. The brief's assumption that "the existing
   `timeout_ms` in query YAML is the hook" is half right: the YAML surface exists, the
-  hook does not.
+  hook does not. (Extended by F3: `QUERY_DEFAULT_TIMEOUT_MS` itself has no read site
+  either, all 30 capability YAMLs also declare a discarded `cost_class`, and
+  `knowledge/policies/execution_limits.yaml` is loaded but never consulted.)
 - `DEFAULT_REPORT_LIMIT = 10` (`execution/tool/parameters.rs:5`) is the fallback for a
   required, unspecified `limit`.
 
@@ -824,6 +838,9 @@ leaking anything new.
   column, and the `CASE WHEN ... END` expression that produces it never leaves the
   server. This is a property of the projection being an allowlist, so it holds for any
   future derived column too. The acceptance criterion below exists to keep it that way.
+  Note that it could not surface a `hard_cap`, `timeout_ms` or `cost_class` even if it
+  wanted to: per F2 and F3 the first is parsed but unenforced and the latter two are
+  dropped by the loader, so there is no truthful limit to project until W-O lands.
 - `detail` returns `None`, hence a 404, when `capability.query_id` has no matching entry
   in `catalog.queries` (`knowledge.rs:88–94`). A capability YAML added without its query
   YAML disappears from detail while still appearing in the list.
@@ -1011,6 +1028,305 @@ this issue (the link to the frontend issue), no code.
   every `field_type`, with a worked request and response for each.
 - This issue's resolution criteria contain no item that requires frontend code to be
   merged.
+
+---
+
+### W-O — Latent contract violations
+
+**Objective:** Close six places where a contract is declared in YAML or in a Rust type
+and no code honours it, so that what the catalog says is what the system does.
+
+All six share one failure mode: a declared-but-unhonoured contract. That is worse than an
+absent contract for an analyst-facing system, because every reader of the YAML, every
+capability author and every reviewer of a new capability treats the declaration as the
+protection. A `hard_cap: 100` in a capability YAML reads as a row ceiling and is not one.
+A `sensitivity: pii` label reads as a disclosure gate and does not fire. A `timeout_ms:
+3000` reads as a latency budget and never reaches the executor. The catalog is the review
+surface for this system's safety properties, so an inert field in it is a false negative
+in every future review, not just a missing feature.
+
+Each finding below was verified against the code named beside it. Where the prior audit
+overstated or understated a claim, the correction is stated.
+
+#### F1 — PII gating: the label is not the gate, and the gate never fires
+
+**Verified, but different in detail from the audit claim.** The audit said capability
+YAMLs use `sensitivity: pii_conditional`, which matches nothing. They do not. Across all
+30 query YAMLs, `output_fields[].sensitivity` takes exactly two values: `public_business`
+(161 fields) and `pii` (17 fields across 12 files). `pii_conditional` is never used as a
+sensitivity value anywhere in `knowledge/`. That specific claim is refuted.
+
+What is true is worse, in three parts.
+
+1. **The capability-level PII contract is discarded wholesale.** Every capability YAML
+   declares an `output_fields:` block split into `public:` and `pii_conditional:` lists,
+   plus a `pii:` block with `returns_pii`, `allowed_fields_when_can_view_pii`,
+   `omitted_when_cannot_view_pii` and `never_return` (for example
+   `knowledge/capabilities/savings/deposit_top_n.yaml:42-50` and `:56-68`).
+   `CapabilityKnowledge` (`crates/chat/src/knowledge/model.rs:205-247`) declares none of
+   those fields, and the struct carries no `deny_unknown_fields`, so serde drops all of
+   it at load. Grepping the workspace for `returns_pii`, `allowed_fields_when_can_view_pii`
+   and `never_return` returns zero hits in `crates/`. The `checks:` list in those same
+   YAMLs — including `pii_fields_are_conditional` and `never_return_absent_from_query` —
+   is prose, not an executed check; `GenericKnowledge.checks` is
+   `Vec<serde_json::Value>` (`model.rs:112-113`) and `CapabilityKnowledge` has no
+   `checks` field at all.
+2. **The one operative label is matched by exact string.** `is_hidden`
+   (`crates/chat/src/assistant/presentation/builder.rs:331-333`) is
+   `!can_view_pii && field.sensitivity == "pii"`. It is called from `filtered_row`
+   (`builder.rs:308`, which drops the value from the row), `table_column` (`:327`, which
+   sets `hidden`) and the `pii_hidden` warning check (`:43`). The validator allowlist
+   `SENSITIVITY_CLASSES` (`crates/chat/src/knowledge/catalog/validator.rs:38-45`) accepts
+   six values: `public_business`, `pii`, `sensitive_business_identifier`,
+   `security_sensitive`, `secret_never_expose`, `free_text_sensitive`. Four of the five
+   non-public values are inert. They currently appear only in `knowledge/schema/**`
+   (for example `knowledge/schema/fineract/savings.yaml:20`, `:62`), which loads as
+   `GenericKnowledge` whose `content` is an untyped `serde_json::Map` nothing inspects.
+   So this half of the gap is latent, not live: a capability author who labels a column
+   `sensitive_business_identifier` on a query output field passes validation and gets no
+   hiding.
+3. **The gate is unreachable on the chat path today.** `finalize_admin_projection`
+   (`crates/chat/src/policy/authorization.rs:48-61`) sets `principal.can_view_pii = true`
+   unconditionally at line 58, and `project_admin_principal` runs on every job create and
+   every clarification response (`crates/chat/src/job/service/mod.rs:145`, `:242`). So
+   `is_hidden` returns `false` for every field of every chat request in production, and
+   the `pii_hidden` warning is never emitted. This is the documented design (`AGENTS.md`,
+   auth model table: `can_view_pii` is "not binding, forced to `true`").
+
+**Real consequence and severity.** There is no current over-disclosure. Every chat caller
+already holds an admin bearer, and an admin is entitled to the PII in question, so nobody
+is seeing a column a correctly-working gate would have hidden. The severity is therefore
+**medium today, high the moment a non-admin principal exists.** `AGENTS.md` already states
+that a hard per-caller PII boundary "must attach to the bearer/user identity, not to the
+optional API key". On the day that boundary is added, the code that is supposed to enforce
+it is one exact string comparison over a field the capability YAML does not even feed, and
+the four-page `pii:` declaration every capability carries contributes nothing. Do not
+inflate this to a live vulnerability, and do not file it as cosmetic: it is a safety
+mechanism that is believed to work and does not.
+
+**Fix direction.** Decide on one authority for the label. Recommendation: keep query-level
+`output_fields[].sensitivity` as the single source, delete the capability-level
+`output_fields:`/`pii:` blocks rather than wiring them (they duplicate the query with no
+added information and would need a cross-file coherence check to stay true), and make
+`is_hidden` match on a parsed enum rather than a string so an unmatched value is a compile
+error rather than a silent pass. Add a validator rule that a sensitivity class the
+renderer does not act on cannot appear on a query `output_field`.
+
+#### F2 — `hard_cap` is declared but never enforced
+
+**Confirmed, and understated by the audit.** The comment exists verbatim at
+`crates/chat/src/assistant/execution/tool/parameters.rs:296-302`:
+
+```rust
+// Unbounded: no user-supplied cap. The runtime clamps to i64::MAX so
+// callers that require an integer parameter (e.g. `LIMIT $n`) still
+// bind successfully; catalog `hard_cap` is enforced elsewhere.
+// ponytail: i64::MAX sentinel, upgrade to LIMIT-omitting SQL if a real
+// "no limit" query appears.
+ResolvedValue::Unbounded => json!(i64::MAX),
+```
+
+It is false. Every non-test mention of `hard_cap` in the workspace: parsed from YAML at
+`crates/chat/src/knowledge/catalog/loader.rs:179` and stored at `:187`; the struct field
+at `crates/chat/src/knowledge/catalog/parameter_policy.rs:46`; and one type check at
+`parameter_policy.rs:161-169` rejecting a `hard_cap` on a non-integer parameter. No site
+compares a resolved value against it.
+
+Two corrections to the audit. **Nineteen** capability YAMLs declare a `hard_cap`, not ten
+(values: `100` ten times, `200` three times, `10000` four times, `500` once, `50` once).
+That leaves eleven of thirty with no declared cap, not twenty. And the audit stopped short
+of the fact that **nothing else bounds a limit either**:
+
+- `guards.max_limit` (`crates/chat/src/knowledge/model.rs:201`) is read only to reject a
+  catalog *default* that exceeds it — `clarification_planner.rs:179` and
+  `validator.rs:524`, `:573`. It never sees a user-supplied value.
+- A limit supplied through a clarification answer is validated against
+  `validation.max_integer` (`crates/chat/src/job/service/clarification_response.rs:198-210`),
+  but `knowledge/parameters/limit.yaml` declares only `min_integer: 1`, and `max_integer`
+  appears nowhere in `knowledge/`. So that path is unbounded too.
+- `DEFAULT_REPORT_LIMIT = 10` (`parameters.rs:5`) only fills a required, unspecified limit.
+
+**Consequence.** `limit: unbounded` binds `LIMIT 9223372036854775807` with nothing above
+it, and W-I's performance reasoning rests on an enforcement point that does not exist. Any
+capability W-A3 adds inherits the same gap.
+
+**Fix direction.** As W-I decisions 1 and 2: clamp at the resolver boundary where the
+value and its policy are both in hand, record the clamp as an audit-visible annotation,
+and add a configured global backstop for the eleven capabilities with no declared cap.
+Delete or make true the comment at `parameters.rs:299`.
+
+#### F3 — `timeout_ms` and `cost_class` are discarded by the loader
+
+**Confirmed, and broader than stated.** `QueryKnowledge`
+(`crates/chat/src/knowledge/model.rs:249-270`) declares `id`, `database`, `sql_file`,
+`data_areas`, `tables`, `metrics`, `parameters`, `output_fields` and nothing else. There
+is no `deny_unknown_fields`, so `timeout_ms` and `cost_class` are dropped in silence by
+`load_query` in `crates/chat/src/knowledge/catalog/loader.rs`. All 30 query YAMLs declare
+both. The audit missed that all 30 **capability** YAMLs also declare `cost_class`, and
+`CapabilityKnowledge` has no such field either, so that copy is discarded as well.
+
+A third instance sits alongside: `knowledge/policies/execution_limits.yaml` declares
+`query_timeout_ms: 3000`, `max_rows: 100`, `max_date_range_days: 366`, `max_iterations`,
+`max_parallel_queries` and per-capability overrides. Policies load as `GenericKnowledge`,
+and the only uses of `catalog.policies` are ID validation (`validator.rs:82`, `:157`) and
+retrieval text (`crates/chat/src/knowledge/retrieval.rs:59`). No value in that file is
+ever read.
+
+**What protection actually exists: none at the query level.** There is no
+`statement_timeout` set on either pool, no `tokio::time::timeout` around execution, and no
+axum timeout layer. `AppConfig` exposes `default_timeout_ms` from `QUERY_DEFAULT_TIMEOUT_MS`
+(`crates/core/src/config/mod.rs:55`, `:215`, default 3000), and that field has **zero read
+sites** outside the test fixture at `crates/chat/tests/common/mod.rs:425`. It is a fourth
+dead contract, and the most misleading of them, because it is the knob an operator would
+reach for. The only live timeouts in the system are HTTP client timeouts on the LLM and
+embedding clients (`crates/chat/src/assistant/llm/planner_client.rs:44`,
+`llm/rig_client.rs:22`, `knowledge/embedding.rs:20`), which bound calls to the model
+provider, not to Postgres.
+
+**Fix direction.** As W-I decision 3: load `timeout_ms` into `QueryKnowledge`, apply it
+per query, default to `QUERY_DEFAULT_TIMEOUT_MS` when absent (which also gives that config
+field its first reader), and fail the job cleanly with a sanitized message and an audit
+event on exceed. Decide separately whether `cost_class` earns a field or should be deleted
+from all 60 YAML declarations, and whether `execution_limits.yaml` is loaded or removed.
+Whichever way each goes, the YAML must not keep declaring something the loader ignores.
+
+#### F4 — `output_mode` reaches everything except the renderer
+
+**Partly refuted.** `output_mode` is not inert. Six values are declared
+(`crates/chat/src/knowledge/catalog/validator.rs:28-36`: `total`, `top_n`,
+`monthly_breakdown`, `monthly_top_n`, `list`, `summary`) and it has live read sites:
+
+- `crates/chat/src/assistant/understanding/classifier/mod.rs:129`, `:187-195`, `:291-301`
+  derives the default limit and the top-n branch from it.
+- `crates/chat/src/assistant/execution/plan/mod.rs:109` puts it into
+  `retrieval_plan.metadata_filter`; `retrieval/engine.rs:215`,
+  `knowledge/retrieval.rs:235` and `retrieval/reranker.rs:123` carry it into the
+  retrieval and reranking payloads.
+- `plan/mod.rs:96` passes it to `build_answer_plan` (`:160-173`), which picks section
+  names per mode.
+
+The accurate claim is narrower and still a real defect. Nothing in
+`crates/chat/src/assistant/presentation/` reads `plan.output_mode` — neither `builder.rs`
+nor `renderer.rs` mentions it — so all six modes render identically. And
+`AnswerPlan.sections`, the one artefact that does encode the mode, has no read site
+either: the only consumer is a unit test (`execution/plan/tests.rs:41`). Worse, the live
+tool path does not even produce it. `execution/tool/planning.rs:89` and `:121` hard-code
+`sections: ["Result", "Scope", "Evidence"]` and never call `build_answer_plan`, so the
+mode-dependent branch at `plan/mod.rs:161-166` is dead on the path that actually runs.
+
+**Consequence.** A `summary` capability and a `monthly_top_n` capability produce the same
+`response_type: Table`, the same title, and the same section list. This is the mechanism
+behind W-G's observation, stated precisely.
+
+**Fix direction.** Either make the presentation layer consume the mode (W-G decision 2
+argues the card/section shape already exists and only needs populating) or delete
+`AnswerPlan` and the dead `build_answer_plan` branch so the plan stops advertising a
+formatting decision nobody acts on. Do not leave both.
+
+#### F5 — Follow-up handling does not exist
+
+**Confirmed.** `ContextReference` is declared at
+`crates/chat/src/assistant/understanding/intent.rs:191-199`, variants `None` (`:195`),
+`PreviousJob` (`:196`), `PendingClarification` (`:197`), `SessionTopic` (`:198`). A
+whole-workspace grep for `PreviousJob` and `SessionTopic` returns exactly those two
+declaration lines and nothing else — not in production code, not in test fixtures, not in
+examples. `ContextReference::PendingClarification` is constructed at
+`execution/runtime/clarification.rs:157` and `:293`; `context_reference` is otherwise only
+copied through (`runtime/clarification.rs:274`) or set to `None`
+(`runtime/transition.rs:55`, `llm/router.rs:91`, `:193`). There is no `match` on the value
+anywhere, so even the one variant that is written is never branched on.
+
+One detail beyond the audit: the enum derives `Deserialize` and `JsonSchema`, so the LLM
+extractor can legitimately return `previous_job`, it deserialises without error, and
+nothing acts on it. That is a silently accepted input, not merely an unused variant.
+
+**Consequence, and it changes an estimate.** W-H was scoped as extending existing
+follow-up handling. There is none. Nothing carries a prior result set or a prior
+capability forward, so multi-turn drill-down is greenfield: intent, resolver precedence,
+audit lineage and the prior-job lookup all have to be built. W-H's own text already
+reaches this conclusion; this finding confirms it against the code and is the reason W-H's
+recommendation to defer should be accepted rather than revisited.
+
+**Fix direction.** Either document the two variants as reserved with a comment naming the
+follow-up issue (W-H acceptance already asks for this), or delete them until the follow-up
+starts. Whichever is chosen, make the extractor reject or normalise a `previous_job`
+value instead of accepting one it cannot act on.
+
+#### F6 — The markdown renderer escapes nothing
+
+**Confirmed, and broader than stated.** `cell`
+(`crates/chat/src/assistant/presentation/renderer.rs:157-165`) does no escaping of any
+kind: it clones a `Value::String` verbatim and stringifies everything else. `render_table`
+(`:129-155`) writes column labels equally unescaped, though those are safe by construction
+because they come from `field.name.replace('_', " ")` (`builder.rs:317`) over
+YAML-declared identifiers. Cell values are not safe by construction. A `|` in a value
+adds a column to that row; a `\n` in a value ends the table early, which is the same class
+of bug and is not mentioned in the audit claim.
+
+**Which real data can contain a pipe.** The free-text columns reachable through the
+current catalog are operator-entered in Fineract: `m_client.display_name`,
+`m_charge.name`, `m_office.name` and `m_savings_product.name`. None is constrained against
+punctuation. Likelihood is low; the failure is silent and produces a wrong table rather
+than an error, which is the worst combination for an analyst answer.
+
+**Test coverage: none.** `assert_sanitized`
+(`crates/chat/tests/assistant_answer_quality.rs:193-213`) checks only that the job body
+contains no `SELECT `, `m_client`, `m_savings`, backticks, `stack backtrace`, `panic` or
+`routing failed`, and that the plain-text `message` contains no `|---`. It asserts nothing
+about cell contents, so it would not catch a corrupted table. W-G assumes the renderer
+degrades acceptably at analyst width; at 14 columns a single stray pipe shifts every
+subsequent column in that row, and there is no assertion anywhere that would notice.
+
+**Fix direction.** Escape `|` and newlines in `cell`, with a unit test per character. This
+is a two-line change and should not wait for the rest of W-G.
+
+**Files likely touched:** `crates/chat/src/assistant/presentation/builder.rs` (F1, F4),
+`crates/chat/src/assistant/presentation/renderer.rs` (F6),
+`crates/chat/src/knowledge/model.rs` (F1, F3),
+`crates/chat/src/knowledge/catalog/loader.rs` (F3),
+`crates/chat/src/knowledge/catalog/validator.rs` (F1, F3),
+`crates/chat/src/assistant/execution/tool/parameters.rs` (F2),
+`crates/chat/src/assistant/execution/plan/mod.rs` and
+`crates/chat/src/assistant/execution/tool/planning.rs` (F4),
+`crates/chat/src/assistant/understanding/intent.rs` (F5),
+`crates/core/src/config/mod.rs` (F3, giving `default_timeout_ms` a reader),
+`knowledge/capabilities/**/*.yaml` and `knowledge/queries/**/*.yaml` (F1, F3, removing or
+honouring the dropped blocks).
+
+**Acceptance:**
+- No field declared in a capability or query YAML is silently discarded by the loader. A
+  test loads the real catalog and asserts that every top-level key present in the YAML is
+  either represented on the corresponding Rust struct or explicitly listed in a documented
+  ignore set. This is the criterion that stops F1 and F3 recurring.
+- `is_hidden` matches on a parsed sensitivity enum, not a string. A test asserts that a
+  `can_view_pii = false` principal receives neither the value nor the visible column for
+  every query output field labelled `pii`, and the validator rejects a sensitivity class on
+  a query output field that the renderer does not act on.
+- The capability-level `output_fields:` and `pii:` blocks are either loaded and enforced or
+  removed from all 30 capability YAMLs. Not left declared and ignored.
+- A capability with `hard_cap: 100` provably returns at most 100 rows; a capability with no
+  `hard_cap` is bounded by the global backstop; the comment at
+  `execution/tool/parameters.rs:299` is true or gone. (Shared with W-I.)
+- `timeout_ms` is loaded into `QueryKnowledge` and applied per query, and a query exceeding
+  it fails cleanly with a sanitized message and an audit event. `cost_class` is either
+  loaded or deleted from the YAML surface. `execution_limits.yaml` is either loaded or
+  deleted. (Shared with W-I.)
+- Either the presentation layer varies by `output_mode` with a test per declared mode, or
+  `AnswerPlan` and the dead `build_answer_plan` branch are removed. `execution/tool/planning.rs`
+  no longer hard-codes sections while a mode-dependent builder exists.
+- `ContextReference::PreviousJob` and `SessionTopic` are either documented as reserved with
+  a named follow-up issue, or removed. The extractor does not silently accept a value no
+  code acts on.
+- `cell` escapes `|` and newline, with a test asserting a value containing each renders a
+  table whose column count is unchanged.
+
+**Ordering within W-O.** F1 and F2 are correctness and safety and must land **before** the
+analyst capabilities they are supposed to protect, meaning before W-A2 and W-A3 add or
+widen capabilities. F1 because W-A2 edits the exact query YAML whose PII labels are at
+issue and would otherwise bake in a wrong assumption; F2 because W-A2's `unbounded` default
+is what makes the missing cap load-bearing, and capping 30 capabilities is cheaper than
+capping 40. F3 through F6 are correctness of presentation and of declared metadata; they
+can follow W-A3 and land alongside W-G and W-I without blocking anything.
 
 ---
 
@@ -1804,6 +2120,25 @@ This issue is resolved when all of the following hold:
     exists containing everything W-M enumerates. (W-M)
 21. A corresponding frontend issue exists in `ai_report_dashboard`, is linked from E5 by
     identifier, and no criterion above requires frontend code to be merged. (W-N)
+22. No key declared in a capability or query YAML is silently discarded by the loader. A
+    test loads the real catalog and fails on any top-level YAML key that is neither
+    represented on the corresponding Rust struct nor in a documented ignore set. The
+    capability-level `output_fields:` and `pii:` blocks and the `cost_class` field are
+    each either loaded and enforced or deleted from the YAML. (W-O, F1 and F3)
+23. `is_hidden` matches a parsed sensitivity enum rather than a string, the validator
+    rejects a sensitivity class on a query output field that the renderer does not act on,
+    and a test proves a `can_view_pii = false` principal receives neither the value nor the
+    visible column for every `pii` field. The reachability of that gate under chat's admin
+    projection is recorded as a decision, not left implicit. (W-O, F1)
+24. Either the presentation layer varies by `output_mode` with a test per declared mode, or
+    `AnswerPlan` and the unreached `build_answer_plan` branch are deleted. The live tool
+    path does not hard-code sections while a mode-dependent builder still exists.
+    (W-O, F4)
+25. `ContextReference::PreviousJob` and `SessionTopic` are either documented as reserved
+    against a named follow-up issue or removed, and the extractor does not silently accept
+    a `context_reference` value no code acts on. (W-O, F5, with W-H)
+26. `cell` escapes `|` and newline, with a test asserting a value containing each renders a
+    table whose column count is unchanged. (W-O, F6, with W-G)
 
 ## Open questions
 
@@ -1948,6 +2283,58 @@ This issue is resolved when all of the following hold:
   wanted, referencing both issues. Confirm, and record the frontend issue identifier
   against E5 once it exists.
 
+### New open questions raised by W-O
+
+- **[BLOCKING for W-A2] Is the PII gap reachable at all today, and does that change how it
+  is fixed?** `finalize_admin_projection` (`crates/chat/src/policy/authorization.rs:58`)
+  sets `can_view_pii = true` unconditionally on every job create and respond
+  (`job/service/mod.rs:145`, `:242`), and `AGENTS.md` documents this as deliberate. So
+  `is_hidden` never fires on the chat path and there is no live over-disclosure. Two
+  readings follow, and one must be chosen. Either the gate is dormant infrastructure for a
+  future non-admin principal, in which case it must be made correct now and tested against
+  a synthetic `can_view_pii = false` principal, and the capability-level `pii:` blocks must
+  be wired or deleted so a future reviewer is not misled. Or it is dead weight, in which
+  case say so in `AGENTS.md` and delete `is_hidden`, the `pii_hidden` warning and the
+  sensitivity plumbing rather than maintaining a gate nothing can reach. Recommendation:
+  the first. `AGENTS.md` already anticipates a bearer-attached PII boundary, so deleting
+  the mechanism now means rebuilding it later against a wider catalog. Blocking because
+  W-A2 edits the exact query YAML whose labels are in question. This supersedes the earlier
+  "[BLOCKING for W-A2]" entry above, which framed the problem as a `pii_conditional`
+  spelling issue; F1 shows no query YAML uses that value at all.
+- **Should an inert sensitivity label be a hard validator error?** `SENSITIVITY_CLASSES`
+  (`catalog/validator.rs:38-45`) admits six values; `is_hidden` acts on one. Four of the
+  others are currently confined to `knowledge/schema/**`, where nothing reads them, so the
+  gap is latent. Recommendation: yes, make it a hard error. A validator rule that a query
+  `output_fields[].sensitivity` may only carry a class the renderer implements turns a
+  silent no-op into a catalog load failure, which is the only thing that will stop it
+  reappearing the next time someone labels a column thoughtfully and gets nothing. Decide
+  whether the same rule extends to schema knowledge, where the labels are documentation
+  and arguably should stay expressive.
+- **Should the loader reject unknown YAML keys outright?** `QueryKnowledge` and
+  `CapabilityKnowledge` carry no `deny_unknown_fields`, which is how `timeout_ms`,
+  `cost_class`, `output_fields:` and the whole `pii:` block came to be discarded in
+  silence. Turning it on catches every future instance at load, but it is a breaking change
+  for the current YAML until each dropped key is either implemented or deleted, and it
+  would also reject the `checks:` prose blocks that exist deliberately as human
+  documentation. Decide whether the answer is `deny_unknown_fields` plus an explicit
+  `checks`/`source_doc` capture field, or the softer catalog test named in overall
+  criterion 22.
+- **Is `cost_class` worth implementing, or should all 60 declarations be deleted?** It
+  appears on every query and every capability YAML and is read nowhere. Nothing in the
+  issue depends on it. Recommendation: delete, and reintroduce only if W-I's latency work
+  produces a real routing decision that needs it. Confirm.
+- **Is `knowledge/policies/execution_limits.yaml` load-bearing or dead?** It declares
+  `query_timeout_ms`, `max_rows`, `max_date_range_days`, `max_iterations`,
+  `max_parallel_queries` and per-capability overrides, and none of it is read. It overlaps
+  `guards.max_limit`, `guards.max_date_range_days` and `hard_cap`, which are declared per
+  capability. Two sources for one limit is how W-I's fix goes stale. Decide which surface
+  owns execution limits before F2 and F3 land, so the enforcement points read one source.
+- **Does W-C's extraction gateway need to reject an unactionable `context_reference`?** The
+  enum deserialises `previous_job` and `session_topic` from the LLM and nothing consumes
+  either. Silently accepting an input the system cannot honour is the same failure shape as
+  the rest of W-O. Decide whether the gateway normalises them to `none` with an audit
+  annotation, or rejects them, and record it against W-C2 rather than W-H.
+
 ## Suggested execution order for a fresh session
 
 1. **The `charge_due_date` hotfix** (Open questions, second entry) — before anything else,
@@ -1956,32 +2343,49 @@ This issue is resolved when all of the following hold:
 2. **W-M** (loan scope decision) and **W-K** (export in or out) — both are one-paragraph
    decisions with no code, and both change what W-A3's "done" means. Settle them before
    W-A1 writes an inventory against an unknown scope.
-3. **W-A1** next. The inventory is the specification for everything after it.
-4. **W-A2 + W-A4** (savings enrichment and default review) — highest user-visible value.
+3. **W-O F1 and F2** — before W-A1 and hard before W-A2. Both are safety-relevant and both
+   are cheap while the catalog is thirty capabilities. F1 first: W-A2 edits the exact query
+   YAML whose PII labels are wrong, and the blocking open question above has to be answered
+   before that file is touched, or the wrong assumption gets baked into the shipped
+   capability. F2 second: W-A2's `unbounded` default is what turns the missing cap into a
+   real exposure, and enforcing a clamp on thirty capabilities is cheaper than on forty.
+   Neither depends on the inventory, so both can run in parallel with step 2's decisions.
+4. **W-A1** next. The inventory is the specification for everything after it.
+5. **W-A2 + W-A4** (savings enrichment and default review) — highest user-visible value.
    W-J decisions 1, 4 and 5 (currency precision source, fan-out-safe join, symbol in the
    payload) land inside W-A2's SQL rewrite; doing them separately means editing the same
    file twice.
-5. **W-B** (business date everywhere) — can run in parallel with W-A, disjoint files.
-6. **W-I** — immediately after W-A2, before the catalog grows. `hard_cap` and `timeout_ms`
+6. **W-B** (business date everywhere) — can run in parallel with W-A, disjoint files.
+7. **W-I** — immediately after W-A2, before the catalog grows. `hard_cap` and `timeout_ms`
    are unenforced today, and every capability W-A3 adds inherits that gap. Enforcing on
    30 capabilities is cheaper than on 40, and W-A2's `unbounded` default is what makes the
-   gap load-bearing.
-7. **W-D1** (retrieval suite) — needs W-A1 to exist; will surface the real gaps.
-8. **W-A3 + W-D2** together — close catalog and scoring gaps found by D1.
-9. **W-G + W-J remainder** — presentation and money formatting, once W-A3 has settled the
-   final column sets. Doing them earlier means rewriting the builder against field names
-   that are still moving.
-10. **W-E** — lock in the no-clarification guarantee with tests.
-11. **W-L** — after W-A3 and W-I, because it asserts over the finished capability set and
+   gap load-bearing. W-O F2 has already landed the clamp by this point, so what remains
+   here is the global backstop, the truncation warning and W-O F3's `timeout_ms` loading.
+8. **W-D1** (retrieval suite) — needs W-A1 to exist; will surface the real gaps.
+9. **W-A3 + W-D2** together — close catalog and scoring gaps found by D1.
+10. **W-G + W-J remainder + W-O F4 and F6** — presentation and money formatting, once W-A3
+   has settled the final column sets. Doing them earlier means rewriting the builder
+   against field names that are still moving. F4 (`output_mode` in the renderer) and F6
+   (cell escaping) are the same files and the same test module, so they land here rather
+   than as a separate pass. F6 alone is a two-line change and may be pulled forward at any
+   time if a corrupted table is observed before this step.
+11. **W-E** — lock in the no-clarification guarantee with tests.
+12. **W-L** — after W-A3 and W-I, because it asserts over the finished capability set and
    over the audit event types W-I introduces. Its tests are cheap and mostly guard against
    regression, so it is late by dependency, not by priority.
-12. **W-C** — the gateway architecture refactor. Deliberately last among the code
+13. **W-C** — the gateway architecture refactor. Deliberately last among the code
    workstreams: it is cleanup that makes the system auditable and maintainable, but it
    does not by itself fix any currently-observed user-facing failure. Do not let it block
    W-A through W-E.
-13. **W-H** (drill-down preparation) — with or immediately after W-C, since the only work
-   it owes this issue is that W-C2's `PayloadSource` enum stays extensible and the two
-   reserved `ContextReference` variants are documented.
-14. **W-F1/F2 + W-N** — documentation and the cross-repo link, any time after W-A2 and
+14. **W-H + W-O F5** (drill-down preparation) — with or immediately after W-C, since the
+   only work it owes this issue is that W-C2's `PayloadSource` enum stays extensible, the
+   two reserved `ContextReference` variants are documented, and the gateway stops silently
+   accepting a `context_reference` it cannot honour.
+15. **W-F1/F2 + W-N** — documentation and the cross-repo link, any time after W-A2 and
    W-G stabilise the field and response shapes. W-N carries no code, so it can also be
    opened on day one if the frontend team wants lead time.
+
+W-O is deliberately split rather than sequenced as one block. F1 and F2 are safety and
+belong at step 3, before the capabilities they protect exist. F3 rides with W-I, F4 and F6
+with W-G, F5 with W-H, because in each case they touch the same files as work already
+scheduled there and splitting them out would mean editing those files twice.
