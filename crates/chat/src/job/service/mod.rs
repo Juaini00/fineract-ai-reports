@@ -291,10 +291,11 @@ impl JobService {
         let PersistResponseOutcome::Inserted(message) = outcome else {
             return Ok(match outcome {
                 PersistResponseOutcome::NotFound => RespondToChatJobOutcome::NotFound,
-                PersistResponseOutcome::NotActive if structured => {
-                    RespondToChatJobOutcome::NotActive
-                }
-                PersistResponseOutcome::NotActive => RespondToChatJobOutcome::NotFound,
+                // Ownership and existence were already established above, so a
+                // job that is merely inactive must not be reported as missing:
+                // clients that see 404 here would spawn a replacement job,
+                // which the clarification contract forbids.
+                PersistResponseOutcome::NotActive => RespondToChatJobOutcome::NotActive,
                 PersistResponseOutcome::Stale => RespondToChatJobOutcome::Stale,
                 PersistResponseOutcome::Inserted(_) => unreachable!(),
             });
