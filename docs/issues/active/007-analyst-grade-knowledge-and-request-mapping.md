@@ -574,6 +574,9 @@ prior list at all. (See F5: independently re-verified. There is nothing to exten
 drill-down is greenfield, not an increment, which is why decision 4 below should be
 accepted rather than reopened on a smaller estimate.)
 
+See the open question "When may a terminal job accept a further message?" — its answer
+constrains every decision below, and is deliberately deferred to the W-H execution session.
+
 **Decisions to make:**
 
 1. **Re-execute versus cache.** Recommendation: re-execute with a narrowed filter. It is
@@ -1033,10 +1036,11 @@ this issue (the link to the frontend issue), no code.
 
 ### W-O — Latent contract violations
 
-**Objective:** Close six places where a contract is declared in YAML or in a Rust type
-and no code honours it, so that what the catalog says is what the system does.
+**Objective:** Close seven places where a contract is declared — in YAML, in a Rust type,
+or in the HTTP surface — and no code honours it, so that what the system says is what the
+system does.
 
-All six share one failure mode: a declared-but-unhonoured contract. That is worse than an
+F1..F6 share one failure mode: a declared-but-unhonoured contract. That is worse than an
 absent contract for an analyst-facing system, because every reader of the YAML, every
 capability author and every reviewer of a new capability treats the declaration as the
 protection. A `hard_cap: 100` in a capability YAML reads as a row ceiling and is not one.
@@ -1280,6 +1284,76 @@ subsequent column in that row, and there is no assertion anywhere that would not
 **Fix direction.** Escape `|` and newlines in `cell`, with a unit test per character. This
 is a two-line change and should not wait for the rest of W-G.
 
+#### F7 — Responding to an inactive job reports 404 instead of 409
+
+**Confirmed.** This one differs in shape from F1..F6: the declaration that is not honoured
+is not a YAML key, it is the HTTP contract itself. The service reported a job as missing
+when it knew the job existed.
+
+Pre-fix, `JobService::respond` matched `PersistResponseOutcome` at
+`crates/chat/src/job/service/mod.rs:291-301` (as of commit `3a9e548`):
+
+```rust
+PersistResponseOutcome::NotFound => RespondToChatJobOutcome::NotFound,
+PersistResponseOutcome::NotActive if structured => {
+    RespondToChatJobOutcome::NotActive
+}
+PersistResponseOutcome::NotActive => RespondToChatJobOutcome::NotFound,
+```
+
+The `if structured` guard meant only a structured clarification submission
+(`clarification_id` + `clarification_revision` present) received the honest outcome. A
+legacy plain-message submission to the same inactive job fell through to the second arm
+and was reported as `NotFound`.
+
+`crates/chat/src/api/handlers/job.rs:208-213` maps those two outcomes to different HTTP
+responses: `RespondToChatJobOutcome::NotFound` becomes 404 `"chat job not found"`,
+`NotActive` becomes 409 with code `clarification_not_active`.
+
+**The 404 was provably false.** Ownership and existence are established earlier in the same
+function, before the `respond` call: `get_internal_for_user` returns `NotFound` at
+`mod.rs:249` when the job does not exist or belongs to another user, and the structured
+branch returns `NotFound` again at `mod.rs:257` when the job has no memory row. A job that
+reaches the `PersistResponseOutcome` match at `:291` has therefore already been proven to
+exist and to belong to the caller. The only thing the `NotActive` arm knows is that the job
+is no longer accepting responses.
+
+**Consequence.** A client receiving 404 on `POST /chat/jobs/{job_id}/responses` reasonably
+concludes the job is gone and creates a new one. That is exactly what the clarification
+contract forbids: see `docs/issues/active/005-unified-agentic-clarification-contract.md`
+and the "Clarification continues the same job" invariant in `CLAUDE.md`. 409
+`clarification_not_active` tells the client the truth — the job is there, it is simply past
+the point where a response applies — and the client can then decide to start a new job
+deliberately rather than by inference from a wrong status code.
+
+**How it surfaced, because the provenance matters.**
+`cargo test -p chat --test chat_jobs missing_date_range_triggers_clarification_and_continues_same_job`
+passes at commit `197c331` and fails at commit `3a9e548` with
+`responses route must be reachable on the same job, got 404 Not Found`. Bisect isolated the
+cause to commit `27669e1`, which made capabilities whose date parameters declare
+`default: business_today` auto-fill instead of asking. The job in the test's first turn now
+completes rather than waiting for input, so the second turn lands on the `NotActive` path
+and receives the false 404.
+
+**That behavioural change is intended and correct** — auto-filling a defaulted parameter is
+the whole point of W-E and of product decision 2 in this issue. The 404 is a pre-existing
+latent defect that `27669e1` merely made reachable from a test. It belongs here alongside
+F1..F6 rather than being filed as a regression of `27669e1`.
+
+**Fix status: landed on this branch as commit `aebbf29`**, which deletes the `if structured`
+guard so both arms return `RespondToChatJobOutcome::NotActive`, and carries a comment at
+`mod.rs:294-297` recording why. The matching test realignment (renaming
+`missing_date_range_triggers_clarification_and_continues_same_job` to
+`follow_up_message_stays_on_the_same_job` and adding
+`required_parameter_without_default_asks_and_answer_continues_same_job`, which covers the
+still-clarifying path) is in flight in the same commit pair. **Do not fix this twice.** If
+the pair has landed by the time W-O is executed, F7 is verification-only: confirm the arm,
+confirm the two tests, and tick the acceptance criterion.
+
+**Fix direction, if for any reason it has not landed.** Delete the `if structured` guard.
+Do not add a third outcome; 409 `clarification_not_active` already exists and already
+carries the right meaning for both submission styles.
+
 **Files likely touched:** `crates/chat/src/assistant/presentation/builder.rs` (F1, F4),
 `crates/chat/src/assistant/presentation/renderer.rs` (F6),
 `crates/chat/src/knowledge/model.rs` (F1, F3),
@@ -1290,6 +1364,7 @@ is a two-line change and should not wait for the rest of W-G.
 `crates/chat/src/assistant/execution/tool/planning.rs` (F4),
 `crates/chat/src/assistant/understanding/intent.rs` (F5),
 `crates/core/src/config/mod.rs` (F3, giving `default_timeout_ms` a reader),
+`crates/chat/src/job/service/mod.rs` and `crates/chat/tests/chat_jobs.rs` (F7),
 `knowledge/capabilities/**/*.yaml` and `knowledge/queries/**/*.yaml` (F1, F3, removing or
 honouring the dropped blocks).
 
@@ -1319,14 +1394,20 @@ honouring the dropped blocks).
   code acts on.
 - `cell` escapes `|` and newline, with a test asserting a value containing each renders a
   table whose column count is unchanged.
+- Responding to a job that exists, belongs to the caller and is no longer active returns
+  409 `clarification_not_active`, never 404, for both structured and legacy plain-message
+  submissions. A test covers both submission styles.
 
 **Ordering within W-O.** F1 and F2 are correctness and safety and must land **before** the
 analyst capabilities they are supposed to protect, meaning before W-A2 and W-A3 add or
 widen capabilities. F1 because W-A2 edits the exact query YAML whose PII labels are at
 issue and would otherwise bake in a wrong assumption; F2 because W-A2's `unbounded` default
 is what makes the missing cap load-bearing, and capping 30 capabilities is cheaper than
-capping 40. F3 through F6 are correctness of presentation and of declared metadata; they
-can follow W-A3 and land alongside W-G and W-I without blocking anything.
+capping 40. F7 sits with them: it is the client contract, its fix has already landed, and
+leaving it unverified while W-E makes more capabilities auto-complete widens the window in
+which a client can be told a live job is gone. F3 through F6 are correctness of
+presentation and of declared metadata; they can follow W-A3 and land alongside W-G and W-I
+without blocking anything.
 
 ---
 
@@ -2139,6 +2220,11 @@ This issue is resolved when all of the following hold:
     a `context_reference` value no code acts on. (W-O, F5, with W-H)
 26. `cell` escapes `|` and newline, with a test asserting a value containing each renders a
     table whose column count is unchanged. (W-O, F6, with W-G)
+27. Responding to a job that exists, belongs to the caller and is no longer active returns
+    409 `clarification_not_active` and never 404, for both structured and legacy
+    plain-message submissions, with a test covering each. The product question of when a
+    terminal job may accept a further message is answered and recorded against W-H.
+    (W-O, F7, with W-H)
 
 ## Open questions
 
@@ -2271,6 +2357,35 @@ This issue is resolved when all of the following hold:
 - **Is conversational drill-down in scope?** W-H recommends no, as a follow-up, because
   it depends on W-C2 and would make W-C unbounded. Confirm, and if confirmed, open the
   follow-up so the two reserved `ContextReference` variants have a home.
+- **[Deferred to the W-H execution session] When, if ever, may a job that has reached a
+  terminal state accept a further message?** W-O F7 fixed the status code — an inactive job
+  now answers 409 `clarification_not_active` instead of a false 404 — but it did not answer
+  the product question underneath it. Since `27669e1`, capabilities with defaulted
+  parameters complete on the first turn, so a job reaching terminal state without ever
+  asking anything is now the normal case, not the edge case, and the second message an
+  analyst types is far more likely to land on a terminal job than it used to be. Three
+  candidate answers, stated with their honest costs and **deliberately not ranked here**:
+
+  1. **Always reject with 409.** Simple and honest: a terminal job is finished, and a new
+     question is a new job. Costs analyst ergonomics. Drill-down phrasing like "dari list
+     itu mana yang terbesar?" does not map to a user's mental model of starting over, and
+     the burden of deciding when to open a new job moves to the client, which has less
+     information about whether the message is a refinement or a new topic.
+  2. **Accept as a new turn within the same session.** The API accepts the message, a fresh
+     job is created behind the scenes, and the session continues. Closest to how a user
+     already thinks about a chat. Blurs the job boundary that the audit trail is built on:
+     `/management/audit/jobs/{job_id}` is per-job, so the management timeline would need an
+     explicit turn-to-turn link to keep a conversation reconstructable.
+  3. **Accept only when the message references the prior result.** Closest to W-H's stated
+     intent and by a wide margin the most expensive. W-O F5 established that
+     `ContextReference::PreviousJob` and `SessionTopic` are declared and never read, so
+     there is no follow-up handling to extend and no reference detection to reuse; this
+     option is greenfield across intent, resolver precedence and audit lineage.
+
+  **Dependency, explicit:** whichever answer is chosen constrains W-H decisions 1 through 4.
+  If the answer turns out to be the third option, W-H's recommendation to defer drill-down
+  to a follow-up issue should be revisited, because the terminal-job behaviour and the
+  drill-down behaviour then become the same piece of work rather than two.
 - **Loan capabilities: fold into W-A3 or split into issue 008?** W-M recommends splitting,
   and lists what 008 must contain. This supersedes the "scope decision still needed" note
   on the Loan-domain-parity question above. Confirm before W-A3 begins.
@@ -2343,8 +2458,12 @@ This issue is resolved when all of the following hold:
 2. **W-M** (loan scope decision) and **W-K** (export in or out) — both are one-paragraph
    decisions with no code, and both change what W-A3's "done" means. Settle them before
    W-A1 writes an inventory against an unknown scope.
-3. **W-O F1 and F2** — before W-A1 and hard before W-A2. Both are safety-relevant and both
-   are cheap while the catalog is thirty capabilities. F1 first: W-A2 edits the exact query
+3. **W-O F1, F2 and F7** — before W-A1 and hard before W-A2. All three are safety-relevant
+   and all three are cheap while the catalog is thirty capabilities. F7 belongs here because
+   W-E is about to make more capabilities complete on the first turn, which is exactly what
+   pushes a second message onto a terminal job and triggers the wrong status code; check it
+   first, since the fix may already be satisfied by the landed commit `aebbf29` plus its
+   test realignment, in which case F7 costs one test run. F1 first: W-A2 edits the exact query
    YAML whose PII labels are wrong, and the blocking open question above has to be answered
    before that file is touched, or the wrong assumption gets baked into the shipped
    capability. F2 second: W-A2's `unbounded` default is what turns the missing cap into a
@@ -2385,7 +2504,7 @@ This issue is resolved when all of the following hold:
    W-G stabilise the field and response shapes. W-N carries no code, so it can also be
    opened on day one if the frontend team wants lead time.
 
-W-O is deliberately split rather than sequenced as one block. F1 and F2 are safety and
+W-O is deliberately split rather than sequenced as one block. F1, F2 and F7 are safety and
 belong at step 3, before the capabilities they protect exist. F3 rides with W-I, F4 and F6
 with W-G, F5 with W-H, because in each case they touch the same files as work already
 scheduled there and splitting them out would mean editing those files twice.
