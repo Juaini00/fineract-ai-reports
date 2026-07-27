@@ -2406,9 +2406,10 @@ This issue is resolved when all of the following hold:
   and large. Recommended first five, in order: `loans_in_arrears_clients`,
   `loan_overdue_installments`, `loan_outstanding_balances_clients`,
   `loan_unpaid_charges_clients`, `loan_portfolio_summary_by_office` (rationale and source
-  tables in A.2.1). **Scope decision still needed:** these are five full capabilities —
-  fold them into W-A3, or split them into a follow-up issue so W-A3 stays savings-only?
-  Appendix A.2 is the reference either way.
+  tables in A.2.1). **Scope decision RESOLVED (2026-07-27): split into follow-up
+  `docs/issues/active/008-loan-domain-analyst-capabilities.md`.** W-A3 stays savings +
+  client. W-A1 still enumerates loan questions marked `missing` so the gap remains visible
+  here. Appendix A.2 is the reference for 008.
 
 ### New open questions raised by Appendix A
 
