@@ -716,6 +716,13 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
 
     validate_placeholders(query, trimmed)?;
 
+    if !currency_join_is_fanout_safe(&upper) {
+        bail!(
+            "query {} joins m_organisation_currency without LEFT JOIN LATERAL and LIMIT 1",
+            query.id
+        );
+    }
+
     if has_parameter(query, "office_ids") {
         let office_pos = parameter_position(query, "office_ids");
         let expected = format!("ANY(${office_pos}::BIGINT[])");
@@ -755,6 +762,12 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ponytail: string-level guard; join-graph analysis is unnecessary for this one table.
+fn currency_join_is_fanout_safe(sql_upper: &str) -> bool {
+    !sql_upper.contains("M_ORGANISATION_CURRENCY")
+        || (sql_upper.contains("LEFT JOIN LATERAL") && sql_upper.contains("LIMIT 1"))
 }
 
 fn validate_placeholders(query: &QueryKnowledge, sql: &str) -> Result<()> {

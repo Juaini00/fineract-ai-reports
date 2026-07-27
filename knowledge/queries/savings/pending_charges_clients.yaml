@@ -73,6 +73,14 @@ output_fields:
   - name: currency_code
     type: string
     sensitivity: public_business
+  - name: currency_digits
+    type: integer
+    sensitivity: public_business
+    description: m_savings_account.currency_digits, the precision the account was booked at.
+  - name: currency_display_symbol
+    type: string
+    sensitivity: public_business
+    description: Nullable m_organisation_currency.display_symbol; rendering falls back to code.
   - name: amount_due_current
     type: decimal
     sensitivity: public_business
@@ -89,6 +97,10 @@ output_fields:
   - name: amount_written_off
     type: decimal
     sensitivity: public_business
+  - name: amount_levied_total
+    type: decimal
+    sensitivity: public_business
+    description: paid + waived + written_off + outstanding, the total ever levied.
   - name: amount_outstanding
     type: decimal
     sensitivity: public_business
@@ -119,3 +131,5 @@ checks:
     rule: SQL must use a bound LIMIT parameter.
   - id: output_columns_match_contract
     rule: Prepared SQL output columns must equal output_fields order.
+  - id: currency_join_fanout_safe
+    rule: Any join to m_organisation_currency must use LEFT JOIN LATERAL with LIMIT 1.
