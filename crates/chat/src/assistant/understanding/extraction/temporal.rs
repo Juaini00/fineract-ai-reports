@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 
 use super::token::tokens_with_spans;
 use super::{TemporalProvenance, TemporalValidationError};
@@ -12,12 +12,12 @@ pub(super) struct ResolvedTemporal {
 pub(super) fn resolve_temporal(
     message: &str,
     reference_instant: DateTime<Utc>,
+    business_today: NaiveDate,
     max_range_days: i64,
 ) -> Result<Option<ResolvedTemporal>, TemporalValidationError> {
     let lower = message.to_ascii_lowercase();
     let tokens = tokens_with_spans(&lower);
-    let jakarta = FixedOffset::east_opt(7 * 3600).expect("valid Jakarta offset");
-    let today = reference_instant.with_timezone(&jakarta).date_naive();
+    let today = business_today;
     let invalid = |code: &str, message: &str| TemporalValidationError {
         code: code.into(),
         message: message.into(),

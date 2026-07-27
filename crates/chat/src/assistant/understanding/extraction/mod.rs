@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -233,12 +233,14 @@ fn conflict(
 }
 
 pub fn extract_message_facts(message: &str) -> DeterministicExtraction {
-    extract_message_facts_at(message, Utc::now(), 366)
+    let now = Utc::now();
+    extract_message_facts_at(message, now, now.date_naive(), 366)
 }
 
 pub fn extract_message_facts_at(
     message: &str,
     reference_instant: DateTime<Utc>,
+    business_today: NaiveDate,
     max_range_days: i64,
 ) -> DeterministicExtraction {
     let lower = message.to_lowercase();
@@ -246,7 +248,7 @@ pub fn extract_message_facts_at(
     let mut extraction = DeterministicExtraction::default();
 
     extraction.constraints.quantity = extract_quantity(&lower, &words);
-    match resolve_temporal(message, reference_instant, max_range_days) {
+    match resolve_temporal(message, reference_instant, business_today, max_range_days) {
         Ok(Some(resolved)) => {
             extraction.constraints.from_date = Some(resolved.from.to_string());
             extraction.constraints.to_date = Some(resolved.to.to_string());
