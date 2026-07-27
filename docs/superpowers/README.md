@@ -90,7 +90,7 @@ Loans split to [`docs/issues/active/008-loan-domain-analyst-capabilities.md`](..
 | 2 | W-O F1/F2/F7 safety | ✓ | ✓ | implemented | 2026-07-27 |
 | 3 | W-A1 analyst inventory | — | ✓ | implemented | 2026-07-27 |
 | 4 | W-A2/A4 + W-J savings catalog | ✓ | ✓ | implemented | 2026-07-27 |
-| 5 | W-B business date | ✓ | ✓ | planned — not executed | 2026-07-27 |
+| 5 | W-B business date | ✓ | ✓ | implemented | 2026-07-27 |
 | 6 | W-I / F3 query budget | ✓ | ✓ | planned — not executed | 2026-07-27 |
 | 7 | W-D1 retrieval suite | gated | outline | not planned — gated by 3 | 2026-07-27 |
 | 8 | W-A3 / W-D2 | gated | outline | not planned — gated by 7 | 2026-07-27 |

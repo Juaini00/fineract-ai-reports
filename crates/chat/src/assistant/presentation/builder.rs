@@ -410,6 +410,11 @@ mod tests {
                 .expect("Fineract date differs");
         assert_eq!(note.code, "reporting_date");
         assert!(note.message.contains("2026-07-23"));
+        assert!(note.message.contains("2026-07-25"));
+        assert!(
+            ResponseBuilder::reporting_date_note(business, BusinessDateSource::Fineract, business,)
+                .is_none()
+        );
         assert!(
             ResponseBuilder::reporting_date_note(
                 business,

@@ -23,7 +23,7 @@ RED, implement, run it GREEN.
 
 File: `crates/chat/src/assistant/understanding/extraction/temporal.rs`
 
-- [ ] **1.1 (signature + anchor).** Add the `business_today` parameter and replace
+- [x] **1.1 (signature + anchor).** Add the `business_today` parameter and replace
   the wall-clock anchor. Change the top of `resolve_temporal`:
 
   From:
@@ -51,7 +51,7 @@ File: `crates/chat/src/assistant/understanding/extraction/temporal.rs`
       let today = business_today;
   ```
 
-- [ ] **1.2 (drop unused import).** In the `use chrono::{...}` line at the top of
+- [x] **1.2 (drop unused import).** In the `use chrono::{...}` line at the top of
   the file, remove `FixedOffset` (now unused). Result:
   ```rust
   use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
@@ -59,7 +59,7 @@ File: `crates/chat/src/assistant/understanding/extraction/temporal.rs`
   `reference_instant` is still stored into `TemporalProvenance` (unchanged), and
   the `timezone: "Asia/Jakarta"` provenance label stays as-is.
 
-- [ ] **1.3 (compile gate).** `cargo check -p chat` — expect errors only at the
+- [x] **1.3 (compile gate).** `cargo check -p chat` — expect errors only at the
   callers of `resolve_temporal` and `extract_message_facts_at` (fixed in Task 2).
   Confirm no error about `FixedOffset` unused and none inside `temporal.rs` itself.
 
@@ -69,10 +69,10 @@ File: `crates/chat/src/assistant/understanding/extraction/temporal.rs`
 
 File: `crates/chat/src/assistant/understanding/extraction/mod.rs`
 
-- [ ] **2.1 (import).** Ensure `NaiveDate` is imported. The file already imports
+- [x] **2.1 (import).** Ensure `NaiveDate` is imported. The file already imports
   from `chrono` (`DateTime`, `Utc`). Add `NaiveDate` to that import group.
 
-- [ ] **2.2 (convenience fn).** Update `extract_message_facts`:
+- [x] **2.2 (convenience fn).** Update `extract_message_facts`:
   ```rust
   pub fn extract_message_facts(message: &str) -> DeterministicExtraction {
       let now = Utc::now();
@@ -80,7 +80,7 @@ File: `crates/chat/src/assistant/understanding/extraction/mod.rs`
   }
   ```
 
-- [ ] **2.3 (main fn signature + call).** Update `extract_message_facts_at`:
+- [x] **2.3 (main fn signature + call).** Update `extract_message_facts_at`:
   ```rust
   pub fn extract_message_facts_at(
       message: &str,
@@ -96,7 +96,7 @@ File: `crates/chat/src/assistant/understanding/extraction/mod.rs`
 
 File: `crates/chat/src/assistant/execution/runtime/extraction.rs`
 
-- [ ] **2.4 (production call site).** Replace the `extract_for_context` body's
+- [x] **2.4 (production call site).** Replace the `extract_for_context` body's
   `.map(...)` line:
 
   From:
@@ -115,7 +115,7 @@ File: `crates/chat/src/assistant/execution/runtime/extraction.rs`
   })
   ```
 
-- [ ] **2.5 (compile gate).** `cargo check -p chat` — expect remaining errors only
+- [x] **2.5 (compile gate).** `cargo check -p chat` — expect remaining errors only
   in test files (`extraction/tests.rs`) at `extract_message_facts_at(...)` call
   sites. Fixed in Task 3.
 
@@ -125,7 +125,7 @@ File: `crates/chat/src/assistant/execution/runtime/extraction.rs`
 
 File: `crates/chat/src/assistant/understanding/extraction/tests.rs`
 
-- [ ] **3.1 (fix existing 3-arg call sites).** Every existing
+- [x] **3.1 (fix existing 3-arg call sites).** Every existing
   `extract_message_facts_at("...", instant, 366)` call now needs a
   `business_today` argument. For the calls that assert wall-clock-derived dates,
   pass the same date those tests expect so behaviour is preserved. Concretely:
@@ -161,7 +161,7 @@ File: `crates/chat/src/assistant/understanding/extraction/tests.rs`
   Ensure `use chrono::NaiveDate;` (or the existing chrono import) covers `NaiveDate`
   in this test module.
 
-- [ ] **3.2 (RED — new business-date matrix test).** Add this test. It uses a
+- [x] **3.2 (RED — new business-date matrix test).** Add this test. It uses a
   `business_today` that differs from the wall-clock `reference_instant`, so it
   FAILS under the old anchor.
   ```rust
@@ -213,7 +213,7 @@ File: `crates/chat/src/assistant/understanding/extraction/tests.rs`
   }
   ```
 
-- [ ] **3.3 (RED — provenance keeps wall clock).** Add:
+- [x] **3.3 (RED — provenance keeps wall clock).** Add:
   ```rust
   #[test]
   fn provenance_reference_instant_stays_wall_clock() {
@@ -229,14 +229,14 @@ File: `crates/chat/src/assistant/understanding/extraction/tests.rs`
   }
   ```
 
-- [ ] **3.4 (RED run).** `cargo test -p chat relative_expressions_derive_from_business_date_both_languages`
+- [x] **3.4 (RED run).** `cargo test -p chat relative_expressions_derive_from_business_date_both_languages`
   then `cargo test -p chat provenance_reference_instant_stays_wall_clock`.
   Expect FAIL (old anchor produces 2026-07-24/25-based dates). This is only a valid
   RED if Task 1/2 are already applied and compiling — if so, run against the new
   code and they now pass. If you sequenced tests first, temporarily revert 1.1's
   `let today = business_today;` to the old line to observe RED, then restore.
 
-- [ ] **3.5 (GREEN run).** `cargo test -p chat temporal` — all temporal tests pass,
+- [x] **3.5 (GREEN run).** `cargo test -p chat temporal` — all temporal tests pass,
   including the updated `temporal_uses_jakarta_date_and_exact_period_boundaries`
   and `temporal_validates_dates_ranges_and_counts`. Expected tail:
   `test result: ok.`
@@ -247,14 +247,14 @@ File: `crates/chat/src/assistant/understanding/extraction/tests.rs`
 
 File: `crates/chat/src/assistant/presentation/builder.rs`
 
-- [ ] **4.1 (imports).** Add to the top-of-file imports:
+- [x] **4.1 (imports).** Add to the top-of-file imports:
   ```rust
   use crate::assistant::temporal::BusinessDateSource;
   use chrono::NaiveDate;
   ```
   (`ResponseWarning` is already imported at line 10.)
 
-- [ ] **4.2 (RED — helper test).** Add a test module entry (or extend the existing
+- [x] **4.2 (RED — helper test).** Add a test module entry (or extend the existing
   `#[cfg(test)] mod tests` in this file) with:
   ```rust
   #[test]
@@ -292,7 +292,7 @@ File: `crates/chat/src/assistant/presentation/builder.rs`
   }
   ```
 
-- [ ] **4.3 (GREEN — implement helper).** Add inside `impl ResponseBuilder`:
+- [x] **4.3 (GREEN — implement helper).** Add inside `impl ResponseBuilder`:
   ```rust
   /// Note surfaced when the reporting date (tenant business date) differs from
   /// the calendar date, so an analyst is never silently answered "today" with a
@@ -315,12 +315,12 @@ File: `crates/chat/src/assistant/presentation/builder.rs`
   }
   ```
 
-- [ ] **4.4 (RED run then GREEN).** `cargo test -p chat reporting_date_note_only_when_fineract_and_differing`.
+- [x] **4.4 (RED run then GREEN).** `cargo test -p chat reporting_date_note_only_when_fineract_and_differing`.
   Expect FAIL before 4.3 (method missing → compile error), PASS after.
 
 File: `crates/chat/src/assistant/execution/runtime/execution.rs`
 
-- [ ] **4.5 (inject at the single success site).** At the `Ok(result) =>` arm where
+- [x] **4.5 (inject at the single success site).** At the `Ok(result) =>` arm where
   the table response is built (around line 238), capture the response as mutable
   and push the note using the `canonical` context already in scope. Change:
   ```rust
@@ -361,7 +361,7 @@ File: `crates/chat/src/assistant/execution/runtime/execution.rs`
   `execution.rs:19`. `canonical` is the function parameter already read at
   `execution.rs:98,116`.)
 
-- [ ] **4.6 (compile gate).** `cargo check -p chat`. Expect clean.
+- [x] **4.6 (compile gate).** `cargo check -p chat`. Expect clean.
 
 ---
 
@@ -369,7 +369,7 @@ File: `crates/chat/src/assistant/execution/runtime/execution.rs`
 
 File: `crates/chat/src/assistant/temporal/business_date.rs`
 
-- [ ] **5.1 (RED — new test in the existing `mod tests`).** Add:
+- [x] **5.1 (RED — new test in the existing `mod tests`).** Add:
   ```rust
   #[tokio::test]
   async fn resolved_at_is_wall_clock_not_business_date() {
@@ -389,7 +389,7 @@ File: `crates/chat/src/assistant/temporal/business_date.rs`
   }
   ```
 
-- [ ] **5.2 (run — already GREEN).** `cargo test -p chat business_date`. This passes
+- [x] **5.2 (run — already GREEN).** `cargo test -p chat business_date`. This passes
   against current code (every provider sets `resolved_at: Utc::now()`); the test
   exists so a future refactor that swaps in `business_today` fails here. Expected
   tail: `test result: ok.`
@@ -398,12 +398,12 @@ File: `crates/chat/src/assistant/temporal/business_date.rs`
 
 ## Task 6 — Full verification
 
-- [ ] **6.1** `cargo fmt`
-- [ ] **6.2** `cargo check` — expect clean (whole workspace).
-- [ ] **6.3** `cargo test -p chat temporal` — expect `test result: ok.`
-- [ ] **6.4** `cargo test -p chat business_date` — expect `test result: ok.`
-- [ ] **6.5** `cargo test -p chat reporting_date` — expect `test result: ok.`
-- [ ] **6.6** `cargo test -p chat` — expect all green. Pay attention to
+- [x] **6.1** `cargo fmt`
+- [x] **6.2** `cargo check` — expect clean (whole workspace).
+- [x] **6.3** `cargo test -p chat temporal` — expect `test result: ok.`
+- [x] **6.4** `cargo test -p chat business_date` — expect `test result: ok.`
+- [x] **6.5** `cargo test -p chat reporting_date` — expect `test result: ok.`
+- [x] **6.6** `cargo test -p chat` — expect all green. Pay attention to
   `assistant_response.rs`, `scenario_matrix.rs`, and any test asserting a fixed
   `warnings` array: a table response whose canonical fixture has
   `business_today != Jakarta(reference_instant)` and `source == Fineract` will now

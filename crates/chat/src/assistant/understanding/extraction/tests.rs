@@ -189,6 +189,21 @@ fn relative_expressions_derive_from_business_date_both_languages() {
 }
 
 #[test]
+fn provenance_reference_instant_stays_wall_clock() {
+    let wall = reference("2026-07-25T02:00:00Z");
+    let business_today = NaiveDate::from_ymd_opt(2026, 7, 23).unwrap();
+    let extraction = extract_message_facts_at("kemarin", wall, business_today, 366);
+
+    assert_eq!(
+        extraction.constraints.from_date.as_deref(),
+        Some("2026-07-22")
+    );
+    let provenance = extraction.temporal_provenance.expect("temporal provenance");
+    assert_eq!(provenance.reference_instant, wall);
+    assert_eq!(provenance.timezone, "Asia/Jakarta");
+}
+
+#[test]
 fn temporal_reuses_the_same_job_reference_after_clarification() {
     let job_reference = reference("2026-12-31T18:00:00Z");
     let business_today = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
