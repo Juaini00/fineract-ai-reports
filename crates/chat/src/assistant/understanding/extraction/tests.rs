@@ -146,6 +146,49 @@ fn temporal_validates_dates_ranges_and_counts() {
 }
 
 #[test]
+fn relative_expressions_derive_from_business_date_both_languages() {
+    let wall = reference("2026-07-25T02:00:00Z");
+    let business_today = NaiveDate::from_ymd_opt(2026, 7, 23).unwrap();
+    let cases = [
+        ("today", "2026-07-23", "2026-07-23"),
+        ("hari ini", "2026-07-23", "2026-07-23"),
+        ("yesterday", "2026-07-22", "2026-07-22"),
+        ("kemarin", "2026-07-22", "2026-07-22"),
+        ("this week", "2026-07-20", "2026-07-26"),
+        ("minggu ini", "2026-07-20", "2026-07-26"),
+        ("last week", "2026-07-13", "2026-07-19"),
+        ("minggu lalu", "2026-07-13", "2026-07-19"),
+        ("this month", "2026-07-01", "2026-07-31"),
+        ("bulan ini", "2026-07-01", "2026-07-31"),
+        ("last month", "2026-06-01", "2026-06-30"),
+        ("bulan lalu", "2026-06-01", "2026-06-30"),
+        ("this quarter", "2026-07-01", "2026-09-30"),
+        ("kuartal ini", "2026-07-01", "2026-09-30"),
+        ("last quarter", "2026-04-01", "2026-06-30"),
+        ("kuartal lalu", "2026-04-01", "2026-06-30"),
+        ("this year", "2026-01-01", "2026-12-31"),
+        ("tahun ini", "2026-01-01", "2026-12-31"),
+        ("last year", "2025-01-01", "2025-12-31"),
+        ("tahun lalu", "2025-01-01", "2025-12-31"),
+        ("last 3 days", "2026-07-21", "2026-07-23"),
+        ("3 hari terakhir", "2026-07-21", "2026-07-23"),
+    ];
+    for (phrase, from, to) in cases {
+        let extraction = extract_message_facts_at(phrase, wall, business_today, 366);
+        assert_eq!(
+            extraction.constraints.from_date.as_deref(),
+            Some(from),
+            "{phrase}"
+        );
+        assert_eq!(
+            extraction.constraints.to_date.as_deref(),
+            Some(to),
+            "{phrase}"
+        );
+    }
+}
+
+#[test]
 fn temporal_reuses_the_same_job_reference_after_clarification() {
     let job_reference = reference("2026-12-31T18:00:00Z");
     let business_today = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
