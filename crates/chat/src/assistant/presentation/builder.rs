@@ -1,6 +1,8 @@
+use chrono::NaiveDate;
 use serde_json::{Map, Value};
 
 use crate::assistant::execution::plan::{ExecutionPlan, PolicyDecision};
+use crate::assistant::temporal::BusinessDateSource;
 use crate::assistant::{
     AssistantIntent, ClarificationPayload,
     execution::tool::ToolResult,
@@ -16,6 +18,21 @@ use crate::knowledge::model::{KnowledgeCatalog, QueryOutputField, Sensitivity};
 pub struct ResponseBuilder;
 
 impl ResponseBuilder {
+    pub fn reporting_date_note(
+        business_today: NaiveDate,
+        source: BusinessDateSource,
+        wall_today: NaiveDate,
+    ) -> Option<ResponseWarning> {
+        (source == BusinessDateSource::Fineract && business_today != wall_today).then(|| {
+            ResponseWarning {
+                code: "reporting_date".into(),
+                message: format!(
+                    "Reporting date is the Fineract business date {business_today}, which differs from the calendar date {wall_today}."
+                ),
+            }
+        })
+    }
+
     pub fn from_tool_result(
         _intent: &AssistantIntent,
         plan: &ExecutionPlan,
@@ -382,6 +399,25 @@ mod tests {
         assert_eq!(table.rows, vec![json!({ "name": "Ada" })]);
         assert_eq!(response.warnings[0].code, "pii_hidden");
         assert!(response.rendered_markdown.unwrap().contains("Ada"));
+    }
+
+    #[test]
+    fn reporting_date_note_only_when_fineract_and_differing() {
+        let business = NaiveDate::from_ymd_opt(2026, 7, 23).unwrap();
+        let wall = NaiveDate::from_ymd_opt(2026, 7, 25).unwrap();
+        let note =
+            ResponseBuilder::reporting_date_note(business, BusinessDateSource::Fineract, wall)
+                .expect("Fineract date differs");
+        assert_eq!(note.code, "reporting_date");
+        assert!(note.message.contains("2026-07-23"));
+        assert!(
+            ResponseBuilder::reporting_date_note(
+                business,
+                BusinessDateSource::WallClockFallback,
+                wall,
+            )
+            .is_none()
+        );
     }
 
     #[test]

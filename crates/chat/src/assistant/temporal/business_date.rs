@@ -173,6 +173,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolved_at_is_wall_clock_not_business_date() {
+        let before = Utc::now();
+        let provider = StaticBusinessDateProvider {
+            value: NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            source: BusinessDateSource::Fineract,
+        };
+        let result = provider.today().await.unwrap();
+        let after = Utc::now();
+
+        assert!(result.resolved_at >= before && result.resolved_at <= after);
+        assert_ne!(result.resolved_at.date_naive(), result.date);
+    }
+
+    #[tokio::test]
     async fn static_provider_can_signal_wall_clock_fallback() {
         let provider = StaticBusinessDateProvider {
             value: NaiveDate::from_ymd_opt(2026, 7, 24).unwrap(),

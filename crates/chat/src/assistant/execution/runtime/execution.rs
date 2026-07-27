@@ -235,13 +235,28 @@ pub(super) async fn execute_selected_capability(
         Ok(result) => {
             let tool_result =
                 super::super::tool::tool_result_from_execution(&tool_request, result.clone());
-            let response = ResponseBuilder::from_tool_result(
+            let mut response = ResponseBuilder::from_tool_result(
                 intent.as_ref().expect("successful execution has intent"),
                 &plan,
                 &policy,
                 &tool_result,
                 catalog,
             );
+            if let Some(context) = canonical {
+                let jakarta =
+                    chrono::FixedOffset::east_opt(7 * 3600).expect("valid Jakarta offset");
+                let wall_today = context
+                    .reference_instant
+                    .with_timezone(&jakarta)
+                    .date_naive();
+                if let Some(note) = ResponseBuilder::reporting_date_note(
+                    context.business_today,
+                    context.business_date_source,
+                    wall_today,
+                ) {
+                    response.warnings.push(note);
+                }
+            }
             let mut result_state = graph_result(
                 memory,
                 TerminalState::Completed,
