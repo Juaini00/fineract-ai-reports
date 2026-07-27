@@ -46,7 +46,7 @@ use crate::assistant::{
     retrieval::RetrievalEngine,
     stable_uuid,
 };
-use crate::chat::executor::execute_plan;
+use crate::execution::repository::execute_plan;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
 

@@ -7,7 +7,7 @@ This file is the short source of truth for the current development state. Detail
 - Rust workspace has exactly three crates: `app`, `core`, and `chat`.
 - `app` is the binary entrypoint and composition root.
 - `core` owns shared foundation: config, tracing, database pools, API primitives, auth, extractors, response envelope, validation, and `ClientContext`.
-- `chat` owns `api`, `conversation`, durable `job`, assistant understanding/context/retrieval/state/execution/presentation/LLM boundaries, `knowledge`, `policy`, `audit`, and the legacy approved-SQL executor.
+- `chat` owns `api`, `conversation`, durable `job`, assistant understanding/context/retrieval/state/execution/presentation/LLM boundaries, `knowledge`, `policy`, `audit`, and the approved-SQL execution repository.
 - Do not add `api`, `infra`, `runtime`, `knowledge`, `reporting`, or `ai_report_*` crates yet.
 
 ## Completed foundation
@@ -40,7 +40,7 @@ This file is the short source of truth for the current development state. Detail
 - Semantic assistant components are present in this working tree: graph runtime, semantic router boundary, source-intent clarification preservation, retrieval/evidence selection, guarded approved-catalog SQL tool execution, policy blocking, structured response authority, markdown rendering, and scenario/golden contract coverage are wired.
 - Deterministic/catalog-aware parameter extraction is partial hardening: quantity/limit, ISO date ranges, currency, domain hints, and a few metric hints are merged before retrieval/execution, with broader coverage and provenance tests still pending.
 - Primary runtime deterministic keyword/capability fallbacks are removed; no-router operation fails closed instead of silently routing by prompt text.
-- Legacy formatter-first paths are deleted/quarantined; `chat/formatter/labels.rs` remains only as a label utility if referenced.
+- Legacy formatter, compatibility façade, and strict pipeline paths are removed; approved-SQL execution lives in `execution::repository`, semantic LLM parsing in `assistant::llm::semantic`, and LQR in `assistant::understanding::lqr`.
 - LQR is available behind `LQR_ENABLED=false` and is not the default path yet.
 
 ## Reporting capability state

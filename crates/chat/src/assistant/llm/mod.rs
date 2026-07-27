@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub mod planner_client;
 pub mod rig_client;
 pub mod router;
+pub mod semantic;
 pub mod traced_client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

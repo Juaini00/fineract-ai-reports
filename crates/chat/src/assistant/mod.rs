@@ -1,6 +1,5 @@
 pub mod context;
 pub mod execution;
-pub mod legacy_pipeline;
 pub mod llm;
 pub mod presentation;
 pub mod retrieval;

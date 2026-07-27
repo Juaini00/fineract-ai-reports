@@ -1,10 +1,10 @@
+use chat::assistant::execution::plan::{
+    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision,
+    PolicyDecisionStatus, RetrievalPlan,
+};
 use chat::assistant::{
     AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
     ContextReference, ResponseBuilder, ToolResult,
-};
-use chat::chat::planner::{
-    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision,
-    PolicyDecisionStatus, RetrievalPlan,
 };
 use chat::knowledge::model::{KnowledgeCatalog, QueryKnowledge, QueryOutputField};
 use serde_json::json;

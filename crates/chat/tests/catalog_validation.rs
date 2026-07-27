@@ -5,7 +5,7 @@
 
 use app_core::auth::model::PrincipalContext;
 use chat::assistant::ClarificationFieldType;
-use chat::chat::planner::{
+use chat::assistant::execution::plan::{
     AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
     RetrievalPlan, evaluate_policy,
 };
