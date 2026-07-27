@@ -6,7 +6,7 @@ use chat::assistant::{
     AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
     ContextReference, ResponseBuilder, ToolResult,
 };
-use chat::knowledge::model::{KnowledgeCatalog, QueryKnowledge, QueryOutputField};
+use chat::knowledge::model::{KnowledgeCatalog, QueryKnowledge, QueryOutputField, Sensitivity};
 use serde_json::json;
 
 #[test]
@@ -155,6 +155,10 @@ fn field(name: &str, kind: &str, sensitivity: &str) -> QueryOutputField {
     QueryOutputField {
         name: name.into(),
         kind: kind.into(),
-        sensitivity: sensitivity.into(),
+        sensitivity: match sensitivity {
+            "public_business" => Sensitivity::PublicBusiness,
+            "pii" => Sensitivity::Pii,
+            other => panic!("unsupported test sensitivity {other}"),
+        },
     }
 }

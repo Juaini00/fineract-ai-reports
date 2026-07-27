@@ -28,11 +28,6 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit_per_month: 20
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-  - client_id
-  - client_display_name
 cost_class: high
 checks:
 - id: query_exists

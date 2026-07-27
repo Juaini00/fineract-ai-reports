@@ -35,14 +35,6 @@ const OUTPUT_MODES: &[&str] = &[
 ];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];
 const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "array_bigint"];
-const SENSITIVITY_CLASSES: &[&str] = &[
-    "public_business",
-    "pii",
-    "sensitive_business_identifier",
-    "security_sensitive",
-    "secret_never_expose",
-    "free_text_sensitive",
-];
 const UNSAFE_SQL_COMMANDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP", "ALTER", "CREATE", "GRANT", "REVOKE", "COPY",
     "VACUUM", "ANALYZE",
@@ -292,13 +284,6 @@ impl KnowledgeValidator {
                 if field.name.trim().is_empty() {
                     bail!("query {} has output field with empty name", query.id);
                 }
-
-                validate_status(
-                    "query output sensitivity",
-                    &format!("{}.{}", query.id, field.name),
-                    &field.sensitivity,
-                    SENSITIVITY_CLASSES,
-                )?;
             }
 
             let sql_path = resolve_sql_path(catalog, query);

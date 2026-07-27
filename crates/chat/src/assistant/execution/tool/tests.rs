@@ -357,7 +357,7 @@ fn defaults_business_today_when_policy_declares_it() {
 }
 
 #[test]
-fn defaults_unbounded_limit_when_policy_declares_it() {
+fn unbounded_limit_is_clamped_to_hard_cap() {
     use crate::knowledge::catalog::parameter_policy::{
         DefaultExpr, EvaluationContext, ParameterPolicy, ParameterType,
     };
@@ -396,7 +396,49 @@ fn defaults_unbounded_limit_when_policy_declares_it() {
     )
     .unwrap();
 
-    assert_eq!(params["limit"], i64::MAX);
+    assert_eq!(params["limit"], 100);
+}
+
+#[test]
+fn hard_cap_clamps_over_cap_and_preserves_within_cap_values() {
+    let policies = [
+        crate::knowledge::catalog::parameter_policy::ParameterPolicy {
+            name: "limit".into(),
+            kind: crate::knowledge::catalog::parameter_policy::ParameterType::Integer,
+            required: false,
+            default: None,
+            fill_when_missing: true,
+            user_may_override: true,
+            hard_cap: Some(100),
+        },
+    ];
+    let mut over = serde_json::Map::from_iter([("limit".into(), serde_json::json!(5_000))]);
+    super::parameters::clamp_hard_caps(&mut over, &policies);
+    assert_eq!(over["limit"], 100);
+
+    let mut within = serde_json::Map::from_iter([("limit".into(), serde_json::json!(25))]);
+    super::parameters::clamp_hard_caps(&mut within, &policies);
+    assert_eq!(within["limit"], 25);
+}
+
+#[test]
+fn limit_without_hard_cap_is_not_clamped() {
+    let mut params = serde_json::Map::from_iter([("limit".into(), serde_json::json!(5_000))]);
+    let policies = [
+        crate::knowledge::catalog::parameter_policy::ParameterPolicy {
+            name: "limit".into(),
+            kind: crate::knowledge::catalog::parameter_policy::ParameterType::Integer,
+            required: false,
+            default: None,
+            fill_when_missing: true,
+            user_may_override: true,
+            hard_cap: None,
+        },
+    ];
+
+    super::parameters::clamp_hard_caps(&mut params, &policies);
+
+    assert_eq!(params["limit"], 5_000);
 }
 
 #[test]

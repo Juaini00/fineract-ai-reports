@@ -39,33 +39,7 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-  - client_id
-  - client_display_name
-  omitted_when_cannot_view_pii:
-  - client_id
-  - client_display_name
-  never_return:
-  - account_no
-  - external_id
-  - ref_no
-  - payment_detail_id
 cost_class: medium
-output_fields:
-  public:
-  - transaction_id
-  - transaction_date
-  - amount
-  - currency_code
-  - office_id
-  - office_name
-  - product_id
-  - product_name
-  pii_conditional:
-  - client_id
-  - client_display_name
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

@@ -27,8 +27,6 @@ defaults:
 guards:
   require_office_scope: true
   snapshot_only: true
-pii:
-  returns_pii: false
 cost_class: low
 checks:
 - id: query_exists

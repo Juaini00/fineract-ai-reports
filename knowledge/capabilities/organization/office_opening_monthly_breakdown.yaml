@@ -32,8 +32,6 @@ defaults:
 guards:
   require_office_scope: true
   max_date_range_days: 1096
-pii:
-  returns_pii: false
 cost_class: low
 checks:
 - id: query_exists

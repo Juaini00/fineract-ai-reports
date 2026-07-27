@@ -30,8 +30,6 @@ defaults:
 guards:
   require_office_scope: true
   max_limit: 100
-pii:
-  returns_pii: true
 cost_class: low
 checks:
 - id: query_exists

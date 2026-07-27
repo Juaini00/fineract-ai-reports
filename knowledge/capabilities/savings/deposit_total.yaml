@@ -38,20 +38,7 @@ defaults:
 guards:
   require_office_scope: true
   max_date_range_days: 366
-pii:
-  returns_pii: false
-  behavior: aggregate_only
-  never_return:
-  - client_display_name
-  - account_no
-  - external_id
-  - ref_no
 cost_class: low
-output_fields:
-- from_date
-- to_date
-- total_deposit_amount
-- deposit_count
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

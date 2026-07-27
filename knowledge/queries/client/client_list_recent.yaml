@@ -20,7 +20,7 @@ parameters:
 output_fields:
   - name: client_id
     type: bigint
-    sensitivity: pii
+    sensitivity: public_business
   - name: client_display_name
     type: string
     sensitivity: pii

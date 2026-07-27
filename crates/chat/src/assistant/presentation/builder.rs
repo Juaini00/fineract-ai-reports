@@ -11,7 +11,7 @@ use crate::assistant::{
         TableColumnKind,
     },
 };
-use crate::knowledge::model::{KnowledgeCatalog, QueryOutputField};
+use crate::knowledge::model::{KnowledgeCatalog, QueryOutputField, Sensitivity};
 
 pub struct ResponseBuilder;
 
@@ -329,7 +329,10 @@ fn table_column(field: &QueryOutputField, can_view_pii: bool) -> TableColumn {
 }
 
 fn is_hidden(field: &QueryOutputField, can_view_pii: bool) -> bool {
-    !can_view_pii && field.sensitivity == "pii"
+    match field.sensitivity {
+        Sensitivity::Pii => !can_view_pii,
+        Sensitivity::PublicBusiness => false,
+    }
 }
 
 #[cfg(test)]
@@ -343,7 +346,7 @@ mod tests {
             AssistantConstraints, AssistantDomain, AssistantIntentKind, AssistantLanguage,
             ContextReference,
         },
-        knowledge::model::{KnowledgeCatalog, QueryKnowledge},
+        knowledge::model::{KnowledgeCatalog, QueryKnowledge, Sensitivity},
     };
     use serde_json::json;
 
@@ -379,6 +382,18 @@ mod tests {
         assert_eq!(table.rows, vec![json!({ "name": "Ada" })]);
         assert_eq!(response.warnings[0].code, "pii_hidden");
         assert!(response.rendered_markdown.unwrap().contains("Ada"));
+    }
+
+    #[test]
+    fn public_business_columns_are_never_hidden_even_without_pii_access() {
+        let field = QueryOutputField {
+            name: "amount".into(),
+            kind: "decimal".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+        };
+
+        assert!(!is_hidden(&field, false));
+        assert!(!is_hidden(&field, true));
     }
 
     fn intent() -> AssistantIntent {
@@ -432,12 +447,12 @@ mod tests {
                     QueryOutputField {
                         name: "name".into(),
                         kind: "string".into(),
-                        sensitivity: "public_business".into(),
+                        sensitivity: Sensitivity::PublicBusiness,
                     },
                     QueryOutputField {
                         name: "national_id".into(),
                         kind: "string".into(),
-                        sensitivity: "pii".into(),
+                        sensitivity: Sensitivity::Pii,
                     },
                 ],
             }],
