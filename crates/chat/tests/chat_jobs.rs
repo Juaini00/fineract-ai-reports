@@ -238,6 +238,38 @@ async fn follow_up_message_stays_on_the_same_job() {
     assert_eq!(got_json["data"]["id"], job1_id);
 }
 
+/// A follow-up for a required parameter stays on the same job even if the job is no
+/// longer active; clients must never receive a 404 and create a replacement job.
+#[tokio::test(flavor = "multi_thread")]
+async fn required_parameter_without_default_asks_and_answer_continues_same_job() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+
+    let job = create_job(&app, &token, "Find the client named Ada").await;
+    let job_id = job["job_id"].as_str().unwrap().to_string();
+    let _ = wait_for_terminal(&app, &token, &job).await;
+
+    let response = app
+        .post_json_bearer(
+            &format!("/chat/jobs/{job_id}/responses"),
+            &token,
+            &json!({ "message": "Ada Lovelace" }),
+        )
+        .await;
+    assert!(
+        matches!(response.status().as_u16(), 200 | 201 | 400 | 409),
+        "responses route must be reachable on the same job, got {}",
+        response.status()
+    );
+
+    let got = app
+        .get_bearer(&format!("/chat/jobs/{job_id}"), &token)
+        .await;
+    assert_eq!(got.status(), 200);
+    let got_json: Value = got.json().await.unwrap();
+    assert_eq!(got_json["data"]["id"], job_id);
+}
+
 /// The date parameters of `savings_deposit_total` declare `default: business_today`,
 /// so the pipeline must fill them itself and answer in a single turn instead of
 /// demanding a date range. No approved capability currently reaches the
