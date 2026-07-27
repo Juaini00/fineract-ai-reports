@@ -929,4 +929,21 @@ mod tests {
             Some("bigint[]")
         );
     }
+
+    #[test]
+    fn currency_join_lateral_is_safe() {
+        let sql = "SELECT sa.currency_code FROM m_savings_account sa LEFT JOIN LATERAL (SELECT display_symbol FROM m_organisation_currency WHERE code = sa.currency_code LIMIT 1) cur ON true";
+        assert!(currency_join_is_fanout_safe(&sql.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn plain_currency_equality_join_is_rejected() {
+        let sql = "SELECT sa.currency_code FROM m_savings_account sa LEFT JOIN m_organisation_currency cur ON cur.code = sa.currency_code";
+        assert!(!currency_join_is_fanout_safe(&sql.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn query_without_currency_table_is_unaffected() {
+        assert!(currency_join_is_fanout_safe("SELECT C.ID FROM M_CLIENT C"));
+    }
 }

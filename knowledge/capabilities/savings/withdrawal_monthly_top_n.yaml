@@ -44,7 +44,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: business_today - 12m
     fill_when_missing: true
   to_date:
     type: date
@@ -65,5 +65,5 @@ parameters:
   limit:
     type: integer
     required: false
-    default: unbounded
+    default: "10"
     hard_cap: 10000

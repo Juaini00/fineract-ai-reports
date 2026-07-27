@@ -46,7 +46,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date
