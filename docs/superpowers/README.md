@@ -89,7 +89,7 @@ Loans split to [`docs/issues/active/008-loan-domain-analyst-capabilities.md`](..
 | 1 | gating decisions (W-M/W-K/W-N) | — | — | implemented (008 created) | 2026-07-27 |
 | 2 | W-O F1/F2/F7 safety | ✓ | ✓ | implemented | 2026-07-27 |
 | 3 | W-A1 analyst inventory | — | ✓ | implemented | 2026-07-27 |
-| 4 | W-A2/A4 + W-J savings catalog | ✓ | ✓ | planned — not executed | 2026-07-27 |
+| 4 | W-A2/A4 + W-J savings catalog | ✓ | ✓ | implemented | 2026-07-27 |
 | 5 | W-B business date | ✓ | ✓ | planned — not executed | 2026-07-27 |
 | 6 | W-I / F3 query budget | ✓ | ✓ | planned — not executed | 2026-07-27 |
 | 7 | W-D1 retrieval suite | gated | outline | not planned — gated by 3 | 2026-07-27 |

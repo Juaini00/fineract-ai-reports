@@ -76,3 +76,40 @@
 | L3 | Sisa pokok pinjaman per nasabah | Outstanding loan balance per client | client, loan, principal, total, currency | none | `loan_outstanding_balances_clients` | missing |
 | L4 | Charge pinjaman belum dibayar | Clients with unpaid loan charges | client, charge, outstanding, currency | none | `loan_unpaid_charges_clients` | missing |
 | L5 | Ringkasan portofolio pinjaman per kantor | Loan portfolio summary per office | office, loan count, outstanding, arrears, currency | none | `loan_portfolio_summary_by_office` | missing |
+
+## W-A4 temporal & limit default decisions (E4)
+
+Point-in-time reports retain `business_today`. Month-grouped reports use the trailing 12 months; single-period reports use month-to-date. Genuine rankings default to 10 rows, while analyst detail lists remain `unbounded` under a `hard_cap`. Derived `amount_levied_total`, `days_overdue`, and `charge_timing_enum` are `public_business`: none identifies a person.
+
+| Capability | Date class / action | Limit action |
+| --- | --- | --- |
+| `savings_balance_summary` | point-in-time / business_today | none |
+| `savings_pending_charges_clients` | point-in-time / business_today | unbounded, hard_cap 10000 |
+| `savings_deposit_total` | rolling single / start_of_month(business_today) | none |
+| `savings_withdrawal_total` | rolling single / start_of_month(business_today) | none |
+| `savings_deposit_top_n` | rolling single / start_of_month(business_today) | default 10, hard_cap retained |
+| `savings_withdrawal_top_n` | rolling single / start_of_month(business_today) | default 10, hard_cap retained |
+| `savings_activity_list` | rolling single / start_of_month(business_today) | unbounded, hard_cap retained |
+| `savings_deposit_monthly_breakdown` | rolling monthly / business_today - 12m | none |
+| `savings_withdrawal_monthly_breakdown` | rolling monthly / business_today - 12m | none |
+| `savings_deposit_monthly_top_n` | rolling monthly / business_today - 12m | default 10, hard_cap retained |
+| `savings_withdrawal_monthly_top_n` | rolling monthly / business_today - 12m | default 10, hard_cap retained |
+| `client_list_recent` | point-in-time / business_today | unbounded, hard_cap retained |
+| `client_name_lookup` | no date | user-required name |
+| `client_lifecycle_summary` | point-in-time / business_today | none |
+| `client_activation_monthly_breakdown` | rolling monthly / business_today - 12m | none |
+| `client_activation_top_n_offices` | rolling single / start_of_month(business_today) | default 10, hard_cap retained |
+| `client_random_sample` | point-in-time / business_today | default/hard_cap retained |
+| `client_summary_by_office` | point-in-time / business_today | none |
+| `client_top_n_by_deposit_volume` | rolling single / start_of_month(business_today) | default 10, hard_cap retained |
+| `client_top_n_by_savings_account_count` | point-in-time / business_today | default 10, hard_cap retained |
+| `client_top_n_by_savings_balance` | point-in-time / business_today | default 10, hard_cap retained |
+| `organization_hierarchy_summary` | no date | none |
+| `organization_office_activity_ranking` | rolling single / start_of_month(business_today) | default 10, hard_cap retained |
+| `organization_office_client_summary` | point-in-time / business_today | none |
+| `organization_office_dormant` | rolling single / start_of_month(business_today) | unbounded, hard_cap retained |
+| `organization_office_hierarchy_tree` | no date | none |
+| `office_list_basic` | no date | default/hard_cap retained |
+| `organization_office_opening_monthly_breakdown` | rolling monthly / business_today - 12m | none |
+| `organization_office_savings_summary` | point-in-time / business_today | default/hard_cap retained |
+| `organization_office_summary` | point-in-time / business_today | none |
