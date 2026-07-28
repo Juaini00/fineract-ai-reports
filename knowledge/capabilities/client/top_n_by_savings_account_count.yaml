@@ -21,6 +21,7 @@ request_shape:
 examples:
 - Top 10 clients by number of savings accounts.
 - Which clients have the most savings accounts?
+- Nasabah dengan jumlah rekening tabungan aktif terbanyak.
 supported_intents:
 - ranking clients by count of active savings accounts
 unsupported_intents:

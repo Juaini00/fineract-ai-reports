@@ -203,6 +203,44 @@ fn top_n_by_savings_account_count_selected_for_rank_query() {
 }
 
 #[test]
+fn normalized_catalog_fallback_preserves_specific_six_term_rank_gap() {
+    use chat::assistant::retrieval::catalog_fallback;
+
+    let intent = make_intent(AssistantDomain::Client, RequestSubject::Client);
+    let plan = RetrievalPlan::new(
+        "alpha bravo charlie delta echo foxtrot",
+        &intent,
+        true,
+        vec![],
+    );
+    let mut specific = make_capability("specific", "client", RequestSubject::Client);
+    specific.description = Some("alpha bravo charlie delta echo foxtrot".into());
+    let mut broad = make_capability("broad", "client", RequestSubject::Client);
+    broad.description = Some("alpha bravo charlie delta echo".into());
+    let catalog = KnowledgeCatalog {
+        capabilities: vec![specific, broad],
+        ..catalog_with(make_capability("_", "_", RequestSubject::Client))
+    };
+
+    let evidence = catalog_fallback(&plan, &catalog);
+    let specific_score = evidence
+        .iter()
+        .find(|candidate| candidate.capability_id == "specific")
+        .expect("specific candidate")
+        .score;
+    let broad_score = evidence
+        .iter()
+        .find(|candidate| candidate.capability_id == "broad")
+        .expect("broad candidate")
+        .score;
+
+    assert!(
+        specific_score - broad_score >= 0.05,
+        "specific={specific_score} broad={broad_score}"
+    );
+}
+
+#[test]
 fn build_retrieval_trace_emits_expected_top_level_keys() {
     use chat::assistant::evidence::Evidence;
     use chat::assistant::reranker::RerankerDecision;
@@ -285,9 +323,9 @@ struct ScoringGap {
     observed_top_id: &'static str,
 }
 
-// Direct transcription of the 29 `covered` rows in
-// docs/product/analyst-question-inventory.md. This is deliberately test data,
-// not a second knowledge source: the loaded catalog remains authoritative.
+// Direct transcription of the 31 covered savings, client, and organization
+// rows in docs/product/analyst-question-inventory.md. This is deliberately test
+// data, not a second knowledge source: the loaded catalog remains authoritative.
 const COVERED_INVENTORY: &[BilingualInventoryCase] = &[
     BilingualInventoryCase {
         id: "1",
@@ -463,11 +501,6 @@ const COVERED_INVENTORY: &[BilingualInventoryCase] = &[
         english: "Office summary with active staff",
         capability_id: "organization_office_summary",
     },
-];
-
-// Partial inventory rows describe catalog field gaps, so they intentionally do
-// not count as rank-one retrieval support until Bundle 8 fills those fields.
-const PARTIAL_INVENTORY: &[BilingualInventoryCase] = &[
     BilingualInventoryCase {
         id: "G1",
         indonesian: "Total charge yang pernah dikenakan berapa?",
@@ -478,7 +511,7 @@ const PARTIAL_INVENTORY: &[BilingualInventoryCase] = &[
         id: "G2",
         indonesian: "Charge mana yang benar-benar overdue saja?",
         english: "Which savings charges are strictly overdue only?",
-        capability_id: "savings_pending_charges_clients",
+        capability_id: "savings_strictly_overdue_charges_clients",
     },
 ];
 
@@ -515,10 +548,8 @@ const MISSING_INVENTORY: &[BilingualInventoryCase] = &[
     },
 ];
 
-// These are failures observed in the RED run against the shipped Bundle 4
-// catalog. Keep this list exact: resolving a gap must make this regression
-// fail until Bundle 8 removes the row, rather than silently lowering a floor
-// or accepting a different wrong winner.
+// Historical observations from Bundle 7's red audit. They no longer relax the
+// covered-row acceptance test; the documented ledger preserves the evidence.
 const BUNDLE_8_SCORING_GAPS: &[ScoringGap] = &[
     ScoringGap {
         inventory_id: "2",
@@ -662,9 +693,7 @@ const BUNDLE_8_SCORING_GAPS: &[ScoringGap] = &[
     },
 ];
 
-// Scores are part of the ledger, not incidental test output. The tolerance only
-// absorbs f32 representation; a catalog/scorer change must consciously update
-// this ledger or, preferably, remove the row by making it pass.
+// Scores are historical audit evidence, not incidental test output.
 const BUNDLE_8_GAP_SCORES: &[(&str, &str, f32, f32)] = &[
     ("2", "en", 0.99, 0.99),
     ("3", "en", 0.90, 0.90),
@@ -695,6 +724,17 @@ const BUNDLE_8_GAP_SCORES: &[(&str, &str, f32, f32)] = &[
     ("29", "id", 0.79, 0.75),
     ("29", "en", 0.99, 0.94),
 ];
+
+#[test]
+fn bundle_7_scoring_ledger_retains_every_remediated_observation() {
+    assert_eq!(BUNDLE_8_SCORING_GAPS.len(), 28);
+    assert_eq!(BUNDLE_8_GAP_SCORES.len(), BUNDLE_8_SCORING_GAPS.len());
+    assert!(BUNDLE_8_SCORING_GAPS.iter().any(|gap| {
+        gap.inventory_id == "2"
+            && gap.language == "en"
+            && gap.observed_top_id == "client_top_n_by_deposit_volume"
+    }));
+}
 
 fn inventory_intent(
     capability: &CapabilityKnowledge,
@@ -864,7 +904,6 @@ fn bilingual_covered_inventory_rows_rank_first_and_clear_policy_thresholds() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let catalog = load_real_catalog();
         let mut unexpected = Vec::new();
-        let mut observed_gaps = Vec::new();
 
         for case in COVERED_INVENTORY {
             for (language, language_code, phrase) in [
@@ -880,55 +919,22 @@ fn bilingual_covered_inventory_rows_rank_first_and_clear_policy_thresholds() {
                 .await;
                 let top = evidence.first();
                 let top_score = top.map_or(0.0, |candidate| candidate.score);
-                let second_score = evidence.get(1).map_or(0.0, |candidate| candidate.score);
+                let second = evidence.get(1);
+                let second_score = second.map_or(0.0, |candidate| candidate.score);
                 let top_id = top.map(|candidate| candidate.capability_id.as_str());
+                let second_id = second.map(|candidate| candidate.capability_id.as_str());
                 let passes = top_id == Some(case.capability_id)
                     && top_score >= catalog.classification.min_floor
                     && top_score - second_score >= catalog.classification.min_gap;
-                let expected_gap = BUNDLE_8_SCORING_GAPS.iter().find(|gap| {
-                    gap.inventory_id == case.id && gap.language == language_code
-                });
-                let expected_scores = BUNDLE_8_GAP_SCORES
-                    .iter()
-                    .find(|(id, language, _, _)| *id == case.id && *language == language_code);
-
-                match (passes, expected_gap, expected_scores) {
-                    (true, None, None) => {}
-                    (false, Some(gap), Some((_, _, expected_top, expected_second)))
-                        if top_id == Some(gap.observed_top_id)
-                            && (top_score - expected_top).abs() < 0.001
-                            && (second_score - expected_second).abs() < 0.001 =>
-                    {
-                        observed_gaps.push(format!(
-                            "{} {language_code}: expected={} top={} score={top_score:.2} second={second_score:.2}",
-                            case.id, case.capability_id, gap.observed_top_id,
-                        ));
-                    }
-                    (true, Some(_), _) => unexpected.push(format!(
-                        "{} {language_code}: catalog gap resolved; remove it from BUNDLE_8_SCORING_GAPS",
-                        case.id,
-                    )),
-                    (false, Some(gap), expected_scores) => unexpected.push(format!(
-                        "{} {language_code}: expected known top={} / scores={expected_scores:?} but got {top_id:?} (score={top_score:.2}, second={second_score:.2})",
-                        case.id, gap.observed_top_id,
-                    )),
-                    (false, None, _) => unexpected.push(format!(
-                        "{} {language_code}: new gap expected={} top={top_id:?} score={top_score:.2} second={second_score:.2}",
+                if !passes {
+                    unexpected.push(format!(
+                        "{} {language_code}: expected={} top={top_id:?} score={top_score:.2} second={second_id:?} score={second_score:.2}",
                         case.id, case.capability_id,
-                    )),
-                    (true, None, Some(_)) => unexpected.push(format!(
-                        "{} {language_code}: stale score ledger row without a matching gap",
-                        case.id,
-                    )),
+                    ));
                 }
             }
         }
 
-        assert_eq!(
-            observed_gaps.len(),
-            BUNDLE_8_SCORING_GAPS.len(),
-            "known gap list contains a duplicate or a row no longer exercised"
-        );
         assert!(
             unexpected.is_empty(),
             "covered inventory regression drift:\n{}",
@@ -938,32 +944,15 @@ fn bilingual_covered_inventory_rows_rank_first_and_clear_policy_thresholds() {
 }
 
 #[test]
-fn bilingual_partial_and_missing_inventory_rows_stay_explicit_for_follow_up() {
+fn bilingual_missing_inventory_rows_stay_explicit_for_issue_008() {
     use chat::assistant::retrieval::RetrievalEngine;
     use chat::assistant::{LlmReranker, RerankerVerdict};
 
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let catalog = load_real_catalog();
 
-        assert_eq!(COVERED_INVENTORY.len() * 2, 58);
-        assert_eq!(PARTIAL_INVENTORY.len() * 2, 4);
+        assert_eq!(COVERED_INVENTORY.len() * 2, 62);
         assert_eq!(MISSING_INVENTORY.len() * 2, 10);
-
-        for case in PARTIAL_INVENTORY {
-            for (language, phrase) in [
-                (AssistantLanguage::Id, case.indonesian),
-                (AssistantLanguage::En, case.english),
-            ] {
-                let evidence = inventory_evidence(&catalog, case.capability_id, phrase, language).await;
-                assert!(
-                    evidence
-                        .iter()
-                        .any(|candidate| candidate.capability_id == case.capability_id),
-                    "partial row {} must retrieve its existing target as a candidate for {phrase:?}",
-                    case.id,
-                );
-            }
-        }
 
         for case in MISSING_INVENTORY {
             assert!(

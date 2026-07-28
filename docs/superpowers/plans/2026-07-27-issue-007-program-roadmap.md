@@ -80,7 +80,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 6 (W-I/F3) | `…-b6-query-budget-timeout-design.md` | `…-b6-query-budget-timeout.md` | ✅ | configured row backstop, explicit truncation warning, and per-query statement timeout implemented |
 
 | 7 (W-D1) | — (test bundle) | `…-b7-bilingual-retrieval-regression.md` | ✅ | 72 bilingual rows, explicit partial/missing coverage, Unsupported-empty-options contract; 28 scoring gaps handed to Bundle 8 |
-| 8 (W-A3/W-D2) | gated | outline (same file) | ❌ | finalize after Bundle 7 |
+| 8 (W-A3/W-D2) | `…-b8-catalog-retrieval-remediation-design.md` | `…-b8-catalog-retrieval-remediation.md` | ✅ | 28 ledger rows resolved; G2 strict-overdue capability added |
 | 9 (W-G/W-J/F4/F6) | gated | outline (same file) | ❌ | finalize after Bundle 8 |
 | 10 (W-E/F8) | `…-b10-clarification-suppression-design.md` | `…-b10-clarification-suppression.md` | ❌ | |
 | 11 (W-L) | gated | outline (same file) | ❌ | finalize after Bundles 8 + 6 |
@@ -88,7 +88,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 13 (W-H/F5) | — (prep) | `…-b13-drilldown-preparation.md` | ❌ | prep only |
 | 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ❌ | needs `ai_report_dashboard#TBD` issue (yours) |
 
-**Not-yet-executed queue (dependency order):** 8 → 9 → 10 → 11 → 12 → 13 → 14. Bundle 8 starts from the 28-row scoring ledger in `docs/product/analyst-question-inventory.md`; it must enrich catalog metadata, not weaken thresholds.
+**Not-yet-executed queue (dependency order):** 9 → 10 → 11 → 12 → 13 → 14. Bundle 8 resolved the 28-row scoring ledger in `docs/product/analyst-question-inventory.md` with truthful metadata plus normalized lexical coverage; the 0.40 floor and 0.05 gap remain unchanged. Bundle 9 now starts from the final 31-capability catalog.
 
 ### Open decisions to confirm at review (from the fan-out)
 - **B2-1 `client_id` sensitivity** → recommend `public_business` everywhere (only `client_display_name` gated). Alternative flips 6 savings YAMLs to `pii`.

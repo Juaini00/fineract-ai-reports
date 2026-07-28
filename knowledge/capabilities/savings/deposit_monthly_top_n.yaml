@@ -22,6 +22,7 @@ examples:
 - Top 3 deposits per month this year.
 - Show the biggest savings deposit per month.
 - Setoran terbesar setiap bulan tahun ini.
+- Largest deposit transaction each month.
 defaults:
   exclude_reversed: true
   default_limit: 1

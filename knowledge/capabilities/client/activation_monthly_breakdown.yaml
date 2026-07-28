@@ -21,6 +21,8 @@ examples:
 - Monthly client activations for 2026.
 - How many clients did we activate each month last year?
 - Client activation trend from 2026-01-01 to 2026-06-30.
+- Monthly counts of client activations.
+- Aktivasi nasabah per bulan.
 supported_intents:
 - monthly client activation counts in a date range
 - client onboarding trend across authorized offices

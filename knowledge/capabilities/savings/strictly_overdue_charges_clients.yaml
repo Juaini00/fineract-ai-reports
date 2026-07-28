@@ -1,0 +1,69 @@
+id: savings_strictly_overdue_charges_clients
+status: approved_mvp
+domain: savings
+display_name: Savings Clients With Strictly Overdue Charges
+description: List clients with unpaid, non-waived savings account charges whose payment date is before the
+  tenant business date, within the caller's authorized office scope. Only overdue charges are returned;
+  undated and future-payment-date outstanding charges are intentionally excluded. Use the pending-charge
+  capability for the complete outstanding list.
+data_areas:
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_charges_fees
+required_api_capability: savings_strictly_overdue_charges_clients
+query_id: savings.strictly_overdue_charges_clients
+metrics:
+- savings.charge_amount_outstanding
+output_mode: list
+request_shape:
+  operation: list
+  subject: client
+  grouping: none
+  output: list
+  pii: client_identity
+examples:
+- Strictly overdue savings charge list only.
+- Which strictly overdue charges require collection?
+- List unpaid savings fees past their due date.
+- Charge overdue saja yang benar-benar harus ditagih.
+supported_intents:
+- only strictly overdue unpaid savings charges per client
+- outstanding savings charges with a due date before the business date
+- charge tabungan terlambat yang belum dibayar
+unsupported_intents:
+- all outstanding charges regardless of payment date
+- recurring charges whose next payment date is still in the future
+defaults:
+  exclude_waived: true
+  exclude_paid: true
+guards:
+  require_office_scope: true
+  max_limit: 10000
+checks:
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: list_bounded
+  rule: max_limit must bound returned rows.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: strictly_overdue_filter_declared
+  rule: SQL must require charge_due_date before as_of_date without post-filtering in Rust.
+- id: pii_fields_declared
+  rule: client identity fields require can_view_pii.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  as_of_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 10000

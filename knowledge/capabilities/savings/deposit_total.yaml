@@ -24,6 +24,8 @@ examples:
 - What is the total deposit this month?
 - Total deposits from January to September 2026.
 - How much savings deposit did we receive today?
+- Jumlah total setoran tabungan untuk periode berjalan.
+- Total setoran bulan berjalan.
 supported_intents:
 - total savings deposits by date range
 - total deposits for authorized offices

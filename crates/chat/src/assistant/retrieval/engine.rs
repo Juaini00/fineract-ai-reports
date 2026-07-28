@@ -171,6 +171,15 @@ pub fn catalog_fallback(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec
                 .iter()
                 .filter(|term| haystack.contains(term.as_str()))
                 .count() as f32;
+            // Compare coverage of the request vocabulary, not raw hits. Raw
+            // hit counts pushed unrelated broad capabilities to the 0.99 cap
+            // after three shared terms, erasing the rank/gap signal before
+            // catalog-specific terms could differentiate them.
+            let keyword_score = if terms.is_empty() {
+                0.0
+            } else {
+                hits / terms.len() as f32 * 0.34
+            };
             let metric_terms = plan
                 .entities
                 .iter()
@@ -205,7 +214,7 @@ pub fn catalog_fallback(plan: &RetrievalPlan, catalog: &KnowledgeCatalog) -> Vec
                     .display_name
                     .clone()
                     .unwrap_or_else(|| crate::assistant::clarification::humanize_id(&cap.id)),
-                score: (0.25 + hits * 0.15 + metric_boost + domain_boost).min(0.99),
+                score: (0.25 + keyword_score + metric_boost + domain_boost).min(0.99),
                 source_type: "capability".into(),
                 metadata: serde_json::json!({
                     "domain": cap.domain,

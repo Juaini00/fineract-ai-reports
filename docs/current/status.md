@@ -41,16 +41,16 @@ This file is the short source of truth for the current development state. Detail
 - Deterministic/catalog-aware parameter extraction is partial hardening: quantity/limit, ISO and bilingual relative date ranges, currency, domain hints, and a few metric hints are merged before retrieval/execution. Relative dates are anchored to the tenant business date, preserve wall-clock provenance, and successful results disclose a differing Fineract reporting date.
 - Approved-SQL execution now loads per-query `timeout_ms`, applies it with transaction-local PostgreSQL `statement_timeout`, and uses a declared `hard_cap` or `QUERY_GLOBAL_MAX_ROWS` backstop when that cap replaces a missing or over-cap row request. Truncation is explicitly surfaced as the English-only `result_truncated` warning. Within-cap per-group ranks retain their approved SQL semantics.
 - Primary runtime deterministic keyword/capability fallbacks are removed; no-router operation fails closed instead of silently routing by prompt text.
-- Bundle 7 records 72 bilingual analyst-inventory retrieval phrases against the real approved catalog. Its regression net preserves the active 0.40 floor / 0.05 gap and explicitly captures 28 catalog scoring gaps (including English pending-charges) for Bundle 8 enrichment; partial savings-charge and missing loan rows remain honest gaps, and an out-of-catalog request is Unsupported with no alternatives.
+- Bundle 8 remediates Bundle 7's 28 bilingual retrieval gaps against the real approved catalog: all 62 covered phrases rank their intended capability first at the unchanged 0.40 floor / 0.05 gap, while all ten loan phrases remain explicit Issue 008 Unsupported cases. It adds the office-scoped `savings_strictly_overdue_charges_clients` approved query for the real G2 filter gap, records G1's shipped `amount_levied_total` as covered, and normalizes fallback lexical coverage so broad shared terms cannot saturate unrelated candidates. An out-of-catalog request remains Unsupported with no alternatives.
 - Legacy formatter, compatibility façade, and strict pipeline paths are removed; approved-SQL execution lives in `execution::repository`, semantic LLM parsing in `assistant::llm::semantic`, and LQR in `assistant::understanding::lqr`.
 - LQR is available behind `LQR_ENABLED=false` and is not the default path yet.
 
 ## Reporting capability state
 
-- Savings capabilities are implemented for totals, top-N, monthly breakdown, monthly top-N, and balance summary.
-- Client domain has 7 currently approved executable capabilities.
-- Organization domain has 8 currently approved executable capabilities.
-- Catalog after Phase 21 records 25 capabilities and 25 queries.
+- Savings capabilities are implemented for totals, top-N, monthly breakdown, monthly top-N, balance summary, pending-charge detail, and strictly-overdue charge detail.
+- Client domain has 10 currently approved executable capabilities.
+- Organization domain has 9 currently approved executable capabilities.
+- Catalog currently records 31 approved capabilities and 31 approved queries.
 - Group/center remains conditional.
 - Loan, accounting/GL, tax, custom datatables, and audit/users/operations remain deferred until domain promotion.
 

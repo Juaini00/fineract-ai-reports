@@ -93,8 +93,8 @@ Loans split to [`docs/issues/active/008-loan-domain-analyst-capabilities.md`](..
 | 5 | W-B business date | ✓ | ✓ | implemented | 2026-07-27 |
 | 6 | W-I / F3 query budget | ✓ | ✓ | implemented | 2026-07-28 |
 | 7 | W-D1 retrieval suite | — (test plan) | ✓ | implemented — 72 bilingual rows; 28 catalog scoring gaps recorded for Bundle 8 | 2026-07-28 |
-| 8 | W-A3 / W-D2 | gated | outline | not planned — gated by 7 | 2026-07-27 |
-| 9 | W-G / W-J / F4 / F6 | gated | outline | not planned — gated by 8 | 2026-07-27 |
+| 8 | W-A3 / W-D2 | ✓ | ✓ | implementation in verification — 28 retrieval gaps remediated; strict-overdue savings-charge capability added | 2026-07-28 |
+| 9 | W-G / W-J / F4 / F6 | gated | outline | not planned — begins after Bundle 8 verification/commit | 2026-07-27 |
 | 10 | W-E / F8 clarification suppression | ✓ | ✓ | planned — not executed | 2026-07-27 |
 | 11 | W-L management observability | gated | outline | not planned — gated by 8, 6 | 2026-07-27 |
 | 12 | W-C extraction gateway (Phase 4–8) | (2026-07-24) | ✓ (continuation) | planned — not executed | 2026-07-27 |

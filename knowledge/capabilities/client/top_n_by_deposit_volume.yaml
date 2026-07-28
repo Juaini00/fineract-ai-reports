@@ -22,6 +22,7 @@ examples:
 - Top 10 clients by deposit volume this month.
 - Which clients deposited the most in Q2?
 - Show top 5 depositors from 2026-01-01 to 2026-06-30 in IDR.
+- Nasabah dengan setoran terbesar berdasarkan volume.
 supported_intents:
 - ranking clients by deposit amount in a date range
 unsupported_intents:

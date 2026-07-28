@@ -25,6 +25,7 @@ examples:
 - Show customer savings activity this month.
 - List savings transactions this week.
 - Show all savings activity for authorized offices.
+- Aktivitas transaksi tabungan mingguan.
 supported_intents:
 - savings activity list by date range
 - recent savings transactions for authorized offices

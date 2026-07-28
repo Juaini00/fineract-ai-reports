@@ -52,7 +52,13 @@ fn is_statement_timeout(code: Option<&str>) -> bool {
     code == Some("57014")
 }
 
-/// Run a bound query inside a read transaction with a per-statement timeout.
+fn is_supported_output_field_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "date" | "decimal" | "integer" | "bigint" | "string" | "boolean"
+    )
+}
+
 /// On SQLSTATE 57014 (statement_timeout), return a sanitized error and no rows.
 async fn fetch_all_with_timeout<'q>(
     pool: &PgPool,
@@ -170,6 +176,9 @@ pub async fn execute_plan(
     for row in rows {
         let mut result_row = serde_json::Map::new();
         for field in &query.output_fields {
+            if !is_supported_output_field_type(field.kind.as_str()) {
+                bail!("unsupported output field type {}", field.kind);
+            }
             let value = match field.kind.as_str() {
                 "date" => row
                     .try_get::<Option<NaiveDate>, _>(field.name.as_str())?
@@ -186,6 +195,10 @@ pub async fn execute_plan(
                 "string" => row
                     .try_get::<Option<String>, _>(field.name.as_str())?
                     .map(Value::String)
+                    .unwrap_or(Value::Null),
+                "boolean" => row
+                    .try_get::<Option<bool>, _>(field.name.as_str())?
+                    .map(Value::Bool)
                     .unwrap_or(Value::Null),
                 other => bail!("unsupported output field type {other}"),
             };
@@ -289,7 +302,7 @@ mod tests {
     use crate::assistant::execution::plan::{
         AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
     };
-    use crate::knowledge::model::QueryParameter;
+    use crate::knowledge::model::{QueryOutputField, QueryParameter, Sensitivity};
 
     #[test]
     fn effective_row_cap_prefers_declared_hard_cap() {
@@ -328,6 +341,17 @@ mod tests {
         let message = error.to_string();
         assert_eq!(message, "execution_timed_out");
         assert!(!message.contains("pg_sleep"), "error must not leak SQL");
+    }
+
+    #[test]
+    fn approved_boolean_output_field_is_supported() {
+        let field = QueryOutputField {
+            name: "is_penalty".to_string(),
+            kind: "boolean".to_string(),
+            sensitivity: Sensitivity::PublicBusiness,
+        };
+
+        assert!(super::is_supported_output_field_type(field.kind.as_str()));
     }
 
     #[test]

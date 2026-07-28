@@ -24,6 +24,9 @@ examples:
 - Who made the largest deposit today?
 - Show the largest deposits this month.
 - Top 10 savings deposits this week.
+- Largest deposit transactions by client.
+- Setoran terbesar dari transaksi tabungan nasabah.
+- Peringkat penyetor terbesar berdasarkan transaksi setoran.
 supported_intents:
 - largest savings deposits by date range
 - top deposit transactions for authorized offices

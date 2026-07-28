@@ -1,6 +1,6 @@
 # 007 — Analyst-grade knowledge catalog and request mapping
 
-Status: active — Bundles 0–7 implemented; Bundle 8 consumes Bundle 7's bounded scoring ledger
+Status: active — Bundles 0–8 implemented; Bundle 9 consumes Bundle 8's final catalog
 Severity: high
 Area: knowledge | catalog | retrieval | clarification | temporal | LLM extraction | SQL | client contract | presentation | currency | performance | observability
 Created: 2026-07-24
@@ -13,6 +13,10 @@ Plan reference: `docs/superpowers/plans/2026-07-24-llm-extraction-gateway.md`
 ## Bundle 7 implementation status (2026-07-28)
 
 [D1's finalized test plan](../../superpowers/plans/2026-07-28-issue-007-b7-bilingual-retrieval-regression.md) adds a real-catalog, fixture-driven 72-phrase Indonesian/English regression suite. It preserves the active floor/gap and records 28 observed scoring failures as Bundle 8's catalog-enrichment work list, rather than changing the scorer or declaring partial/missing rows supported. It also proves a restricted out-of-catalog request is `Unsupported` with no alternatives. The English E1 pending-charges phrase is one of those 28 gaps and remains a Bundle 8 acceptance item.
+
+## Bundle 8 implementation status (2026-07-28)
+
+Bundle 8 re-audited Bundle 7's 28 phrase-level gaps and closes all of them without lowering `classification.min_floor: 0.40` or `classification.min_gap: 0.05`. The fallback scorer now uses normalized lexical coverage rather than raw-hit saturation, while targeted catalog descriptions/examples supply truthful bilingual analyst vocabulary. The English E1 pending-charges phrase ranks `savings_pending_charges_clients` first. G1 was documented as covered because `amount_levied_total` was already selected; G2 gained the approved, office-scoped `savings_strictly_overdue_charges_clients` query, which filters only `charge_due_date < as_of_date`. Loan rows remain owned by issue 008.
 
 ## Bundle 6 implementation status (2026-07-28)
 

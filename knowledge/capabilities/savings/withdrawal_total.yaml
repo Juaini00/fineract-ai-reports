@@ -22,7 +22,9 @@ examples:
 - What is the total withdrawal this month?
 - Total savings withdrawal from January to September 2026.
 - How much money was withdrawn today?
-- Berapa total penarikan bulan ini?
+- Total penarikan bulan ini.
+- Total cash-out withdrawals for the current reporting period.
+- Jumlah penarikan tabungan pada periode berjalan.
 defaults:
   exclude_reversed: true
 guards:

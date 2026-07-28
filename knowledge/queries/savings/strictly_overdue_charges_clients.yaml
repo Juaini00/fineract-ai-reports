@@ -1,0 +1,126 @@
+id: savings.strictly_overdue_charges_clients
+database: fineract
+sql_file: queries/savings/strictly_overdue_charges_clients.sql
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_charges_fees
+tables:
+  - m_savings_account_charge
+  - m_savings_account
+  - m_client
+  - m_office
+  - m_charge
+metrics:
+  - savings.charge_amount_outstanding
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: as_of_date
+    type: date
+    required: false
+  - name: limit
+    type: integer
+    required: false
+required_filters:
+  - m_savings_account_charge.waived = false
+  - m_savings_account_charge.is_paid_derived = false
+  - m_savings_account_charge.is_active = true
+  - m_savings_account_charge.amount_outstanding_derived > 0
+  - m_savings_account_charge.charge_due_date < as_of_date
+  - m_client.office_id constrained to authorized office_ids
+  - ordered by overdue due_date ascending, then outstanding amount descending
+  - bounded by limit when provided
+output_fields:
+  - name: client_id
+    type: bigint
+    sensitivity: public_business
+  - name: client_display_name
+    type: string
+    sensitivity: pii
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: savings_account_id
+    type: bigint
+    sensitivity: public_business
+  - name: savings_account_charge_id
+    type: bigint
+    sensitivity: public_business
+    description: Primary key of the account charge instance, not the catalogue charge id.
+  - name: charge_definition_id
+    type: bigint
+    sensitivity: public_business
+    description: Catalogue charge id from m_charge.
+  - name: charge_name
+    type: string
+    sensitivity: public_business
+  - name: is_penalty
+    type: boolean
+    sensitivity: public_business
+  - name: charge_timing_enum
+    type: integer
+    sensitivity: public_business
+    description: Raw m_savings_account_charge.charge_time_enum value; no guessed label is emitted.
+  - name: currency_code
+    type: string
+    sensitivity: public_business
+  - name: currency_digits
+    type: integer
+    sensitivity: public_business
+    description: m_savings_account.currency_digits, the precision the account was booked at.
+  - name: currency_display_symbol
+    type: string
+    sensitivity: public_business
+    description: Nullable m_organisation_currency.display_symbol; rendering falls back to code.
+  - name: amount_due_current
+    type: decimal
+    sensitivity: public_business
+    description: Current or next charge occurrence, not a lifetime total for recurring charges.
+  - name: amount_paid
+    type: decimal
+    sensitivity: public_business
+  - name: amount_waived
+    type: decimal
+    sensitivity: public_business
+  - name: amount_written_off
+    type: decimal
+    sensitivity: public_business
+  - name: amount_levied_total
+    type: decimal
+    sensitivity: public_business
+    description: paid + waived + written_off + outstanding, the total ever levied.
+  - name: amount_outstanding
+    type: decimal
+    sensitivity: public_business
+  - name: due_date
+    type: date
+    sensitivity: public_business
+  - name: days_overdue
+    type: integer
+    sensitivity: public_business
+    description: as_of_date minus due_date; every returned row is strictly overdue.
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+timeout_ms: 3000
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: strictly_overdue_filter_declared
+    rule: SQL must restrict charge_due_date to before as_of_date and preserve unpaid charge filters.
+  - id: limit_is_bound
+    rule: SQL must use a bound LIMIT parameter.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: currency_join_fanout_safe
+    rule: Any join to m_organisation_currency must use LEFT JOIN LATERAL with LIMIT 1.

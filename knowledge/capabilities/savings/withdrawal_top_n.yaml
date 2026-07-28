@@ -22,6 +22,7 @@ examples:
 - Show the largest withdrawals this month.
 - Top 10 savings withdrawals this week.
 - Penarikan terbesar bulan ini.
+- Largest cash-out withdrawal transactions by client.
 defaults:
   exclude_reversed: true
 guards:

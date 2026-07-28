@@ -23,10 +23,12 @@ request_shape:
   output: list
   pii: client_identity
 examples:
-- Which clients still have unpaid savings charges today?
 - List customers with outstanding savings fees.
 - Show clients with pending savings account charges as of today.
 - Beritahukan saya siapa saja yang masih memiliki charge yang belum dibayar hari ini pada savings.
+- Unpaid charge aging with due dates, overdue days, paid amounts, and outstanding balances.
+- Reconcile the total ever levied on a savings charge.
+- Rekonsiliasi total charge yang dikenakan, dibayar, dihapuskan, dan masih tersisa.
 supported_intents:
 - clients with unpaid savings charges as of a date
 - outstanding savings fees per client

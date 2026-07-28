@@ -21,6 +21,8 @@ request_shape:
 examples:
 - Which offices had the most transactions this month?
 - Top 10 busiest offices by transaction count in Q2.
+- Busiest offices ranked by transaction count.
+- Kantor paling aktif berdasarkan jumlah transaksi tabungan.
 supported_intents:
 - office ranking by transaction volume in a date range
 unsupported_intents:

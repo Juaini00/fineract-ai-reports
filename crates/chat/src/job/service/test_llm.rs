@@ -308,7 +308,7 @@ fn test_reranker_pick(query: &str, candidates: &[Value]) -> Value {
     // ("deposit" ↔ "deposits", "month" ↔ "monthly") without a stemmer.
     let query_probes: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| s.len() >= 3)
+        .filter(|s| s.len() >= 3 && !s.chars().all(|ch| ch.is_ascii_digit()))
         .map(|s| {
             let lower = s.to_lowercase();
             if lower.len() > 4 {

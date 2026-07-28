@@ -21,6 +21,7 @@ examples:
 - Show office hierarchy summary.
 - How deep is our office hierarchy?
 - How many root and leaf offices are in my authorized scope?
+- "Ringkasan hierarki kantor: akar, daun, dan kedalaman."
 defaults:
   authorized_scope_only: true
 guards:

@@ -21,6 +21,7 @@ examples:
 - Monthly office openings for 2026.
 - How many offices opened each month last year?
 - Show office opening trend from 2026-01-01 to 2026-06-30.
+- Jumlah kantor yang dibuka setiap bulan.
 supported_intents:
 - monthly office opening counts in a date range
 - office expansion trend across authorized scope

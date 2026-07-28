@@ -2,8 +2,8 @@ id: client_top_n_by_savings_balance
 status: approved_mvp
 domain: client
 display_name: Top Clients by Savings Balance
-description: Return clients with the highest total savings balance across their active accounts within
-  the caller's authorized office scope.
+description: Return clients with the highest total savings balance across their active savings holdings
+  within the caller's authorized office scope.
 data_areas:
 - client_foundation
 - organization_foundation
@@ -22,6 +22,7 @@ examples:
 - Top 10 clients by savings balance.
 - Which clients hold the highest savings balances?
 - Show top 5 clients by savings balance in IDR.
+- Nasabah dengan saldo tabungan tertinggi.
 supported_intents:
 - ranking clients by total savings balance
 - top N depositors by balance

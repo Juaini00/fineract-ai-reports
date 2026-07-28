@@ -162,6 +162,48 @@ fn approved_catalog_includes_foundation_capabilities() {
 }
 
 #[test]
+fn strictly_overdue_savings_charge_capability_has_an_approved_contract() {
+    let catalog = load_catalog();
+    let capability = catalog
+        .capabilities
+        .iter()
+        .find(|item| item.id == "savings_strictly_overdue_charges_clients")
+        .expect("strictly-overdue savings charge capability");
+    assert_eq!(capability.status, "approved_mvp");
+    assert_eq!(
+        capability.query_id,
+        "savings.strictly_overdue_charges_clients"
+    );
+
+    let query = catalog
+        .queries
+        .iter()
+        .find(|item| item.id == capability.query_id)
+        .expect("strictly-overdue savings charge query");
+    assert!(query.parameters.iter().any(|parameter| {
+        parameter.name == "as_of_date" && parameter.kind == "date" && !parameter.required
+    }));
+    assert!(
+        query
+            .output_fields
+            .iter()
+            .any(|field| field.name == "days_overdue")
+    );
+
+    let sql = std::fs::read_to_string(workspace_root().join(&query.sql_file))
+        .expect("read strictly-overdue approved SQL");
+    assert!(
+        sql.contains("sac.charge_due_date < $2::date"),
+        "strict-overdue SQL must exclude same-day, future, and undated charges"
+    );
+    assert!(
+        sql.contains("c.office_id = ANY($1::bigint[])"),
+        "office scope must remain inside approved SQL"
+    );
+    assert!(sql.contains("LIMIT $3"), "limit must remain bound");
+}
+
+#[test]
 fn approved_catalog_includes_all_client_and_organization_capabilities() {
     let catalog = load_catalog();
 

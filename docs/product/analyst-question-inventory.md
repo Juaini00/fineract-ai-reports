@@ -4,7 +4,7 @@
 
 **Scope:** Savings, client, and organization are owned by issue 007. Loan questions remain visible here but are owned by [issue 008](../issues/active/008-loan-domain-analyst-capabilities.md).
 
-**Verified:** 2026-07-27 against `knowledge/capabilities/**`: 30 approved capabilities (11 savings, 10 client, 9 organization), and no loan capability.
+**Verified:** 2026-07-28 against `knowledge/capabilities/**`: 31 approved capabilities (12 savings, 10 client, 9 organization), and no loan capability.
 
 ## Legend
 
@@ -60,12 +60,12 @@
 | 28 | Kantor dengan saldo terbesar | Offices with greatest savings balance | office, balance, rank, currency | none | `organization_office_savings_summary` | covered |
 | 29 | Ringkasan kantor dan staf aktif | Office summary with active staff | office, staff, client count | none | `organization_office_summary` | covered |
 
-## Known gaps (savings/client) — feed W-A3
+## Bundle 8 resolved savings-charge rows
 
 | # | Indonesian phrasing | English phrasing | Required field set | User-required param? | Capability id | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
-| G1 | Total charge yang pernah dikenakan berapa? | What is the total ever levied on this savings charge? | charge, levied total, outstanding | none | `savings_pending_charges_clients` | partial |
-| G2 | Charge mana yang benar-benar overdue saja? | Which savings charges are strictly overdue only? | client, charge, due date, days overdue | none | `savings_pending_charges_clients` | partial |
+| G1 | Total charge yang pernah dikenakan berapa? | What is the total ever levied on this savings charge? | charge, levied total, outstanding | none | `savings_pending_charges_clients` | covered — `amount_levied_total` was already approved and selected; the prior partial verdict was stale |
+| G2 | Charge mana yang benar-benar overdue saja? | Which savings charges are strictly overdue only? | client, charge, due date, days overdue | none | `savings_strictly_overdue_charges_clients` | covered — separate approved query filters `charge_due_date < as_of_date` |
 
 ## Loan domain — owned by issue 008 (all `missing` in 007)
 
@@ -85,6 +85,7 @@ Point-in-time reports retain `business_today`. Month-grouped reports use the tra
 | --- | --- | --- |
 | `savings_balance_summary` | point-in-time / business_today | none |
 | `savings_pending_charges_clients` | point-in-time / business_today | unbounded, hard_cap 10000 |
+| `savings_strictly_overdue_charges_clients` | point-in-time / business_today, strict due-date filter | unbounded, hard_cap 10000 |
 | `savings_deposit_total` | rolling single / start_of_month(business_today) | none |
 | `savings_withdrawal_total` | rolling single / start_of_month(business_today) | none |
 | `savings_deposit_top_n` | rolling single / start_of_month(business_today) | default 10, hard_cap retained |
@@ -114,20 +115,19 @@ Point-in-time reports retain `business_today`. Month-grouped reports use the tra
 | `organization_office_savings_summary` | point-in-time / business_today | default/hard_cap retained |
 | `organization_office_summary` | point-in-time / business_today | none |
 
-## Bundle 7 deterministic retrieval ledger (2026-07-28)
+## Bundle 7 historical retrieval ledger, resolved by Bundle 8 (2026-07-28)
 
 `crates/chat/tests/retrieval_scoring.rs` now transcribes every inventory row in
-both languages (58 covered, 4 partial, 10 missing phrases). It loads the real
-approved catalog and retains the active `classification.min_floor: 0.40` and
-`classification.min_gap: 0.05`; no threshold was reduced.
+both languages (62 covered and 10 issue-008 loan-missing phrases). It loads the
+real approved catalog and retains the active `classification.min_floor: 0.40`
+and `classification.min_gap: 0.05`; no threshold was reduced.
 
-The semantic coverage verdict above remains distinct from deterministic
-fallback scoring. The following 28 covered phrase-level failures currently
-miss rank one or the active gap threshold (two same-target language pairs are
-grouped in one table row). They are the bounded Bundle 8 (W-A3/W-D2) work list:
-enrich the indicated target catalog entry, then remove its row from the test
-ledger only once it ranks first and clears the same thresholds. `tie` means the
-target was rank one but did not clear the required gap.
+The semantic coverage verdict remains distinct from deterministic fallback
+scoring. This is the historical 28-row Bundle 7 audit ledger. Bundle 8 reran
+all 72 phrases green at the unchanged floor and gap: truthful bilingual
+metadata resolves target vocabulary collisions, while normalized lexical
+coverage prevents three broad shared terms from saturating unrelated candidates
+at `0.99`. `tie` records the Bundle 7 observation, not a current failure.
 
 | Inventory row | Language | Target | Observed top | Failure |
 | --- | --- | --- | --- | --- |
@@ -158,8 +158,8 @@ target was rank one but did not clear the required gap.
 | 29 | Indonesian | `organization_office_summary` | `savings_balance_summary` | wrong rank |
 | 29 | English | `organization_office_summary` | target | gap below 0.05 |
 
-The two `partial` savings-charge rows remain catalog-field gaps, and the five
-loan rows remain issue-008 ownership gaps; Bundle 7 deliberately does not
-mislabel either category as rank-one support. The dedicated out-of-catalog
-assertion uses a restricted nonexistent capability and proves `Unsupported`
-with no offered alternatives.
+G1 is covered by the already-shipped `amount_levied_total` field; G2 is covered
+by the new strictly-overdue approved capability. The five loan rows remain
+issue-008 ownership gaps. The dedicated out-of-catalog assertion still uses a
+restricted nonexistent capability and proves `Unsupported` with no offered
+alternatives.

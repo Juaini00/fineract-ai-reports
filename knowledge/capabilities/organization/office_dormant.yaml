@@ -2,8 +2,8 @@ id: organization_office_dormant
 status: approved_mvp
 domain: organization
 display_name: Dormant Offices
-description: Return offices with zero savings transactions in a given date range within the caller's authorized
-  scope, oldest first.
+description: Return offices with zero recorded savings activity in a given date range within the caller's
+  authorized scope, oldest first.
 data_areas:
 - organization_foundation
 required_api_capability: organization_office_dormant
@@ -20,8 +20,9 @@ request_shape:
 examples:
 - Which offices had no activity this quarter?
 - List dormant offices from 2026-04-01 to 2026-06-30.
+- Kantor tanpa aktivitas transaksi pada kuartal berjalan.
 supported_intents:
-- offices with no savings transaction activity in a date range
+- offices with no recorded savings activity in a date range
 unsupported_intents:
 - staff activity or client identity
 defaults:

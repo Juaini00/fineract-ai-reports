@@ -22,6 +22,8 @@ examples:
 - Top 5 offices by new client activations this month.
 - Which offices onboarded the most clients last quarter?
 - Show top 10 offices by client activations from 2026-01-01 to 2026-06-30.
+- Rank offices by new client activation count.
+- Kantor dengan aktivasi nasabah baru terbanyak.
 supported_intents:
 - top offices by client activation count in a date range
 - ranking of offices by newly activated clients
