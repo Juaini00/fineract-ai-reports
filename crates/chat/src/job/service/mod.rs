@@ -6,7 +6,9 @@ use std::{
 
 use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
-use app_core::config::{CanonicalGatewayMode, ChatFeatureConfig, EmbeddingConfig, LlmConfig};
+use app_core::config::{
+    CanonicalGatewayMode, ChatFeatureConfig, EmbeddingConfig, LlmConfig, QueryConfig,
+};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -64,6 +66,7 @@ pub struct JobService {
     job_memory: JobMemoryRepository,
     canonical_state: CanonicalStateRepository,
     canonical_mode: CanonicalGatewayMode,
+    query_config: QueryConfig,
     session_memory: SessionMemoryRepository,
     context_builder: ContextBuilder,
     knowledge: KnowledgeRepository,
@@ -90,6 +93,7 @@ impl JobService {
         llm_config: LlmConfig,
         embedding_config: EmbeddingConfig,
         chat_features: ChatFeatureConfig,
+        query_config: QueryConfig,
         redis_url: String,
         redis: Option<redis::Client>,
         audit: AuditHandle,
@@ -115,6 +119,7 @@ impl JobService {
             job_memory: JobMemoryRepository::new(app_pool.clone()),
             canonical_state: CanonicalStateRepository::new(app_pool.clone()),
             canonical_mode: chat_features.canonical_gateway_mode,
+            query_config,
             session_memory: SessionMemoryRepository::new(app_pool.clone()),
             context_builder: ContextBuilder::new(
                 messages.clone(),

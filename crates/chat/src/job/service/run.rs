@@ -79,6 +79,10 @@ impl JobService {
             initial: canonical_turn.initial,
             business_today: today.date,
             business_date_source: today.source,
+            execution_limits: crate::execution::repository::ExecutionLimits {
+                default_timeout_ms: self.query_config.default_timeout_ms,
+                global_max_rows: self.query_config.global_max_rows,
+            },
         };
         let mut result = AssistantGraphRuntime::run_with_router(
             memory,

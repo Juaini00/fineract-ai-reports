@@ -231,7 +231,10 @@ pub(super) async fn execute_selected_capability(
             execution_transitions(TerminalState::Completed, "execution_not_configured"),
         );
     };
-    match execute_plan(pool, catalog, &plan, &policy).await {
+    let limits = canonical
+        .map(|context| context.execution_limits)
+        .unwrap_or_default();
+    match execute_plan(pool, catalog, &plan, &policy, limits).await {
         Ok(result) => {
             let tool_result =
                 super::super::tool::tool_result_from_execution(&tool_request, result.clone());
@@ -270,22 +273,28 @@ pub(super) async fn execute_selected_capability(
             result_state
         }
         Err(error) => {
+            let reason = if error.to_string() == "execution_timed_out" {
+                "execution_timed_out"
+            } else {
+                "execution_failed"
+            };
             tracing::warn!(
                 target: "assistant::execute_selected_capability",
                 capability_id = %capability_id,
                 query_id = %plan.query_id,
                 error = %error,
+                %reason,
                 "clarification-reply execute_plan failed; returning routing error"
             );
             memory.warnings = json!([{ "message": error.to_string() }]);
             graph_result(
                 memory,
                 TerminalState::FailedOperational,
-                "execution_failed",
+                reason,
                 ResponseBuilder::error(),
                 recent_message_count,
                 pending_clarification,
-                execution_transitions(TerminalState::FailedOperational, "execution_failed"),
+                execution_transitions(TerminalState::FailedOperational, reason),
             )
         }
     }

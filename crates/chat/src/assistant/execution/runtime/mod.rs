@@ -85,6 +85,7 @@ pub struct CanonicalRuntimeContext {
     pub initial: bool,
     pub business_today: NaiveDate,
     pub business_date_source: BusinessDateSource,
+    pub execution_limits: crate::execution::repository::ExecutionLimits,
 }
 
 impl From<&str> for RuntimeUserInput {

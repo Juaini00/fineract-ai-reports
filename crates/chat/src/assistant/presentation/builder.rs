@@ -55,7 +55,7 @@ impl ResponseBuilder {
             .into_iter()
             .map(|row| filtered_row(row, fields, policy.can_view_pii))
             .collect::<Vec<_>>();
-        let warnings = fields
+        let mut warnings = fields
             .iter()
             .any(|field| is_hidden(field, policy.can_view_pii))
             .then(|| ResponseWarning {
@@ -63,7 +63,16 @@ impl ResponseBuilder {
                 message: "Some sensitive columns are hidden by policy.".into(),
             })
             .into_iter()
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some(shown) = tool_result.truncated {
+            warnings.push(ResponseWarning {
+                code: "result_truncated".into(),
+                message: format!(
+                    "Showing the first {shown} rows. More than {shown} rows match; \
+                     narrow your request (add a date range, office, or lower limit) to see the rest."
+                ),
+            });
+        }
 
         let row_count = rows.len();
         let message = if plan.capability == "client_name_lookup" {
@@ -385,6 +394,7 @@ mod tests {
                 summary: None,
                 error: None,
                 evidence_refs: vec!["ev1".into()],
+                truncated: None,
             },
             &catalog(),
         );
@@ -399,6 +409,37 @@ mod tests {
         assert_eq!(table.rows, vec![json!({ "name": "Ada" })]);
         assert_eq!(response.warnings[0].code, "pii_hidden");
         assert!(response.rendered_markdown.unwrap().contains("Ada"));
+    }
+
+    #[test]
+    fn warns_when_result_is_truncated() {
+        let response = ResponseBuilder::from_tool_result(
+            &intent(),
+            &plan(),
+            &PolicyDecision {
+                status: PolicyDecisionStatus::Allowed,
+                reason: None,
+                office_ids: vec![1],
+                can_view_pii: true,
+            },
+            &ToolResult {
+                tool_name: "approved_catalog_sql".into(),
+                ok: true,
+                rows: vec![json!({ "name": "Ada" })],
+                summary: None,
+                error: None,
+                evidence_refs: vec![],
+                truncated: Some(1),
+            },
+            &catalog(),
+        );
+
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "result_truncated")
+        );
     }
 
     #[test]

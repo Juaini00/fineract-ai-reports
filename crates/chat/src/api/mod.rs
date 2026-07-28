@@ -94,6 +94,7 @@ impl ChatAppState {
                 core.config.llm.clone(),
                 core.config.embedding.clone(),
                 core.config.chat_features.clone(),
+                core.config.query.clone(),
                 core.config.redis.url.clone(),
                 core.pools.redis.clone(),
                 audit,

@@ -320,10 +320,10 @@ fn resolved_to_value(resolved: ResolvedValue) -> Value {
         ResolvedValue::Date(d) => json!(d.to_string()),
         ResolvedValue::Integer(i) => json!(i),
         ResolvedValue::IntegerArray(ids) => json!(ids),
-        // Unbounded: no user-supplied cap. i64::MAX is the pre-clamp sentinel so a
-        // required integer parameter (e.g. `LIMIT $n`) still binds; the parameter's
-        // catalog `hard_cap`, if declared, is applied by `clamp_hard_caps` in the
-        // same builder before this value is bound.
+        // Unbounded: no user-supplied cap. Bound as i64::MAX so callers that
+        // require an integer parameter (e.g. `LIMIT $n`) still bind; the SQL
+        // repository clamps this to the effective row cap (declared hard_cap or
+        // the configured global backstop) before binding.
         // ponytail: i64::MAX sentinel, upgrade to LIMIT-omitting SQL if a real
         // "no limit" query appears.
         ResolvedValue::Unbounded => json!(i64::MAX),

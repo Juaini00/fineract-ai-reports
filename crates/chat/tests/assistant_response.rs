@@ -27,6 +27,7 @@ fn structured_response_renders_markdown_and_preserves_refs() {
             summary: None,
             error: None,
             evidence_refs: vec!["client_name_lookup".into()],
+            truncated: None,
         },
         &catalog(),
     );
@@ -74,6 +75,7 @@ fn client_lookup_messages_are_ambiguity_aware() {
                 summary: None,
                 error: None,
                 evidence_refs: vec![],
+                truncated: None,
             },
             &catalog(),
         );
