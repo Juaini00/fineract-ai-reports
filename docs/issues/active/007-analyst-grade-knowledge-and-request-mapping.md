@@ -1,6 +1,6 @@
 # 007 — Analyst-grade knowledge catalog and request mapping
 
-Status: active — Bundles 0–6 implemented; later roadmap bundles remain pending
+Status: active — Bundles 0–7 implemented; Bundle 8 consumes Bundle 7's bounded scoring ledger
 Severity: high
 Area: knowledge | catalog | retrieval | clarification | temporal | LLM extraction | SQL | client contract | presentation | currency | performance | observability
 Created: 2026-07-24
@@ -9,6 +9,10 @@ Resolved: Bundle 6 (W-I/F3) on 2026-07-28 — query metadata is loaded, an appro
 Depends on: 005 (unified clarification contract, shipped), 006 (management observability, shipped)
 Design reference: `docs/superpowers/specs/2026-07-24-llm-extraction-gateway-design.md`
 Plan reference: `docs/superpowers/plans/2026-07-24-llm-extraction-gateway.md`
+
+## Bundle 7 implementation status (2026-07-28)
+
+[D1's finalized test plan](../../superpowers/plans/2026-07-28-issue-007-b7-bilingual-retrieval-regression.md) adds a real-catalog, fixture-driven 72-phrase Indonesian/English regression suite. It preserves the active floor/gap and records 28 observed scoring failures as Bundle 8's catalog-enrichment work list, rather than changing the scorer or declaring partial/missing rows supported. It also proves a restricted out-of-catalog request is `Unsupported` with no alternatives. The English E1 pending-charges phrase is one of those 28 gaps and remains a Bundle 8 acceptance item.
 
 ## Bundle 6 implementation status (2026-07-28)
 

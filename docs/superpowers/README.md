@@ -92,7 +92,7 @@ Loans split to [`docs/issues/active/008-loan-domain-analyst-capabilities.md`](..
 | 4 | W-A2/A4 + W-J savings catalog | ✓ | ✓ | implemented | 2026-07-27 |
 | 5 | W-B business date | ✓ | ✓ | implemented | 2026-07-27 |
 | 6 | W-I / F3 query budget | ✓ | ✓ | implemented | 2026-07-28 |
-| 7 | W-D1 retrieval suite | gated | outline | not planned — gated by 3 | 2026-07-27 |
+| 7 | W-D1 retrieval suite | — (test plan) | ✓ | implemented — 72 bilingual rows; 28 catalog scoring gaps recorded for Bundle 8 | 2026-07-28 |
 | 8 | W-A3 / W-D2 | gated | outline | not planned — gated by 7 | 2026-07-27 |
 | 9 | W-G / W-J / F4 / F6 | gated | outline | not planned — gated by 8 | 2026-07-27 |
 | 10 | W-E / F8 clarification suppression | ✓ | ✓ | planned — not executed | 2026-07-27 |

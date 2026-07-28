@@ -113,3 +113,53 @@ Point-in-time reports retain `business_today`. Month-grouped reports use the tra
 | `organization_office_opening_monthly_breakdown` | rolling monthly / business_today - 12m | none |
 | `organization_office_savings_summary` | point-in-time / business_today | default/hard_cap retained |
 | `organization_office_summary` | point-in-time / business_today | none |
+
+## Bundle 7 deterministic retrieval ledger (2026-07-28)
+
+`crates/chat/tests/retrieval_scoring.rs` now transcribes every inventory row in
+both languages (58 covered, 4 partial, 10 missing phrases). It loads the real
+approved catalog and retains the active `classification.min_floor: 0.40` and
+`classification.min_gap: 0.05`; no threshold was reduced.
+
+The semantic coverage verdict above remains distinct from deterministic
+fallback scoring. The following 28 covered phrase-level failures currently
+miss rank one or the active gap threshold (two same-target language pairs are
+grouped in one table row). They are the bounded Bundle 8 (W-A3/W-D2) work list:
+enrich the indicated target catalog entry, then remove its row from the test
+ledger only once it ranks first and clears the same thresholds. `tie` means the
+target was rank one but did not clear the required gap.
+
+| Inventory row | Language | Target | Observed top | Failure |
+| --- | --- | --- | --- | --- |
+| 2 | English | `savings_pending_charges_clients` | `client_top_n_by_deposit_volume` | wrong rank; tied at 0.99 |
+| 3 | English | `savings_withdrawal_total` | `savings_deposit_total` | wrong rank; tied at 0.90 |
+| 4 | Indonesian | `savings_deposit_total` | `savings_deposit_monthly_breakdown` | wrong rank; tied at 0.99 |
+| 5 | English | `savings_withdrawal_top_n` | `savings_deposit_top_n` | wrong rank; tied at 0.99 |
+| 6 | Indonesian | `savings_deposit_top_n` | `savings_withdrawal_top_n` | wrong rank |
+| 6 | English | `savings_deposit_top_n` | target | tie at 0.99 |
+| 10 | English | `savings_deposit_monthly_top_n` | target | tie at 0.99 |
+| 13 | Indonesian | `client_activation_monthly_breakdown` | `savings_deposit_monthly_breakdown` | wrong rank; tied at 0.64 |
+| 13 | English | `client_activation_monthly_breakdown` | target | tie at 0.99 |
+| 14 | Indonesian, English | `client_activation_top_n_offices` | target | tied at 0.60 / 0.99 |
+| 17 | Indonesian | `client_summary_by_office` | target | gap below 0.05 |
+| 17 | English | `client_summary_by_office` | target | tie at 0.99 |
+| 18 | Indonesian | `client_top_n_by_deposit_volume` | `savings_deposit_monthly_top_n` | wrong rank |
+| 19 | Indonesian | `client_top_n_by_savings_account_count` | `client_top_n_by_deposit_volume` | wrong rank; tied at 0.60 |
+| 19 | English | `client_top_n_by_savings_account_count` | target | tie at 0.99 |
+| 20 | Indonesian | `client_top_n_by_savings_balance` | `client_top_n_by_deposit_volume` | wrong rank; tied at 0.60 |
+| 21 | Indonesian | `organization_hierarchy_summary` | `savings_balance_summary` | wrong rank |
+| 22 | Indonesian, English | `organization_office_activity_ranking` | target | tied at 0.60 / 0.90 |
+| 23 | Indonesian | `organization_office_client_summary` | target | tied at 0.75 |
+| 23 | English | `organization_office_client_summary` | `client_summary_by_office` | wrong rank; tied at 0.99 |
+| 24 | Indonesian | `organization_office_dormant` | `organization_office_activity_ranking` | wrong rank; tied at 0.60 |
+| 25 | Indonesian | `organization_office_hierarchy_tree` | target | tied at 0.60 |
+| 27 | Indonesian | `organization_office_opening_monthly_breakdown` | `savings_deposit_monthly_breakdown` | wrong rank; tied at 0.64 |
+| 28 | Indonesian | `organization_office_savings_summary` | `organization_office_activity_ranking` | wrong rank; tied at 0.60 |
+| 29 | Indonesian | `organization_office_summary` | `savings_balance_summary` | wrong rank |
+| 29 | English | `organization_office_summary` | target | gap below 0.05 |
+
+The two `partial` savings-charge rows remain catalog-field gaps, and the five
+loan rows remain issue-008 ownership gaps; Bundle 7 deliberately does not
+mislabel either category as rank-one support. The dedicated out-of-catalog
+assertion uses a restricted nonexistent capability and proves `Unsupported`
+with no offered alternatives.

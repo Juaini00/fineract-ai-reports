@@ -23,7 +23,7 @@ Verified 2026-07-27 against the working tree. Several claims in 007 no longer ho
 | W-A4 | Per-capability default review (E4) | code/YAML | **PARTIAL** — policies migrated uniformly; human per-cap review pending |
 | W-B | Relative temporal → business date | code | **DONE** — all relative expressions use `business_today`; reporting-date note and audit-time guard shipped |
 | W-C | LLM gateway 3-layer (Phase 4–8) | code | **TODO** — `gateway/`,`resolver.rs`,`decider.rs` absent; partial plan `2026-07-24-llm-extraction-gateway.md` Phase 4–8 |
-| W-D | Bilingual retrieval regression suite | test | **TODO** — gated by W-A1 |
+| W-D | Bilingual retrieval regression suite | test | **IMPLEMENTED (D1)** — 72 inventory phrases exercised; 28 deterministic catalog scoring gaps are the bounded W-A3/W-D2 input |
 | W-E | Clarification suppression guarantee | test | **PARTIAL** — `params_from_verified` defaults land; runtime-level guard + validator rule pending |
 | W-F | Frontend contract docs (backend side) | doc | **TODO** |
 | W-G | Analyst-grade presentation/rendering | code | **TODO** — `output_mode` not read by presentation |
@@ -79,7 +79,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 5 (W-B) | `…-b5-business-date-everywhere-design.md` | `…-b5-business-date-everywhere.md` | ✅ | business-date extraction, response note, and audit-time invariant verified |
 | 6 (W-I/F3) | `…-b6-query-budget-timeout-design.md` | `…-b6-query-budget-timeout.md` | ✅ | configured row backstop, explicit truncation warning, and per-query statement timeout implemented |
 
-| 7 (W-D1) | gated | outline in `…-gated-outlines-b7-b8-b9-b11.md` | ❌ | finalize after Bundle 3 |
+| 7 (W-D1) | — (test bundle) | `…-b7-bilingual-retrieval-regression.md` | ✅ | 72 bilingual rows, explicit partial/missing coverage, Unsupported-empty-options contract; 28 scoring gaps handed to Bundle 8 |
 | 8 (W-A3/W-D2) | gated | outline (same file) | ❌ | finalize after Bundle 7 |
 | 9 (W-G/W-J/F4/F6) | gated | outline (same file) | ❌ | finalize after Bundle 8 |
 | 10 (W-E/F8) | `…-b10-clarification-suppression-design.md` | `…-b10-clarification-suppression.md` | ❌ | |
@@ -88,7 +88,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 13 (W-H/F5) | — (prep) | `…-b13-drilldown-preparation.md` | ❌ | prep only |
 | 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ❌ | needs `ai_report_dashboard#TBD` issue (yours) |
 
-**Not-yet-executed queue (dependency order):** 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14.
+**Not-yet-executed queue (dependency order):** 8 → 9 → 10 → 11 → 12 → 13 → 14. Bundle 8 starts from the 28-row scoring ledger in `docs/product/analyst-question-inventory.md`; it must enrich catalog metadata, not weaken thresholds.
 
 ### Open decisions to confirm at review (from the fan-out)
 - **B2-1 `client_id` sensitivity** → recommend `public_business` everywhere (only `client_display_name` gated). Alternative flips 6 savings YAMLs to `pii`.
