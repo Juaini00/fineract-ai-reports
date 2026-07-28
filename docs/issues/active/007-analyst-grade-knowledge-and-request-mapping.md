@@ -1,14 +1,28 @@
 # 007 — Analyst-grade knowledge catalog and request mapping
 
-Status: active — requirements defined; execution pending
+Status: active — Bundles 0–6 implemented; later roadmap bundles remain pending
 Severity: high
 Area: knowledge | catalog | retrieval | clarification | temporal | LLM extraction | SQL | client contract | presentation | currency | performance | observability
 Created: 2026-07-24
-Resolved:
+Resolved: Bundle 6 (W-I/F3) on 2026-07-28 — query metadata is loaded, an approved-SQL row backstop and truncation warning are enforced, and PostgreSQL statement timeout failures are sanitized and audited through the existing terminal-failure path.
 
 Depends on: 005 (unified clarification contract, shipped), 006 (management observability, shipped)
 Design reference: `docs/superpowers/specs/2026-07-24-llm-extraction-gateway-design.md`
 Plan reference: `docs/superpowers/plans/2026-07-24-llm-extraction-gateway.md`
+
+## Bundle 6 implementation status (2026-07-28)
+
+The current source of truth for W-I/F3 is the completed
+[`Bundle 6 plan`](../../superpowers/plans/2026-07-27-issue-007-b6-query-budget-timeout.md).
+It loads query-level `timeout_ms`, reads `QUERY_DEFAULT_TIMEOUT_MS` as the
+fallback, and applies PostgreSQL `SET LOCAL statement_timeout` inside the SQL
+repository transaction. A declared `hard_cap` remains the first ceiling; a
+capability without one receives `QUERY_GLOBAL_MAX_ROWS` (default `50000`). When
+a cap replaces a missing or over-cap request, the repository fetches one surplus
+row, trims it, and surfaces `result_truncated`. Within-cap monthly top-N ranks
+are intentionally not treated as a global row ceiling. The generic sanitized
+`ChatJobFailed` terminal path remains the audit event; a dedicated timeout event
+is deferred to Bundle 11.
 
 ## Problem
 

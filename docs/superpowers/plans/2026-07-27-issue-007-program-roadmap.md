@@ -28,7 +28,7 @@ Verified 2026-07-27 against the working tree. Several claims in 007 no longer ho
 | W-F | Frontend contract docs (backend side) | doc | **TODO** |
 | W-G | Analyst-grade presentation/rendering | code | **TODO** — `output_mode` not read by presentation |
 | W-H | Drill-down preparation only | prep | **TODO** — decision: out of scope, keep enum extensible |
-| W-I | `hard_cap`/`timeout_ms`/backstop | code | **TODO** — `hard_cap` only parsed (stale comment `parameters.rs:299`); query `timeout_ms` not loaded |
+| W-I | `hard_cap`/`timeout_ms`/backstop | code | **DONE** — query timeout metadata, configured backstop, truncation warning, and transaction-local statement timeout implemented |
 | W-J | Currency & money semantics | code | **TODO** — no currency-aware rendering; `Money` kind never produced |
 | W-K | Export | decision | **TODO** — record as non-goal + named follow-up |
 | W-L | Mgmt observability alignment (006) | code/test | **TODO** — gated by W-A3, W-I |
@@ -67,17 +67,18 @@ Loans → **separate issue 008** (W-M decision **LOCKED 2026-07-27**); 007 stays
 
 ## Document + execution status (2026-07-27, post spec/plan fan-out)
 
-All specifiable bundles now have their spec+plan; gated bundles have outline docs. **Nothing below is executed** except Bundles 0 and 1.
+All specifiable bundles now have their spec+plan; gated bundles have outline docs. **Bundles 0–6 are executed**; later bundles remain pending their recorded dependencies.
 
 | Bundle | Spec | Plan | Executed? | Notes |
 |---|---|---|---|---|
 | 0 | — | — | ✅ | `charge_due_date` hotfix already shipped |
 | 1 | — | — | ✅ | 008 created; W-K/W-N decisions recorded |
-| 2 (F1/F2/F7) | `…-b2-safety-pii-hardcap-status-design.md` | `…-b2-safety-pii-hardcap-status.md` | ❌ | F7 already code-fixed → verify + 1 test; 4 open decisions flagged |
-| 3 (W-A1) | — (doc task) | `…-b3-analyst-question-inventory.md` | ❌ | 12-question starter seeded in plan |
-| 4 (W-A2/A4/W-J) | `…-b4-savings-catalog-currency-design.md` | `…-b4-savings-catalog-currency.md` | ❌ | W-A2 mostly done; real work = amount_levied_total, A4 defaults, currency |
+| 2 (F1/F2/F7) | `…-b2-safety-pii-hardcap-status-design.md` | `…-b2-safety-pii-hardcap-status.md` | ✅ | safety contracts implemented |
+| 3 (W-A1) | — (doc task) | `…-b3-analyst-question-inventory.md` | ✅ | analyst inventory implemented |
+| 4 (W-A2/A4/W-J) | `…-b4-savings-catalog-currency-design.md` | `…-b4-savings-catalog-currency.md` | ✅ | savings catalog/default/currency work implemented |
 | 5 (W-B) | `…-b5-business-date-everywhere-design.md` | `…-b5-business-date-everywhere.md` | ✅ | business-date extraction, response note, and audit-time invariant verified |
-| 6 (W-I/F3) | `…-b6-query-budget-timeout-design.md` | `…-b6-query-budget-timeout.md` | ❌ | global backstop + truncation + timeout loading |
+| 6 (W-I/F3) | `…-b6-query-budget-timeout-design.md` | `…-b6-query-budget-timeout.md` | ✅ | configured row backstop, explicit truncation warning, and per-query statement timeout implemented |
+
 | 7 (W-D1) | gated | outline in `…-gated-outlines-b7-b8-b9-b11.md` | ❌ | finalize after Bundle 3 |
 | 8 (W-A3/W-D2) | gated | outline (same file) | ❌ | finalize after Bundle 7 |
 | 9 (W-G/W-J/F4/F6) | gated | outline (same file) | ❌ | finalize after Bundle 8 |
@@ -87,7 +88,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 13 (W-H/F5) | — (prep) | `…-b13-drilldown-preparation.md` | ❌ | prep only |
 | 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ❌ | needs `ai_report_dashboard#TBD` issue (yours) |
 
-**Not-yet-executed queue (dependency order):** 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14.
+**Not-yet-executed queue (dependency order):** 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14.
 
 ### Open decisions to confirm at review (from the fan-out)
 - **B2-1 `client_id` sensitivity** → recommend `public_business` everywhere (only `client_display_name` gated). Alternative flips 6 savings YAMLs to `pii`.

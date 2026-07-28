@@ -17,6 +17,11 @@ under `SET LOCAL statement_timeout`. The truncation flag surfaces as a
 **Tech Stack:** Rust edition 2024, axum, sqlx (Postgres), serde_yaml. Existing
 dependencies only. No migration.
 
+**Status:** implemented 2026-07-28. The extra-row probe applies only when the cap
+replaces a missing or over-cap request: a within-cap `limit` can be a per-group
+rank (monthly top-N), so treating it as a global result ceiling would change the
+approved query's semantics.
+
 **Authoritative spec:** `docs/superpowers/specs/2026-07-27-issue-007-b6-query-budget-timeout-design.md`.
 
 ## Global Constraints
@@ -41,14 +46,14 @@ dependencies only. No migration.
 
 **Files:** read only.
 
-- [ ] **Step 1: Confirm formatting + compilation**
+- [x] **Step 1: Confirm formatting + compilation**
 ```bash
 cargo fmt --check
 cargo check
 ```
 Expected: both exit `0`.
 
-- [ ] **Step 2: Confirm the guard tests are green (or DB-skipped)**
+- [x] **Step 2: Confirm the guard tests are green (or DB-skipped)**
 ```bash
 cargo test -p chat --test catalog_validation
 cargo test -p chat --test assistant_response
@@ -66,7 +71,7 @@ Expected: pass, or skip cleanly if no Fineract DB. Record any unexplained red be
 - `crates/chat/src/knowledge/catalog/loader.rs` (test only)
 - `knowledge/queries/savings/activity_list.yaml`
 
-- [ ] **Step 1: Test first — loader reads top-level `timeout_ms`**
+- [x] **Step 1: Test first — loader reads top-level `timeout_ms`**
 
 In `crates/chat/src/knowledge/catalog/loader.rs`, extend the existing query-load
 test module (near the `by_name["limit"].hard_cap` assertion at ~:261) with:
@@ -105,7 +110,7 @@ cargo test -p chat --lib knowledge::catalog::loader::tests::load_query_reads_tim
 ```
 Expected: FAILS to compile (`no field timeout_ms`).
 
-- [ ] **Step 2: Add the field to `QueryKnowledge`**
+- [x] **Step 2: Add the field to `QueryKnowledge`**
 
 In `crates/chat/src/knowledge/model.rs`, inside `pub struct QueryKnowledge`, after
 `output_fields`:
@@ -124,7 +129,7 @@ cargo test -p chat --lib knowledge::catalog::loader::tests::load_query_reads_tim
 ```
 Expected: both PASS.
 
-- [ ] **Step 3: Normalize `activity_list.yaml`**
+- [x] **Step 3: Normalize `activity_list.yaml`**
 
 `knowledge/queries/savings/activity_list.yaml` currently nests `timeout_ms: 3000`
 under `guards:` (line ~85). Remove that nested line and add a top-level
@@ -135,7 +140,7 @@ grep -n "timeout_ms" knowledge/queries/savings/activity_list.yaml
 ```
 Expected: exactly one hit, at top level (column 0), not indented under `guards:`.
 
-- [ ] **Step 4: Compile gate**
+- [x] **Step 4: Compile gate**
 ```bash
 cargo check -p chat
 ```
@@ -148,14 +153,14 @@ Expected: exit `0`.
 **Files:** all `knowledge/queries/**/*.yaml` and `knowledge/capabilities/**/*.yaml`
 that declare `cost_class` (30 + 30).
 
-- [ ] **Step 1: Confirm the surface before deleting**
+- [x] **Step 1: Confirm the surface before deleting**
 ```bash
 grep -rln "cost_class" knowledge/queries knowledge/capabilities | wc -l   # expect 60
 grep -rn  "cost_class" crates                                             # expect 0 (no Rust reader)
 ```
 Expected: 60 files, 0 Rust references.
 
-- [ ] **Step 2: Remove every top-level `cost_class:` line**
+- [x] **Step 2: Remove every top-level `cost_class:` line**
 ```bash
 grep -rl "cost_class" knowledge/queries knowledge/capabilities \
   | xargs sed -i '' '/^cost_class:/d'
@@ -164,7 +169,7 @@ grep -rn "cost_class" knowledge/queries knowledge/capabilities   # expect no out
 Expected: no remaining `cost_class` declarations. (If any file indented it, remove
 that line too — re-run the grep until clean.)
 
-- [ ] **Step 3: Catalog still loads and validates**
+- [x] **Step 3: Catalog still loads and validates**
 ```bash
 cargo test -p chat --test catalog_validation
 ```
@@ -178,7 +183,7 @@ Expected: PASS (catalog referential integrity unaffected by dropping an unused k
 - `crates/core/src/config/mod.rs`
 - `crates/chat/tests/common/mod.rs`
 
-- [ ] **Step 1: Add the field and its env read**
+- [x] **Step 1: Add the field and its env read**
 
 In `crates/core/src/config/mod.rs`, extend `QueryConfig`:
 ```rust
@@ -202,7 +207,7 @@ In the `QueryConfig { .. }` initializer (~:214):
             },
 ```
 
-- [ ] **Step 2: Fix the test fixture**
+- [x] **Step 2: Fix the test fixture**
 
 In `crates/chat/tests/common/mod.rs` (~:424):
 ```rust
@@ -212,7 +217,7 @@ In `crates/chat/tests/common/mod.rs` (~:424):
         },
 ```
 
-- [ ] **Step 3: Compile gate**
+- [x] **Step 3: Compile gate**
 ```bash
 cargo check
 ```
@@ -228,7 +233,7 @@ Expected: only the two sites above.
 
 **Files:** `crates/chat/src/execution/repository.rs`
 
-- [ ] **Step 1: Test first — the two pure helpers**
+- [x] **Step 1: Test first — the two pure helpers**
 
 Add to the `#[cfg(test)] mod tests` in `repository.rs`:
 ```rust
@@ -254,7 +259,7 @@ cargo test -p chat --lib execution::repository::tests::effective_row_cap_prefers
 ```
 Expected: FAILS to compile (functions absent).
 
-- [ ] **Step 2: Add the struct and helpers**
+- [x] **Step 2: Add the struct and helpers**
 
 At the top of `crates/chat/src/execution/repository.rs`, after the imports:
 ```rust
@@ -296,7 +301,7 @@ Expected: all PASS.
 
 **Files:** `crates/chat/src/execution/repository.rs`
 
-- [ ] **Step 1: Change `execute_plan`'s signature to accept limits**
+- [x] **Step 1: Change `execute_plan`'s signature to accept limits**
 
 ```rust
 pub async fn execute_plan(
@@ -309,7 +314,7 @@ pub async fn execute_plan(
 ```
 (Call site updated in Task 8; the crate will not compile until then — that is expected mid-task.)
 
-- [ ] **Step 2: Resolve the effective cap and fetch limit before the bind loop**
+- [x] **Step 2: Resolve the effective cap and fetch limit before the bind loop**
 
 After the `let query = ...` / `let sql = ...` block and before
 `let mut sql_query = ...`:
@@ -332,18 +337,15 @@ After the `let query = ...` / `let sql = ...` block and before
         .iter()
         .find(|parameter| matches!(parameter.name.as_str(), "limit" | "top_n"))
         .map(|parameter| parameter.name.clone());
-    // fetch one extra row past the ceiling to detect truncation with no SQL change.
-    let fetch_limit = limit_param.as_ref().map(|name| {
-        let requested = plan
-            .params
-            .get(name)
-            .and_then(Value::as_i64)
-            .unwrap_or(row_cap);
-        requested.min(row_cap)
+    // Fetch one extra row only when the cap replaces a missing or over-cap
+    // request. A within-cap limit can be a per-group rank, so probing it as a
+    // global row ceiling would change approved-query semantics.
+    let fetch_limit = limit_param.as_ref().and_then(|name| {
+        truncation_limit(plan.params.get(name).and_then(Value::as_i64), row_cap)
     });
 ```
 
-- [ ] **Step 3: Bind `fetch_limit + 1` for the limit parameter**
+- [x] **Step 3: Bind `fetch_limit + 1` only when the cap replaces the request**
 
 Replace the integer-bind arm so the limit/top_n parameter binds the fetch value:
 ```rust
@@ -367,7 +369,7 @@ Replace the integer-bind arm so the limit/top_n parameter binds the fetch value:
     }
 ```
 
-- [ ] **Step 4: Detect truncation after fetch, trim surplus, report `shown`**
+- [x] **Step 4: Detect truncation after fetch, trim surplus, report `shown`**
 
 Replace `let rows = sql_query.fetch_all(pool).await?;` and the result assembly.
 First keep the fetch (timeout wrapper added in Task 7); then:
@@ -392,7 +394,7 @@ And extend the returned JSON:
 ```
 (Change `let rows` to `let mut rows` at the fetch site.)
 
-- [ ] **Step 5: Make the stale comment true in `parameters.rs`**
+- [x] **Step 5: Make the stale comment true in `parameters.rs`**
 
 In `crates/chat/src/assistant/execution/tool/parameters.rs` (~:297-303) replace the
 comment block on `ResolvedValue::Unbounded`:
@@ -406,7 +408,7 @@ comment block on `ResolvedValue::Unbounded`:
         ResolvedValue::Unbounded => json!(i64::MAX),
 ```
 
-- [ ] **Step 6: Compile the module in isolation**
+- [x] **Step 6: Compile the module in isolation**
 ```bash
 cargo check -p chat 2>&1 | grep -E "repository.rs|parameters.rs" || echo "module edits internally consistent"
 ```
@@ -418,7 +420,7 @@ Expected: remaining errors are only the `execute_plan` call-site arity mismatch 
 
 **Files:** `crates/chat/src/execution/repository.rs`
 
-- [ ] **Step 1: Add the timeout-scoped fetch helper**
+- [x] **Step 1: Add the timeout-scoped fetch helper**
 
 Add imports at the top: `use sqlx::{Postgres, postgres::{PgArguments, PgRow}};`
 (keep the existing `PgPool, Row` imports). Then:
@@ -452,7 +454,7 @@ async fn fetch_all_with_timeout<'q>(
 }
 ```
 
-- [ ] **Step 2: Use it in `execute_plan`**
+- [x] **Step 2: Use it in `execute_plan`**
 
 Compute the budget and replace the fetch:
 ```rust
@@ -461,7 +463,7 @@ Compute the budget and replace the fetch:
 ```
 (`sql_query` is moved into the helper; it is not used afterward.)
 
-- [ ] **Step 3: Test first — DB-gated timeout mechanism**
+- [x] **Step 3: Test first — DB-gated timeout mechanism**
 
 Add a DB-gated test to `repository.rs` tests (guard with the same env check the
 integration harness uses; skip when `FINERACT_DATABASE_URL` is unset):
@@ -489,7 +491,7 @@ FINERACT_DATABASE_URL=postgres://root:password@127.0.0.1:5432/fineract_default \
 Expected: PASS (or clean skip if no DB). Confirms `SET LOCAL statement_timeout` +
 57014 classification + sanitized message end-to-end.
 
-- [ ] **Step 4: Module compile gate**
+- [x] **Step 4: Module compile gate**
 ```bash
 cargo check -p chat 2>&1 | grep "repository.rs" || echo "repository.rs clean"
 ```
@@ -508,7 +510,7 @@ Expected: no `repository.rs`-local errors.
 - `crates/chat/src/assistant/execution/tool/mod.rs`
 - `crates/chat/src/assistant/presentation/builder.rs`
 
-- [ ] **Step 1: Carry limits on `CanonicalRuntimeContext`**
+- [x] **Step 1: Carry limits on `CanonicalRuntimeContext`**
 
 In `runtime/mod.rs`, add to `pub struct CanonicalRuntimeContext`:
 ```rust
@@ -517,7 +519,7 @@ In `runtime/mod.rs`, add to `pub struct CanonicalRuntimeContext`:
 }
 ```
 
-- [ ] **Step 2: `execute_plan` call site reads the limits**
+- [x] **Step 2: `execute_plan` call site reads the limits**
 
 In `runtime/execution.rs`, at the `execute_plan(pool, catalog, &plan, &policy)`
 call (~:234):
@@ -530,7 +532,7 @@ call (~:234):
 (`execute_plan` and `ExecutionLimits` are already imported via the runtime's `use`
 tree; add `use crate::execution::repository::ExecutionLimits;` if the check reports it missing.)
 
-- [ ] **Step 3: `JobService` stores `QueryConfig` and sets the field**
+- [x] **Step 3: `JobService` stores `QueryConfig` and sets the field**
 
 In `job/service/mod.rs`: import `QueryConfig` (`use app_core::config::{.. , QueryConfig};`),
 add `query_config: QueryConfig` to `struct JobService`, add a `query_config: QueryConfig`
@@ -546,13 +548,13 @@ In `job/service/run.rs`, in the `CanonicalRuntimeContext { .. }` literal (~:70):
             },
 ```
 
-- [ ] **Step 4: Pass the config at construction**
+- [x] **Step 4: Pass the config at construction**
 
 In `crates/chat/src/api/mod.rs`, in the `JobService::new( .. )` call (~:86), add
 `core.config.query.clone()` in the same position chosen in Step 3 (after
 `core.config.chat_features.clone()`).
 
-- [ ] **Step 5: `ToolResult` carries `truncated`; builder emits the warning**
+- [x] **Step 5: `ToolResult` carries `truncated`; builder emits the warning**
 
 In `assistant/execution/tool/mod.rs`, add to `pub struct ToolResult`:
 ```rust
@@ -589,7 +591,7 @@ binding from `let warnings = ...` to `let mut warnings = ...` (it currently ends
         }
 ```
 
-- [ ] **Step 6: Fix every other `ToolResult { .. }` / `CanonicalRuntimeContext { .. }` literal**
+- [x] **Step 6: Fix every other `ToolResult { .. }` / `CanonicalRuntimeContext { .. }` literal**
 ```bash
 grep -rn "ToolResult {" crates/chat/src crates/chat/tests
 grep -rn "CanonicalRuntimeContext {" crates/chat/src crates/chat/tests
@@ -598,7 +600,7 @@ Add `truncated: None` / `execution_limits: Default::default()` to any literal th
 grep finds (test fixtures included). `#[serde(default)]` covers deserialization
 paths; struct literals must be updated explicitly.
 
-- [ ] **Step 7: Full compile gate**
+- [x] **Step 7: Full compile gate**
 ```bash
 cargo fmt
 cargo check
@@ -612,7 +614,7 @@ Expected: exit `0`.
 **Files:** `crates/chat/tests/savings_answer_quality.rs` (or a new
 `crates/chat/tests/query_budget.rs` following the same harness in `tests/common`).
 
-- [ ] **Step 1: Test — hard_cap bites and warns**
+- [x] **Step 1: Test — hard_cap bites and warns**
 
 Using the shared harness (`common::spawn_app` / `app.fineract`), drive the
 `savings_pending_charges_clients` capability against the populated charges table
@@ -621,7 +623,7 @@ with a fixture/override cap of `2` (via a fixture catalog whose `limit`
 - the returned table has at most 2 rows, and
 - `response.warnings` contains one with `code == "result_truncated"`.
 
-- [ ] **Step 2: Test — backstop bites**
+- [x] **Step 2: Test — backstop bites**
 
 With a capability whose `limit` policy has `hard_cap: None` and an
 `ExecutionLimits { global_max_rows: 2, .. }`, assert the result is bounded to 2
@@ -629,7 +631,7 @@ rows. (Construct the limits directly when calling `execute_plan` in a
 repository-level integration test, or set `QUERY_GLOBAL_MAX_ROWS=2` for a
 process-level test.)
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 ```bash
 FINERACT_DATABASE_URL=postgres://root:password@127.0.0.1:5432/fineract_default \
   cargo test -p chat --test savings_answer_quality
@@ -643,7 +645,7 @@ count observed.
 
 ## Task 10: Final verification
 
-- [ ] **Step 1: Format + full workspace**
+- [x] **Step 1: Format + full workspace**
 ```bash
 cargo fmt --check
 cargo check
@@ -651,7 +653,7 @@ git diff --check
 ```
 Expected: all exit `0`; no whitespace errors.
 
-- [ ] **Step 2: Full guard suite**
+- [x] **Step 2: Full guard suite**
 ```bash
 cargo test -p chat --lib execution::repository
 cargo test -p chat --lib knowledge::catalog::loader
@@ -662,7 +664,7 @@ cargo test -p chat --test savings_answer_quality
 ```
 Expected: all pass (DB-gated ones skip cleanly without Fineract).
 
-- [ ] **Step 3: Acceptance cross-check against the issue**
+- [x] **Step 3: Acceptance cross-check against the issue**
   - `hard_cap: N` capability returns ≤ N rows (Task 9 Step 1). ✔ bullet 1
   - no-`hard_cap` capability bounded by the backstop (Task 9 Step 2). ✔ bullet 2
   - `parameters.rs:299` comment is now true (Task 6 Step 5). ✔ bullet 3
