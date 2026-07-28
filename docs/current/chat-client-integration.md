@@ -495,8 +495,10 @@ Assistant-message `content` is rendered markdown. Its `metadata_json` is `{ "typ
 Render defensively:
 
 - `summary`: title/message, sections, cards, warnings, actions, and safe evidence references.
-- `table`: columns in server order and exactly the returned rows; show an empty state for none.
-- `metric_cards`: only returned cards and values.
+- `table`: columns in server order and exactly the returned rows; show an empty state for none. `table.rows` is authoritative and is never shortened for markdown rendering.
+- `rendered_markdown` is an escaped fallback sample of at most 50 table rows. It is not a complete export and must not replace the structured table.
+- Query decimals in `table.rows` remain their raw strings. For charge-detail results that include `currency_code`, `currency_digits`, and `currency_display_symbol`, Markdown and returned cards show precision-aware amounts; a missing symbol falls back to the currency code.
+- Currency cards are partitioned by currency. Surface the `multi_currency` warning and never create or display a grand total across currencies.
 - `clarification`: message and returned options.
 - `help`, `unsupported`, `out_of_domain`, `policy_blocked`, `error`: the server's safe copy and available warnings/actions.
 - Never invent rows, metrics, labels, or requested counts that were not returned.

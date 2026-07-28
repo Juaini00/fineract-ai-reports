@@ -25,7 +25,6 @@ pub struct ExecutionPlan {
     pub params: Value,
     pub retrieval_plan: RetrievalPlan,
     pub evidence_evaluation: EvidenceEvaluation,
-    pub answer_plan: AnswerPlan,
     pub requires_policy_check: bool,
 }
 
@@ -43,11 +42,6 @@ pub struct EvidenceEvaluation {
     pub source_count: usize,
     pub source_types: Vec<String>,
     pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AnswerPlan {
-    pub sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,7 +87,6 @@ pub fn build_execution_plan(
         params: classification.params.clone(),
         retrieval_plan: build_retrieval_plan(classification, capability_knowledge),
         evidence_evaluation: evaluate_evidence(classification, catalog),
-        answer_plan: build_answer_plan(&capability_knowledge.output_mode),
         requires_policy_check: true,
     })
 }
@@ -154,21 +147,6 @@ fn evaluate_evidence(
         source_count,
         source_types,
         reason: (!enough).then(|| "insufficient retrieval evidence".to_string()),
-    }
-}
-
-fn build_answer_plan(output_mode: &str) -> AnswerPlan {
-    let sections = match output_mode {
-        "list" => ["Result", "Scope", "Evidence"].as_slice(),
-        "top_n" | "monthly_top_n" => ["Ranking", "Scope", "Evidence"].as_slice(),
-        "monthly_breakdown" => ["Monthly Breakdown", "Scope", "Evidence"].as_slice(),
-        _ => ["Summary", "Scope", "Evidence"].as_slice(),
-    };
-    AnswerPlan {
-        sections: sections
-            .iter()
-            .map(|section| (*section).to_string())
-            .collect(),
     }
 }
 

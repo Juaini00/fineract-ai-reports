@@ -6,8 +6,8 @@
 use app_core::auth::model::PrincipalContext;
 use chat::assistant::ClarificationFieldType;
 use chat::assistant::execution::plan::{
-    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
-    RetrievalPlan, evaluate_policy,
+    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
+    evaluate_policy,
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
@@ -362,7 +362,6 @@ fn pii_policy_uses_selected_query_output_fields() {
         params: json!({}),
         retrieval_plan: RetrievalPlan::default(),
         evidence_evaluation: EvidenceEvaluation::default(),
-        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     };
 
@@ -387,7 +386,6 @@ fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
         params: json!({ "search": "Tony" }),
         retrieval_plan: RetrievalPlan::default(),
         evidence_evaluation: EvidenceEvaluation::default(),
-        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     };
     let mut client = client(false);

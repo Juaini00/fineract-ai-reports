@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use chat::assistant::execution::plan::{
-    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision,
-    PolicyDecisionStatus, RetrievalPlan,
+    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision, PolicyDecisionStatus,
+    RetrievalPlan,
 };
 use chat::assistant::{
     AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
@@ -126,7 +126,6 @@ fn plan(limit: i64) -> ExecutionPlan {
         }),
         retrieval_plan: RetrievalPlan::default(),
         evidence_evaluation: EvidenceEvaluation::default(),
-        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     }
 }

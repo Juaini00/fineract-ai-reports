@@ -1,4 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use chrono::NaiveDate;
+use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::{Map, Value};
 
 use crate::assistant::execution::plan::{ExecutionPlan, PolicyDecision};
@@ -9,8 +12,8 @@ use crate::assistant::{
     presentation::renderer::{MarkdownRenderer, ResponseRenderer},
     response::{
         AssistantResponse, AssistantResponseType, EvidenceReference, ResponseAction,
-        ResponseActionType, ResponseOption, ResponseTable, ResponseWarning, TableColumn,
-        TableColumnKind,
+        ResponseActionType, ResponseCard, ResponseOption, ResponseTable, ResponseWarning,
+        TableColumn, TableColumnKind,
     },
 };
 use crate::knowledge::model::{KnowledgeCatalog, QueryOutputField, Sensitivity};
@@ -49,7 +52,7 @@ impl ResponseBuilder {
         let rows = tool_result.rows.clone();
         let columns = fields
             .iter()
-            .map(|field| table_column(field, policy.can_view_pii))
+            .map(|field| table_column(field, policy.can_view_pii, has_currency_metadata(fields)))
             .collect::<Vec<_>>();
         let rows = rows
             .into_iter()
@@ -74,6 +77,15 @@ impl ResponseBuilder {
             });
         }
 
+        let cards = response_cards(&rows, has_currency_metadata(fields));
+        if has_currency_metadata(fields) && currency_codes(&rows).len() > 1 {
+            warnings.push(ResponseWarning {
+                code: "multi_currency".into(),
+                message: "Amounts are shown separately by currency; no combined total is provided."
+                    .into(),
+            });
+        }
+
         let row_count = rows.len();
         let message = if plan.capability == "client_name_lookup" {
             match row_count {
@@ -92,7 +104,7 @@ impl ResponseBuilder {
             message,
             sections: Vec::new(),
             table: Some(ResponseTable { columns, rows }),
-            cards: Vec::new(),
+            cards,
             options: Vec::new(),
             clarification: None,
             warnings,
@@ -340,12 +352,102 @@ fn filtered_row(row: Value, fields: &[QueryOutputField], can_view_pii: bool) -> 
     Value::Object(out)
 }
 
-fn table_column(field: &QueryOutputField, can_view_pii: bool) -> TableColumn {
+fn has_currency_metadata(fields: &[QueryOutputField]) -> bool {
+    [
+        "currency_code",
+        "currency_digits",
+        "currency_display_symbol",
+    ]
+    .into_iter()
+    .all(|name| fields.iter().any(|field| field.name == name))
+}
+
+fn currency_codes(rows: &[Value]) -> BTreeSet<String> {
+    rows.iter()
+        .filter_map(|row| row.get("currency_code").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn response_cards(rows: &[Value], has_currency_metadata: bool) -> Vec<ResponseCard> {
+    let mut cards = vec![ResponseCard {
+        label: "Rows".into(),
+        value: rows.len().to_string(),
+        unit: None,
+    }];
+    if !has_currency_metadata {
+        return cards;
+    }
+
+    let mut totals = BTreeMap::<String, (u32, Option<String>, Decimal)>::new();
+    for row in rows {
+        let Some(code) = row
+            .get("currency_code")
+            .and_then(Value::as_str)
+            .map(str::trim)
+        else {
+            continue;
+        };
+        if code.is_empty() {
+            continue;
+        }
+        let Some(digits) = row.get("currency_digits").and_then(Value::as_u64) else {
+            continue;
+        };
+        let Some(amount) = row
+            .get("amount_outstanding")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<Decimal>().ok())
+        else {
+            continue;
+        };
+        let symbol = row
+            .get("currency_display_symbol")
+            .and_then(Value::as_str)
+            .filter(|symbol| !symbol.trim().is_empty())
+            .map(str::to_owned);
+        let entry = totals
+            .entry(code.to_owned())
+            .or_insert((digits as u32, symbol, Decimal::ZERO));
+        entry.2 += amount;
+    }
+    for (code, (digits, symbol, amount)) in totals {
+        cards.push(ResponseCard {
+            label: format!("Outstanding ({code})"),
+            value: format_money(amount, digits, symbol.as_deref(), &code),
+            unit: None,
+        });
+    }
+    cards
+}
+
+pub(crate) fn format_money(
+    value: Decimal,
+    digits: u32,
+    symbol: Option<&str>,
+    code: &str,
+) -> String {
+    let rounded = value.round_dp_with_strategy(digits, RoundingStrategy::MidpointAwayFromZero);
+    let amount = format!("{rounded:.precision$}", precision = digits as usize);
+    let prefix = symbol
+        .filter(|symbol| !symbol.trim().is_empty())
+        .unwrap_or(code);
+    format!("{prefix} {amount}").replace("$ ", "$")
+}
+
+fn table_column(
+    field: &QueryOutputField,
+    can_view_pii: bool,
+    has_currency_metadata: bool,
+) -> TableColumn {
     TableColumn {
         key: field.name.clone(),
         label: field.name.replace('_', " "),
         kind: match field.kind.as_str() {
             "integer" | "bigint" => TableColumnKind::Number,
+            "decimal" if has_currency_metadata => TableColumnKind::Money,
             "decimal" => TableColumnKind::Decimal,
             "date" => TableColumnKind::Date,
             _ => TableColumnKind::Text,
@@ -366,7 +468,7 @@ mod tests {
     use super::*;
     use crate::{
         assistant::execution::plan::{
-            AnswerPlan, EvidenceEvaluation, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
+            EvidenceEvaluation, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
         },
         assistant::{
             AssistantConstraints, AssistantDomain, AssistantIntentKind, AssistantLanguage,
@@ -467,6 +569,89 @@ mod tests {
     }
 
     #[test]
+    fn formats_charge_money_per_currency_without_cross_currency_total() {
+        let response = ResponseBuilder::from_tool_result(
+            &intent(),
+            &charge_plan(),
+            &allowed_policy(),
+            &ToolResult {
+                tool_name: "approved_catalog_sql".into(),
+                ok: true,
+                rows: vec![
+                    json!({
+                        "currency_code": "USD",
+                        "currency_digits": 2,
+                        "currency_display_symbol": "$",
+                        "amount_outstanding": "100.000000"
+                    }),
+                    json!({
+                        "currency_code": "AED",
+                        "currency_digits": 0,
+                        "currency_display_symbol": null,
+                        "amount_outstanding": "20.500000"
+                    }),
+                ],
+                summary: None,
+                error: None,
+                evidence_refs: vec![],
+                truncated: None,
+            },
+            &charge_catalog(),
+        );
+
+        let table = response.table.as_ref().unwrap();
+        assert_eq!(table.rows[0]["amount_outstanding"], "100.000000");
+        assert_eq!(
+            table
+                .columns
+                .iter()
+                .find(|column| column.key == "amount_outstanding")
+                .unwrap()
+                .kind,
+            TableColumnKind::Money
+        );
+        assert!(
+            response
+                .rendered_markdown
+                .as_ref()
+                .unwrap()
+                .contains("$100.00")
+        );
+        assert!(
+            response
+                .rendered_markdown
+                .as_ref()
+                .unwrap()
+                .contains("AED 21")
+        );
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "multi_currency")
+        );
+        assert!(
+            response
+                .cards
+                .iter()
+                .any(|card| card.label == "Rows" && card.value == "2")
+        );
+        assert!(
+            response
+                .cards
+                .iter()
+                .any(|card| card.label == "Outstanding (USD)" && card.value == "$100.00")
+        );
+        assert!(
+            response
+                .cards
+                .iter()
+                .any(|card| card.label == "Outstanding (AED)" && card.value == "AED 21")
+        );
+        assert!(!response.cards.iter().any(|card| card.value.contains("120")));
+    }
+
+    #[test]
     fn public_business_columns_are_never_hidden_even_without_pii_access() {
         let field = QueryOutputField {
             name: "amount".into(),
@@ -476,6 +661,51 @@ mod tests {
 
         assert!(!is_hidden(&field, false));
         assert!(!is_hidden(&field, true));
+    }
+
+    fn allowed_policy() -> PolicyDecision {
+        PolicyDecision {
+            status: PolicyDecisionStatus::Allowed,
+            reason: None,
+            office_ids: vec![1],
+            can_view_pii: true,
+        }
+    }
+
+    fn charge_plan() -> ExecutionPlan {
+        ExecutionPlan {
+            query_id: "savings.pending_charges_clients".into(),
+            capability: "savings_pending_charges_clients".into(),
+            ..plan()
+        }
+    }
+
+    fn charge_catalog() -> KnowledgeCatalog {
+        let mut catalog = catalog();
+        catalog.queries[0].id = "savings.pending_charges_clients".into();
+        catalog.queries[0].output_fields = vec![
+            QueryOutputField {
+                name: "currency_code".into(),
+                kind: "string".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+            },
+            QueryOutputField {
+                name: "currency_digits".into(),
+                kind: "integer".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+            },
+            QueryOutputField {
+                name: "currency_display_symbol".into(),
+                kind: "string".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+            },
+            QueryOutputField {
+                name: "amount_outstanding".into(),
+                kind: "decimal".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+            },
+        ];
+        catalog
     }
 
     fn intent() -> AssistantIntent {
@@ -503,7 +733,6 @@ mod tests {
             params: json!({}),
             retrieval_plan: RetrievalPlan::default(),
             evidence_evaluation: EvidenceEvaluation::default(),
-            answer_plan: AnswerPlan::default(),
             requires_policy_check: true,
         }
     }

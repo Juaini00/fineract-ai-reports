@@ -300,7 +300,7 @@ mod tests {
 
     use super::{integer_param, resolve_sql_path};
     use crate::assistant::execution::plan::{
-        AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
+        EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
     };
     use crate::knowledge::model::{QueryOutputField, QueryParameter, Sensitivity};
 
@@ -365,7 +365,6 @@ mod tests {
             params: serde_json::json!({}),
             retrieval_plan: RetrievalPlan::default(),
             evidence_evaluation: EvidenceEvaluation::default(),
-            answer_plan: AnswerPlan::default(),
             requires_policy_check: true,
         };
         let parameter = QueryParameter {

@@ -81,7 +81,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 
 | 7 (W-D1) | — (test bundle) | `…-b7-bilingual-retrieval-regression.md` | ✅ | 72 bilingual rows, explicit partial/missing coverage, Unsupported-empty-options contract; 28 scoring gaps handed to Bundle 8 |
 | 8 (W-A3/W-D2) | `…-b8-catalog-retrieval-remediation-design.md` | `…-b8-catalog-retrieval-remediation.md` | ✅ | 28 ledger rows resolved; G2 strict-overdue capability added |
-| 9 (W-G/W-J/F4/F6) | gated | outline (same file) | ❌ | finalize after Bundle 8 |
+| 9 (W-G/W-J/F4/F6) | gated | outline (same file) | implementation in verification | bounded/escaped Markdown, scoped charge money rendering, and dead `AnswerPlan` removal |
 | 10 (W-E/F8) | `…-b10-clarification-suppression-design.md` | `…-b10-clarification-suppression.md` | ❌ | |
 | 11 (W-L) | gated | outline (same file) | ❌ | finalize after Bundles 8 + 6 |
 | 12 (W-C) | `specs/2026-07-24-llm-extraction-gateway-design.md` (existing) | `…-b12-extraction-gateway-continuation.md` (+ existing 24-Jul plan) | ❌ | last among code bundles |
