@@ -143,6 +143,7 @@ fn catalog() -> KnowledgeCatalog {
                 field("office_name", "string", "public_business"),
                 field("status_label", "string", "public_business"),
             ],
+            timeout_ms: None,
         }],
         policies: Vec::new(),
         responses: Vec::new(),

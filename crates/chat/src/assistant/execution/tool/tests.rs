@@ -78,6 +78,7 @@ fn extracts_dates_currency_products_and_limit() {
             parameter("limit", false),
         ],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let extraction =
         extract_message_facts("show top 5 savings in USD from 2026-01-01 to 2026-01-31");
@@ -127,6 +128,7 @@ fn verified_quantity_overrides_missing_llm_quantity() {
         metrics: Vec::new(),
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let extraction = extract_message_facts("show top 10 clients");
     let params = params_from_verified(
@@ -152,6 +154,7 @@ fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
         metrics: Vec::new(),
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let params = params_from_verified(
         &query,
@@ -178,6 +181,7 @@ fn hallucinated_optional_currency_is_omitted_without_verified_extraction() {
         metrics: Vec::new(),
         parameters: vec![parameter("currency_code", false)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let mut intent = intent_with_quantity(None);
     intent.constraints.currency_code = Some("USD".into());
@@ -230,6 +234,7 @@ fn hallucinated_required_search_rejected_without_trusted_entity() {
         metrics: Vec::new(),
         parameters: vec![parameter("search", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let mut intent = intent_with_quantity(None);
     intent.entities.push(AssistantEntity {
@@ -254,6 +259,7 @@ fn trusted_named_tony_fills_search() {
         metrics: Vec::new(),
         parameters: vec![parameter("search", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let extraction = extract_message_facts("find client named Tony");
     let params = params_from_verified(
@@ -327,6 +333,7 @@ fn defaults_business_today_when_policy_declares_it() {
         metrics: Vec::new(),
         parameters: vec![parameter("from_date", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let policies = vec![ParameterPolicy {
         name: "from_date".into(),
@@ -370,6 +377,7 @@ fn unbounded_limit_is_clamped_to_hard_cap() {
         metrics: Vec::new(),
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let policies = vec![ParameterPolicy {
         name: "limit".into(),
@@ -455,6 +463,7 @@ fn defaults_authorized_scope_when_policy_declares_it() {
         metrics: Vec::new(),
         parameters: vec![parameter("office_ids", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let policies = vec![ParameterPolicy {
         name: "office_ids".into(),
@@ -495,6 +504,7 @@ fn still_bails_when_no_policy_and_no_default() {
         metrics: Vec::new(),
         parameters: vec![parameter("from_date", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let error =
         params_from_verified(&query, &intent_with_quantity(None), None, &[], None).unwrap_err();

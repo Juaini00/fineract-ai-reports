@@ -38,7 +38,6 @@ defaults:
 guards:
   require_office_scope: true
   max_date_range_days: 366
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

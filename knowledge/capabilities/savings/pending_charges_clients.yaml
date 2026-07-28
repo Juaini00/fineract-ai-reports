@@ -36,7 +36,6 @@ defaults:
 guards:
   require_office_scope: true
   max_limit: 10000
-cost_class: medium
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

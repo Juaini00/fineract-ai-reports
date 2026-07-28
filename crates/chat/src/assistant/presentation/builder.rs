@@ -496,6 +496,7 @@ mod tests {
                         sensitivity: Sensitivity::Pii,
                     },
                 ],
+                timeout_ms: None,
             }],
             policies: Vec::new(),
             responses: Vec::new(),

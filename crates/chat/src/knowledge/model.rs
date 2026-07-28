@@ -267,6 +267,11 @@ pub struct QueryKnowledge {
 
     #[serde(default)]
     pub output_fields: Vec<QueryOutputField>,
+
+    /// Per-query Postgres statement-timeout budget in milliseconds. Absent falls
+    /// back to `QueryConfig.default_timeout_ms` at execution.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

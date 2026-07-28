@@ -435,6 +435,7 @@ mod tests {
                     vec![param("from_date"), param("to_date")]
                 },
                 output_fields: vec![],
+                timeout_ms: None,
             })
             .collect();
         KnowledgeCatalog {

@@ -286,6 +286,35 @@ required_parameters: [from_date, to_date]
     }
 
     #[test]
+    fn load_query_reads_timeout_ms() {
+        let yaml = r#"
+id: savings.demo
+database: fineract
+sql_file: queries/savings/demo.sql
+timeout_ms: 8000
+parameters:
+  - name: limit
+    type: integer
+    required: false
+"#;
+        let query: crate::knowledge::model::QueryKnowledge =
+            serde_yaml::from_str(yaml).expect("query yaml parses");
+        assert_eq!(query.timeout_ms, Some(8000));
+    }
+
+    #[test]
+    fn load_query_timeout_ms_absent_is_none() {
+        let yaml = r#"
+id: savings.demo
+database: fineract
+sql_file: queries/savings/demo.sql
+"#;
+        let query: crate::knowledge::model::QueryKnowledge =
+            serde_yaml::from_str(yaml).expect("query yaml parses");
+        assert_eq!(query.timeout_ms, None);
+    }
+
+    #[test]
     fn unknown_default_expression_is_rejected() {
         let bad = r#"
 id: bad

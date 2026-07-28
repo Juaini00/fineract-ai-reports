@@ -26,7 +26,6 @@ defaults:
 guards:
   require_office_scope: true
   snapshot_only: true
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
