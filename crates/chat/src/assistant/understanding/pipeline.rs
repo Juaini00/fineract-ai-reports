@@ -3,6 +3,16 @@
 //! Ready to be dropped into `AssistantGraphRuntime` (spec §7 Task 7.1); the
 //! runtime wiring is a separate step deliberately kept out of this bundle so
 //! Bundle 12's layers are reviewable in isolation.
+//!
+//! Spec §7 scenario coverage (see `#[tokio::test]` block below):
+//!   - "top 10 offices bulan lalu" → Execute (row 6, covered).
+//!   - "deposits" → Clarify (row 7, covered).
+//!   - "How much did we deposit?" → Execute with catalog defaults (W-E witness).
+//!   - "look up a client" → Clarify (search missing, F8 witness).
+//!   - unsafe intent → Reject.
+//!   - Loan rows (loan_arrears_clients, loan_repayments_today,
+//!     loan_interest_recent) are deferred to issue 008 — no loan capability
+//!     exists in the current catalog.
 
 use app_core::auth::model::PrincipalContext;
 use chrono::NaiveDate;
@@ -181,6 +191,75 @@ mod tests {
             "expected Clarify, got {:?}",
             outcome.decision
         );
+    }
+
+    #[tokio::test]
+    async fn scenario_fully_defaulted_savings_total_executes_without_asking() {
+        // W-E witness through the pipeline: no temporal hint, no quantity hint,
+        // capability is fully defaulted → Execute with catalog defaults filled.
+        let fake = Arc::new(FakeLlmClient::default());
+        fake.push_structured(serde_json::json!({
+            "intent_kind": "report_request",
+            "domain": "savings",
+            "language": "en",
+            "entities": [],
+            "candidates": [
+                { "capability_id": "savings_deposit_total", "confidence": 0.92, "why": "totals request" }
+            ]
+        }));
+        let gateway = GatewayClient::new(fake as SharedLlmClient);
+        let catalog = real_catalog();
+        let outcome = run(
+            &gateway,
+            &catalog,
+            &principal(&["savings_deposit_total"]),
+            "How much did we deposit?",
+            None,
+            business_today(),
+        )
+        .await
+        .expect("pipeline succeeds");
+        let DecisionOutcome::Execute { capability_id, .. } = outcome.decision else {
+            panic!("expected Execute, got {:?}", outcome.decision);
+        };
+        assert_eq!(capability_id, "savings_deposit_total");
+    }
+
+    #[tokio::test]
+    async fn scenario_client_name_lookup_without_search_clarifies() {
+        // F8 witness through the pipeline: routing chose client_name_lookup but
+        // the required `search` parameter is missing → Clarify.
+        let fake = Arc::new(FakeLlmClient::default());
+        fake.push_structured(serde_json::json!({
+            "intent_kind": "data_lookup",
+            "domain": "client",
+            "language": "en",
+            "entities": [],
+            "candidates": [
+                { "capability_id": "client_name_lookup", "confidence": 0.88, "why": "user asked to look up a client" }
+            ]
+        }));
+        let gateway = GatewayClient::new(fake as SharedLlmClient);
+        let catalog = real_catalog();
+        let outcome = run(
+            &gateway,
+            &catalog,
+            &principal(&["client_name_lookup"]),
+            "look up a client",
+            None,
+            business_today(),
+        )
+        .await
+        .expect("pipeline succeeds");
+        match outcome.decision {
+            DecisionOutcome::Clarify { missing_fields } => {
+                assert!(
+                    missing_fields.iter().any(|f| f == "search"),
+                    "expected `search` in missing_fields: {missing_fields:?}"
+                );
+            }
+            other => panic!("expected Clarify, got {other:?}"),
+        }
     }
 
     #[tokio::test]
