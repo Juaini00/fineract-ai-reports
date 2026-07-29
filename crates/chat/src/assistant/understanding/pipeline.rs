@@ -28,6 +28,42 @@ pub struct PipelineOutcome {
     pub decision: DecisionOutcome,
 }
 
+/// Translate a Layer-1 extraction into the legacy `AssistantIntent` shape so
+/// downstream code that reads `memory.intent` (execution, presentation, audit)
+/// keeps working after the gateway pipeline replaces the classifier.
+pub fn assistant_intent_from_extraction(
+    extraction: &LlmGatewayExtraction,
+    user_message: &str,
+) -> crate::assistant::AssistantIntent {
+    use crate::assistant::understanding::intent::{AssistantEntity, RequestShape};
+    let entities = extraction
+        .entities
+        .iter()
+        .map(|entity| AssistantEntity {
+            entity_type: entity.entity_type.clone(),
+            value: entity.value.clone(),
+            canonical: None,
+            confidence: None,
+        })
+        .collect();
+    crate::assistant::AssistantIntent {
+        intent: extraction.intent_kind.clone(),
+        domain: extraction.domain.clone(),
+        request_shape: RequestShape::default(),
+        language: extraction.language.clone(),
+        entities,
+        constraints: Default::default(),
+        context_reference: Default::default(),
+        source: None,
+        confidence: extraction
+            .candidates
+            .first()
+            .map(|c| c.confidence)
+            .unwrap_or(0.0),
+        reason: user_message.to_string(),
+    }
+}
+
 pub async fn run(
     gateway: &GatewayClient,
     catalog: &KnowledgeCatalog,

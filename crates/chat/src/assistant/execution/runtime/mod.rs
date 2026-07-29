@@ -230,6 +230,12 @@ pub async fn run_via_gateway_pipeline(
     };
     memory.current_user_message_metadata["llm_extraction"] =
         serde_json::to_value(&outcome.extraction).unwrap_or_else(|_| json!({}));
+    memory.intent = Some(
+        crate::assistant::understanding::pipeline::assistant_intent_from_extraction(
+            &outcome.extraction,
+            &input.source_message,
+        ),
+    );
     use crate::assistant::understanding::decider::DecisionOutcome;
     match outcome.decision {
         DecisionOutcome::Execute {
@@ -570,6 +576,25 @@ impl AssistantGraphRuntime {
                 None,
                 simple_intent_transitions(TerminalState::Completed, "simple_intent"),
             );
+        }
+        // Bundle 12: opt in to the LLM gateway pipeline via env var. When on and
+        // llm + catalog + client are available, route through Layers 1-3 instead
+        // of the classifier; extraction + intent land on memory the same way the
+        // legacy path does, so downstream execution/audit is unchanged.
+        if std::env::var("AI_REPORT_GATEWAY_PIPELINE").as_deref() == Ok("on")
+            && let (Some(llm), Some(catalog), Some(client), Some(canonical)) =
+                (llm, catalog, client, canonical)
+        {
+            return run_via_gateway_pipeline(
+                memory,
+                context,
+                llm.clone(),
+                catalog.as_ref(),
+                client,
+                canonical.business_today,
+                input,
+            )
+            .await;
         }
         let Some(router) = router else {
             return graph_result(
