@@ -75,12 +75,24 @@ pub enum PayloadField {
     PersonName,
 }
 
+/// Provenance of a resolved payload field, recorded for the issue-006 audit trail.
+///
+/// `#[non_exhaustive]` + the `Unknown` catch-all keep this forward-compatible: the
+/// drill-down follow-up (issue 009, §W-H decision 3) will add a `PriorJob` variant
+/// without a contract break, and an unknown source string from a newer producer
+/// deserialises to `Unknown` instead of failing. Do not reorder or rename the
+/// known variants — their snake_case tags are the stored audit contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PayloadSource {
     UserText,
     LlmClaim,
     CatalogDefault,
+    /// Any source tag this build does not recognise. Forward-compatibility only —
+    /// never construct this deliberately; producers emit a specific known source.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

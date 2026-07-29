@@ -236,3 +236,32 @@ fn temporal_reuses_the_same_job_reference_after_clarification() {
         job_reference
     );
 }
+
+#[test]
+fn payload_source_unknown_variant_deserialises_safely() {
+    let parsed: PayloadSource =
+        serde_json::from_str("\"prior_job\"").expect("unknown source must deserialise");
+    assert_eq!(parsed, PayloadSource::Unknown);
+
+    let candidate: PayloadCandidate = serde_json::from_value(serde_json::json!({
+        "field": "limit",
+        "value": 10,
+        "source": "some_future_source",
+        "trust": "trusted"
+    }))
+    .expect("candidate with unknown source must deserialise");
+    assert_eq!(candidate.source, PayloadSource::Unknown);
+
+    assert_eq!(
+        serde_json::from_str::<PayloadSource>("\"user_text\"").unwrap(),
+        PayloadSource::UserText
+    );
+    assert_eq!(
+        serde_json::from_str::<PayloadSource>("\"llm_claim\"").unwrap(),
+        PayloadSource::LlmClaim
+    );
+    assert_eq!(
+        serde_json::from_str::<PayloadSource>("\"catalog_default\"").unwrap(),
+        PayloadSource::CatalogDefault
+    );
+}
