@@ -4,3 +4,4 @@ pub mod extraction;
 pub mod gateway;
 pub mod intent;
 pub mod lqr;
+pub mod resolver;

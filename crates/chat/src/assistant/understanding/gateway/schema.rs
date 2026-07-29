@@ -44,7 +44,7 @@ pub struct TemporalHint {
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TemporalInferred {
     Today,
