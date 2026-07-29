@@ -83,7 +83,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 8 (W-A3/W-D2) | `…-b8-catalog-retrieval-remediation-design.md` | `…-b8-catalog-retrieval-remediation.md` | ✅ | 28 ledger rows resolved; G2 strict-overdue capability added |
 | 9 (W-G/W-J/F4/F6) | gated | outline (same file) | implementation in verification | bounded/escaped Markdown, scoped charge money rendering, and dead `AnswerPlan` removal |
 | 10 (W-E/F8) | `…-b10-clarification-suppression-design.md` | `…-b10-clarification-suppression.md` | ✅ | policy-derived gate + person-name extractor narrowed + catalog-wide W-E guard |
-| 11 (W-L) | gated | outline (same file) | ❌ | finalize after Bundles 8 + 6 |
+| 11 (W-L) | gated | outline (same file) | ✅ | truncated/timed-out audit event types + producers wired; catalog-iterating and no-leak tests added |
 | 12 (W-C) | `specs/2026-07-24-llm-extraction-gateway-design.md` (existing) | `…-b12-extraction-gateway-continuation.md` (+ existing 24-Jul plan) | ❌ | last among code bundles |
 | 13 (W-H/F5) | — (prep) | `…-b13-drilldown-preparation.md` | ❌ | prep only |
 | 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ❌ | needs `ai_report_dashboard#TBD` issue (yours) |

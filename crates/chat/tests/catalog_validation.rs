@@ -480,6 +480,80 @@ fn every_fully_defaulted_capability_plans_without_asking() {
     }
 }
 
+#[test]
+fn every_approved_capability_appears_in_management_knowledge_and_resolves_detail() {
+    use chat::api::dto::management::KnowledgeQuery;
+    use chat::management::knowledge::KnowledgeService;
+    use std::sync::Arc;
+
+    let catalog = load_catalog();
+    let approved_ids: Vec<String> = catalog
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "approved_mvp")
+        .map(|c| c.id.clone())
+        .collect();
+    let service = KnowledgeService::new(Arc::new(catalog));
+    let list = service
+        .list(&KnowledgeQuery {
+            kind: None,
+            status: None,
+            domain_id: None,
+            cursor: None,
+            limit: Some(1000),
+        })
+        .unwrap_or_else(|_| panic!("knowledge list must succeed"));
+    let listed_ids: Vec<String> = list
+        .items
+        .iter()
+        .filter_map(|item| item.id.strip_prefix("catalog:").map(str::to_string))
+        .collect();
+    for id in &approved_ids {
+        assert!(
+            listed_ids.contains(id),
+            "approved capability {id} missing from /management/knowledge"
+        );
+    }
+    for item in &list.items {
+        let detail = service
+            .detail(&item.id)
+            .unwrap_or_else(|| panic!("list id {} did not resolve on detail", item.id));
+        assert_eq!(detail.id, item.id);
+    }
+}
+
+#[test]
+fn management_knowledge_detail_leaks_no_sql_for_derived_column_capability() {
+    use chat::management::knowledge::KnowledgeService;
+    use std::sync::Arc;
+
+    let catalog = load_catalog();
+    let capability_id = "savings_pending_charges_clients";
+    let sql_path = workspace_root().join("queries/savings/pending_charges_clients.sql");
+    let sql = std::fs::read_to_string(&sql_path).expect("read approved SQL");
+    let service = KnowledgeService::new(Arc::new(catalog));
+    let detail = service
+        .detail(&format!("catalog:{capability_id}"))
+        .expect("derived-column capability resolves");
+    let serialised = serde_json::to_string(&detail).expect("serialise detail");
+    for keyword in ["SELECT ", "FROM ", "WHERE ", "JOIN ", "GROUP BY"] {
+        assert!(
+            !serialised.to_ascii_uppercase().contains(keyword),
+            "detail leaked SQL keyword `{keyword}`: {serialised}"
+        );
+    }
+    for line in sql
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.len() > 20 && !l.starts_with("--"))
+    {
+        assert!(
+            !serialised.contains(line),
+            "detail leaked SQL substring `{line}`"
+        );
+    }
+}
+
 fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
     let workspace_root = workspace_root();
     let catalog = KnowledgeLoader::new(

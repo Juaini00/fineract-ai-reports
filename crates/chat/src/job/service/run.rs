@@ -399,15 +399,25 @@ fn execution_audit_from_memory(
     let plan = summary.get("plan")?;
     let capability_id = plan.get("capability_id")?.as_str()?;
     let query_id = plan.get("query_id")?.as_str()?;
-    let row_count = summary
-        .get("result")
+    let result = summary.get("result");
+    let row_count = result
         .and_then(|result| result.get("rows"))
         .and_then(|rows| rows.as_array())
         .map(|rows| rows.len() as u64);
+    let truncated = result
+        .and_then(|result| result.get("truncated"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let timed_out = result
+        .and_then(|result| result.get("timed_out"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Some(ExecutionAuditContext {
         capability_id: SafeIdentifier::try_from(capability_id.to_string()).ok()?,
         query_id: SafeIdentifier::try_from(query_id.to_string()).ok()?,
         row_count,
         allowed: !matches!(terminal_state, TerminalState::BlockedByPolicy),
+        truncated,
+        timed_out,
     })
 }

@@ -128,6 +128,10 @@ pub enum AuditEventType {
     ChatSessionDeleted,
     #[serde(rename = "business_date.fallback_used")]
     BusinessDateFallback,
+    #[serde(rename = "execution.result_truncated")]
+    ExecutionResultTruncated,
+    #[serde(rename = "execution.timed_out")]
+    ExecutionTimedOut,
 }
 
 impl AuditEventType {
@@ -147,6 +151,8 @@ impl AuditEventType {
             Self::ChatSessionArchived => "chat.session_archived",
             Self::ChatSessionDeleted => "chat.session_deleted",
             Self::BusinessDateFallback => "business_date.fallback_used",
+            Self::ExecutionResultTruncated => "execution.result_truncated",
+            Self::ExecutionTimedOut => "execution.timed_out",
         }
     }
 }
@@ -176,6 +182,23 @@ impl AuditOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncation_and_timeout_event_types_round_trip() {
+        for (variant, expected) in [
+            (
+                AuditEventType::ExecutionResultTruncated,
+                "execution.result_truncated",
+            ),
+            (AuditEventType::ExecutionTimedOut, "execution.timed_out"),
+        ] {
+            assert_eq!(variant.as_str(), expected);
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, format!("\"{expected}\""));
+            let parsed: AuditEventType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.as_str(), expected);
+        }
+    }
 
     #[test]
     fn audit_identifiers_reject_sql_and_unbounded_text() {

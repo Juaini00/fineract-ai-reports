@@ -42,6 +42,12 @@ pub struct ExecutionAuditContext {
     pub query_id: SafeIdentifier,
     pub row_count: Option<u64>,
     pub allowed: bool,
+    /// True when the result was clamped by `hard_cap` / `global_max_rows` (B6).
+    /// Drives the `execution.result_truncated` audit event.
+    pub truncated: bool,
+    /// True when the SQL execution hit its per-query statement timeout (B6).
+    /// Drives the `execution.timed_out` audit event.
+    pub timed_out: bool,
 }
 
 #[derive(Clone)]
@@ -929,14 +935,36 @@ fn execution_lifecycle_events(
                 row_count: None,
             },
         ));
-        events.push(base(
-            AuditEventType::ExecutionCompleted,
-            AuditOutcome::Success,
-            AuditSummary::Execution {
-                query_id: execution.query_id.clone(),
-                row_count: execution.row_count,
-            },
-        ));
+        if !execution.timed_out {
+            events.push(base(
+                AuditEventType::ExecutionCompleted,
+                AuditOutcome::Success,
+                AuditSummary::Execution {
+                    query_id: execution.query_id.clone(),
+                    row_count: execution.row_count,
+                },
+            ));
+        }
+        if execution.truncated {
+            events.push(base(
+                AuditEventType::ExecutionResultTruncated,
+                AuditOutcome::Success,
+                AuditSummary::Execution {
+                    query_id: execution.query_id.clone(),
+                    row_count: execution.row_count,
+                },
+            ));
+        }
+        if execution.timed_out {
+            events.push(base(
+                AuditEventType::ExecutionTimedOut,
+                AuditOutcome::Failed,
+                AuditSummary::Execution {
+                    query_id: execution.query_id.clone(),
+                    row_count: None,
+                },
+            ));
+        }
     } else {
         events.push(base(
             AuditEventType::ExecutionBlocked,

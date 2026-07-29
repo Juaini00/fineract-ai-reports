@@ -144,6 +144,11 @@ fn event_type(value: AuditEventType) -> &'static str {
         AuditEventType::ChatJobFailed => ModelEventType::ChatJobFailed.as_str(),
         AuditEventType::ChatSessionArchived => ModelEventType::ChatSessionArchived.as_str(),
         AuditEventType::ChatSessionDeleted => ModelEventType::ChatSessionDeleted.as_str(),
+        AuditEventType::BusinessDateFallbackUsed => ModelEventType::BusinessDateFallback.as_str(),
+        AuditEventType::ExecutionResultTruncated => {
+            ModelEventType::ExecutionResultTruncated.as_str()
+        }
+        AuditEventType::ExecutionTimedOut => ModelEventType::ExecutionTimedOut.as_str(),
     }
 }
 fn outcome(value: AuditOutcome) -> &'static str {

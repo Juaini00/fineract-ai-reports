@@ -323,6 +323,13 @@ pub(super) async fn execute_selected_capability(
                 "clarification-reply execute_plan failed; returning routing error"
             );
             memory.warnings = json!([{ "message": error.to_string() }]);
+            // Populate summary with plan/query info even on failure so the audit
+            // producer can emit `execution.timed_out` (Bundle 11 / W-L).
+            memory.execution_summary = json!({
+                "plan": plan,
+                "policy": policy,
+                "result": { "timed_out": reason == "execution_timed_out" },
+            });
             graph_result(
                 memory,
                 TerminalState::FailedOperational,
