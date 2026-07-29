@@ -166,6 +166,12 @@ requires an object `{ from, to }`. Result:
 Tracked here for completeness; frontend work is explicitly out of scope for this
 issue's backend workstreams (see W-F).
 
+> **Cross-repo action (user, not backend):** Open a matching issue in the
+> `ai_report_dashboard` repository for the `{from,to}` `date_range` control (submit the
+> object shape, not a string; see `docs/current/chat-client-integration.md`
+> §"Clarification answer value shapes per `field_type`"). Link its identifier here:
+> `ai_report_dashboard#TBD`. E5 stays open until that issue is linked and the picker lands.
+
 ## Goals
 
 - An analyst can ask a complex, multi-dimensional question and receive a complete
@@ -1059,9 +1065,13 @@ this issue (the link to the frontend issue), no code.
 
 **Acceptance:**
 - A corresponding issue exists in the `ai_report_dashboard` repository and is linked from
-  E5 by identifier.
-- `docs/current/management-dashboard-integration.md` documents the exact value shape for
-  every `field_type`, with a worked request and response for each.
+  E5 by identifier. **Status: pending user action** — backend docs (W-F1/F2) are published
+  in `docs/current/chat-client-integration.md` §"Clarification answer value shapes per
+  `field_type`"; the dashboard issue id is not yet linked (`ai_report_dashboard#TBD` at E5).
+- `docs/current/chat-client-integration.md` documents the exact value shape for every
+  `field_type`, with a worked request and response for each. (The plan originally named
+  `management-dashboard-integration.md`; that doc is the `/management/dashboard` contract
+  and unrelated to clarification. Clarification lives in `chat-client-integration.md`.)
 - This issue's resolution criteria contain no item that requires frontend code to be
   merged.
 

@@ -16,6 +16,111 @@ Submit the active id and revision with `option_id`, typed `answers`, and optiona
 ```
 Legacy submissions requiring `message` and permitting `option_id` remain supported. Keep historical controls read-only. On `400 clarification_validation_error`, display only safe field errors; on `409 clarification_stale` or `409 clarification_not_active`, reconcile `GET /chat/jobs/{id}`. Archived sessions and their job surfaces return sanitized `404`.
 
+### Clarification answer value shapes per `field_type`
+
+`answers` is a JSON object keyed by the field's `key`. The value shape is fixed by the field's `field_type`. The server validates each value and rejects the whole submission on the first offending field. Optional `validation` metadata on the field constrains the value further.
+
+| `field_type` | `answers.<key>` value | Constraints (from `validation`) |
+| --- | --- | --- |
+| `date_range` | object `{ "from": "YYYY-MM-DD", "to": "YYYY-MM-DD" }` — **not** a string | exactly the two keys `from` and `to`; ISO `YYYY-MM-DD`; `from <= to`; span `<= max_range_days` when present |
+| `integer` | JSON number (integer) | `>= min_integer` and `<= max_integer` when present |
+| `text` | non-empty JSON string | length `<= max_length` characters when present |
+
+A `date_range` value must be an object with exactly the keys `from` and `to`. A plain string, a missing key, an extra key, a non-ISO date, or `from` after `to` is rejected with `400 clarification_validation_error` and `details.fields: ["answers.<key>"]`.
+
+#### Worked request/response pairs
+
+Each pair is a `POST /chat/jobs/{job_id}/responses` body and the resulting response. A valid submission returns `201` whose `data` is the inserted clarification `ChatMessage` (see §"Same-job clarification"); it is not a job result. Fetch `GET /chat/jobs/{job_id}` afterwards to read durable job status.
+
+**`date_range`** — capability offered a `date_range` field keyed `date_range`:
+
+Request:
+
+```json
+{
+  "clarification_id": "3f2b1c00-0000-4000-8000-000000000001",
+  "clarification_revision": 1,
+  "answers": { "date_range": { "from": "2026-07-01", "to": "2026-07-31" } }
+}
+```
+
+Response `201`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "9a7c...",
+    "session_id": "…",
+    "job_id": "…",
+    "role": "user",
+    "content": "…",
+    "metadata_json": { },
+    "created_at": "2026-07-27T10:00:00Z"
+  },
+  "error": null
+}
+```
+
+**`integer`** — capability offered an `integer` field keyed `limit`:
+
+Request:
+
+```json
+{
+  "clarification_id": "3f2b1c00-0000-4000-8000-000000000002",
+  "clarification_revision": 1,
+  "answers": { "limit": 5 }
+}
+```
+
+Response `201`: same inserted-`ChatMessage` envelope as above.
+
+**`text`** — capability offered a `text` field keyed `note`:
+
+Request:
+
+```json
+{
+  "clarification_id": "3f2b1c00-0000-4000-8000-000000000003",
+  "clarification_revision": 1,
+  "answers": { "note": "Head office only" }
+}
+```
+
+Response `201`: same inserted-`ChatMessage` envelope as above.
+
+#### `clarification_validation_error` details
+
+An invalid submission returns:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "clarification_validation_error",
+    "message": "Clarification response is invalid.",
+    "details": { "fields": ["answers.date_range"] }
+  }
+}
+```
+
+`details.fields` is a flat array of dotted paths identifying the offending input(s), so a client can highlight the exact control. Possible values:
+
+| Path | Meaning |
+| --- | --- |
+| `answers.<key>` | that field's value failed its `field_type`/`validation` check (or a required field was omitted with no default) |
+| `answers` | an `answers` key was sent that the clarification did not offer |
+| `option_id` | option missing, unknown, unauthorized, or sent on a non-`select_option` clarification |
+| `message` | required free text missing (free-text mode, or `option_id: "others"`) |
+| `clarification_id` | structured submission missing the id |
+| `clarification_revision` | structured submission missing the revision |
+
+The array carries paths only, not machine-readable reason codes. Show only these safe paths to the user; never surface raw server error text. Stale/inactive clarifications return `409 clarification_stale` / `409 clarification_not_active` instead — reconcile with `GET /chat/jobs/{id}`.
+
+> **Analyst-grade response shapes (pending).** Wide-table columns/rows, per-currency subtotal cards, the `result_truncated` warning, and payload-carried money formatting are defined by the presentation/money work (issue 007 W-G/W-J). This document will publish their exact shapes once that work lands; until then, `table.columns`/`table.rows` remain the authoritative tabular surface and `rendered_markdown` is a capped fallback.
+
 ## Response envelope and errors
 
 Every JSON response uses the same envelope:

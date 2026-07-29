@@ -86,7 +86,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 11 (W-L) | gated | outline (same file) | ✅ | truncated/timed-out audit event types + producers wired; catalog-iterating and no-leak tests added |
 | 12 (W-C) | `specs/2026-07-24-llm-extraction-gateway-design.md` (existing) | `…-b12-extraction-gateway-continuation.md` (+ existing 24-Jul plan) | pipeline callable end-to-end | Layers 1/2/3 built + tested + composed by `understanding::pipeline`; runtime wiring (Task 7.1 steps 3-4) + legacy retire (Task 7.2) + full spec §7 suite deferred |
 | 13 (W-H/F5) | — (prep) | `…-b13-drilldown-preparation.md` | ✅ | reserved-variant docs, `PayloadSource` `#[non_exhaustive]` + `Unknown`, issue 009 stub |
-| 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ❌ | needs `ai_report_dashboard#TBD` issue (yours) |
+| 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ✅ | per-`field_type` shapes + worked pairs + `details.fields` spec published in `chat-client-integration.md`; E5 records `ai_report_dashboard#TBD` for the cross-repo user action |
 
 **Not-yet-executed queue (dependency order):** 9 → 10 → 11 → 12 → 13 → 14. Bundle 8 resolved the 28-row scoring ledger in `docs/product/analyst-question-inventory.md` with truthful metadata plus normalized lexical coverage; the 0.40 floor and 0.05 gap remain unchanged. Bundle 9 now starts from the final 31-capability catalog.
 
