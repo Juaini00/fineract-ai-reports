@@ -84,7 +84,7 @@ All specifiable bundles now have their spec+plan; gated bundles have outline doc
 | 9 (W-G/W-J/F4/F6) | gated | outline (same file) | implementation in verification | bounded/escaped Markdown, scoped charge money rendering, and dead `AnswerPlan` removal |
 | 10 (W-E/F8) | `…-b10-clarification-suppression-design.md` | `…-b10-clarification-suppression.md` | ✅ | policy-derived gate + person-name extractor narrowed + catalog-wide W-E guard |
 | 11 (W-L) | gated | outline (same file) | ✅ | truncated/timed-out audit event types + producers wired; catalog-iterating and no-leak tests added |
-| 12 (W-C) | `specs/2026-07-24-llm-extraction-gateway-design.md` (existing) | `…-b12-extraction-gateway-continuation.md` (+ existing 24-Jul plan) | ❌ | last among code bundles |
+| 12 (W-C) | `specs/2026-07-24-llm-extraction-gateway-design.md` (existing) | `…-b12-extraction-gateway-continuation.md` (+ existing 24-Jul plan) | pipeline callable end-to-end | Layers 1/2/3 built + tested + composed by `understanding::pipeline`; runtime wiring (Task 7.1 steps 3-4) + legacy retire (Task 7.2) + full spec §7 suite deferred |
 | 13 (W-H/F5) | — (prep) | `…-b13-drilldown-preparation.md` | ❌ | prep only |
 | 14 (W-F/W-N) | — (docs) | `…-b14-frontend-contract-docs.md` | ❌ | needs `ai_report_dashboard#TBD` issue (yours) |
 
