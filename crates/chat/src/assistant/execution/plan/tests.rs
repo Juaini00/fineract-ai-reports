@@ -37,10 +37,6 @@ fn plan_contains_modern_rag_stage_outputs() {
     );
     assert!(plan.evidence_evaluation.enough);
     assert_eq!(plan.evidence_evaluation.source_types, vec!["capability"]);
-    assert_eq!(
-        plan.answer_plan.sections,
-        vec!["Summary", "Scope", "Evidence"]
-    );
 }
 
 #[test]

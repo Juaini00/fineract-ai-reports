@@ -74,7 +74,6 @@ guards:
   require_office_filter: true
   bounded_per_partition: true
 timeout_ms: 8000
-cost_class: high
 checks:
   - id: sql_file_exists
     rule: sql_file must exist under queries/.

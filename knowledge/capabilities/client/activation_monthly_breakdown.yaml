@@ -21,6 +21,8 @@ examples:
 - Monthly client activations for 2026.
 - How many clients did we activate each month last year?
 - Client activation trend from 2026-01-01 to 2026-06-30.
+- Monthly counts of client activations.
+- Aktivasi nasabah per bulan.
 supported_intents:
 - monthly client activation counts in a date range
 - client onboarding trend across authorized offices
@@ -32,9 +34,6 @@ defaults:
 guards:
   require_office_scope: true
   max_date_range_days: 1096
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -48,7 +47,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: business_today - 12m
     fill_when_missing: true
   to_date:
     type: date

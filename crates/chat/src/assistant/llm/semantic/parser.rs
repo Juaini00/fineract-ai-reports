@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::assistant::legacy_pipeline::model::{
+use super::model::{
     ParsedConstraints, ParsedEntity, ParsedIntent, ParsedIntentKind, QuantityConstraint,
 };
 
@@ -106,8 +106,8 @@ fn positive_quantity(value: Option<i64>, mode: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{ParsedIntentKind, QuantityConstraint};
     use super::*;
-    use crate::assistant::legacy_pipeline::model::{ParsedIntentKind, QuantityConstraint};
 
     #[test]
     fn parses_all_activity_intent() {

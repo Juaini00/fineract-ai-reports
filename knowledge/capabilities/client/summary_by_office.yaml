@@ -2,8 +2,8 @@ id: client_summary_by_office
 status: approved_mvp
 domain: client
 display_name: Client Summary by Office
-description: Return active, pending, closed, and total client counts per office within the caller's authorized
-  scope.
+description: Return the lifecycle-status distribution (active, pending, closed, and total) per office within
+  the caller's authorized scope.
 data_areas:
 - client_foundation
 - organization_foundation
@@ -22,6 +22,8 @@ examples:
 - Show client breakdown per office.
 - How many active clients does each office have?
 - Client lifecycle counts across my offices (top 20).
+- Lifecycle status distribution of active, pending, and closed clients by office.
+- Status lifecycle nasabah aktif, pending, dan closed per kantor.
 supported_intents:
 - client lifecycle counts grouped by office
 unsupported_intents:
@@ -31,9 +33,6 @@ defaults:
 guards:
   require_office_scope: true
   snapshot_only: true
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

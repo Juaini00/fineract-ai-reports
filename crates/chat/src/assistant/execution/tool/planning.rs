@@ -3,9 +3,7 @@ use anyhow::{Result, bail};
 use crate::{
     assistant::{
         AssistantIntent, DeterministicExtraction, PlannerInputSnapshot,
-        execution::plan::{
-            AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
-        },
+        execution::plan::{EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan},
     },
     knowledge::{catalog::parameter_policy::EvaluationContext, model::KnowledgeCatalog},
 };
@@ -86,9 +84,6 @@ pub(super) fn plan_selected_capability_verified(
             source_types: vec!["capability".into()],
             reason: None,
         },
-        answer_plan: AnswerPlan {
-            sections: vec!["Result".into(), "Scope".into(), "Evidence".into()],
-        },
         requires_policy_check: true,
     })
 }
@@ -117,9 +112,6 @@ pub(super) fn plan_from_snapshot(
             source_count: 1,
             source_types: vec!["planner_input_snapshot".into()],
             reason: None,
-        },
-        answer_plan: AnswerPlan {
-            sections: vec!["Result".into(), "Scope".into(), "Evidence".into()],
         },
         requires_policy_check: true,
     })

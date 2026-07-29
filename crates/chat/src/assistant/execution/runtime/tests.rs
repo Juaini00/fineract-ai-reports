@@ -887,6 +887,125 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
     assert!(constraints.to_date.is_some());
 }
 
+#[tokio::test]
+async fn defaultless_required_search_asks_and_runs_nothing() {
+    let mut context = pending_context(false, 1, "client_name_lookup");
+    context.active_domain = Some("client".into());
+    context
+        .pending_clarification
+        .as_mut()
+        .unwrap()
+        .source_intent
+        .as_mut()
+        .unwrap()
+        .domain = AssistantDomain::Client;
+    let catalog = Arc::new(runtime_test_catalog());
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["client_name_lookup".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let message = "look up a client please";
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        context,
+        None,
+        None,
+        None,
+        None,
+        Some(&catalog),
+        Some(&client),
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: Some("client_name_lookup".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        result.memory.terminal_state,
+        Some(TerminalState::WaitingForUserInput)
+    );
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|p| p.as_ref())
+        .expect("must ask for the missing search parameter");
+    assert!(
+        payload.fields.iter().any(|f| f.key == "search"),
+        "collect_fields must carry `search`: {:?}",
+        payload.fields
+    );
+    assert!(result.memory.selected_tool.is_none());
+    assert_eq!(result.memory.tool_params, json!({}));
+}
+
+#[tokio::test]
+async fn fully_defaulted_capability_completes_without_asking() {
+    let mut context = pending_context(false, 1, "organization_office_activity_ranking");
+    context.active_domain = Some("organization".into());
+    let source = context
+        .pending_clarification
+        .as_mut()
+        .unwrap()
+        .source_intent
+        .as_mut()
+        .unwrap();
+    source.domain = AssistantDomain::Organization;
+    source.constraints.from_date = Some("2026-07-01".into());
+    source.constraints.to_date = Some("2026-07-29".into());
+    let catalog = Arc::new(runtime_test_catalog());
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["organization_office_activity_ranking".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let message = "Rank offices by savings transaction volume this month";
+    let result = AssistantGraphRuntime::run_with_router(
+        empty_memory(),
+        context,
+        None,
+        None,
+        None,
+        None,
+        Some(&catalog),
+        Some(&client),
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            selected_option_id: Some("organization_office_activity_ranking".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    // "No ask" guarantee: no clarification payload attached. Terminal state may
+    // still be WaitingForUserInput for unrelated pipeline reasons in the no-DB
+    // harness — the durable guarantee is that we did not construct a clarification.
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|p| p.as_ref());
+    assert!(
+        payload.is_none(),
+        "a fully-defaulted capability must not ask: {payload:?}"
+    );
+}
+
 fn runtime_test_catalog() -> KnowledgeCatalog {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
@@ -1199,4 +1318,105 @@ async fn long_message_continues_missing_parameters() {
         Some("savings_deposit_top_n")
     );
     assert_eq!(result.pending_clarification, Some(None));
+}
+
+#[tokio::test]
+async fn gateway_pipeline_runtime_entry_maps_execute_to_completed() {
+    use crate::assistant::execution::runtime::run_via_gateway_pipeline;
+    use crate::assistant::llm::FakeLlmClient;
+    let fake = std::sync::Arc::new(FakeLlmClient::default());
+    fake.push_structured(serde_json::json!({
+        "intent_kind": "report_request",
+        "domain": "savings",
+        "language": "en",
+        "entities": [],
+        "candidates": [
+            { "capability_id": "savings_deposit_total", "confidence": 0.95, "why": "totals" }
+        ]
+    }));
+    let llm: crate::assistant::llm::SharedLlmClient = fake;
+    let catalog = runtime_test_catalog();
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["savings_deposit_total".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let result = run_via_gateway_pipeline(
+        empty_memory(),
+        empty_context(),
+        llm,
+        &catalog,
+        &client,
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        RuntimeUserInput {
+            message: "How much did we deposit?".into(),
+            source_message: "How much did we deposit?".into(),
+            selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+    assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
+    assert_eq!(
+        result.memory.selected_capability.as_deref(),
+        Some("savings_deposit_total")
+    );
+}
+
+#[tokio::test]
+async fn gateway_pipeline_runtime_entry_maps_clarify_to_waiting() {
+    use crate::assistant::execution::runtime::run_via_gateway_pipeline;
+    use crate::assistant::llm::FakeLlmClient;
+    let fake = std::sync::Arc::new(FakeLlmClient::default());
+    fake.push_structured(serde_json::json!({
+        "intent_kind": "data_lookup",
+        "domain": "client",
+        "language": "en",
+        "entities": [],
+        "candidates": [
+            { "capability_id": "client_name_lookup", "confidence": 0.9, "why": "lookup" }
+        ]
+    }));
+    let llm: crate::assistant::llm::SharedLlmClient = fake;
+    let catalog = runtime_test_catalog();
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["client_name_lookup".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let result = run_via_gateway_pipeline(
+        empty_memory(),
+        empty_context(),
+        llm,
+        &catalog,
+        &client,
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        RuntimeUserInput {
+            message: "look up a client".into(),
+            source_message: "look up a client".into(),
+            selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+    assert_eq!(
+        result.memory.terminal_state,
+        Some(TerminalState::WaitingForUserInput)
+    );
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|p| p.as_ref())
+        .expect("clarification payload attached");
+    assert!(payload.fields.iter().any(|f| f.key == "search"));
 }

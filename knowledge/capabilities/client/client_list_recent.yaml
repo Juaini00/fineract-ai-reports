@@ -22,6 +22,7 @@ examples:
 - Show me the most recently activated clients.
 - List new clients this year.
 - Recently onboarded clients in my offices.
+- Nasabah baru yang baru diaktivasi.
 supported_intents:
 - plain browse/list of recently activated clients with no ranking metric
 unsupported_intents:
@@ -40,7 +41,6 @@ guards:
     - external_id
     - mobile_no
     - email_address
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

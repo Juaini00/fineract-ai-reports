@@ -24,6 +24,9 @@ examples:
 - Who made the largest deposit today?
 - Show the largest deposits this month.
 - Top 10 savings deposits this week.
+- Largest deposit transactions by client.
+- Setoran terbesar dari transaksi tabungan nasabah.
+- Peringkat penyetor terbesar berdasarkan transaksi setoran.
 supported_intents:
 - largest savings deposits by date range
 - top deposit transactions for authorized offices
@@ -39,33 +42,6 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-  - client_id
-  - client_display_name
-  omitted_when_cannot_view_pii:
-  - client_id
-  - client_display_name
-  never_return:
-  - account_no
-  - external_id
-  - ref_no
-  - payment_detail_id
-cost_class: medium
-output_fields:
-  public:
-  - transaction_id
-  - transaction_date
-  - amount
-  - currency_code
-  - office_id
-  - office_name
-  - product_id
-  - product_name
-  pii_conditional:
-  - client_id
-  - client_display_name
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -83,7 +59,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date
@@ -104,5 +80,5 @@ parameters:
   limit:
     type: integer
     required: false
-    default: unbounded
+    default: "10"
     hard_cap: 100

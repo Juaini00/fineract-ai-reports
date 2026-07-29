@@ -174,6 +174,32 @@ mod tests {
     }
 
     #[test]
+    fn renders_table_cells_safely_and_bounds_markdown_rows() {
+        let mut response = base_response();
+        response.table = Some(ResponseTable {
+            columns: vec![TableColumn {
+                key: "value".into(),
+                label: "Value".into(),
+                kind: TableColumnKind::Text,
+                hidden: false,
+            }],
+            rows: (0..51)
+                .map(|index| {
+                    json!({
+                        "value": if index == 0 { "A|B\r\nC".to_string() } else { format!("row-{index}") }
+                    })
+                })
+                .collect(),
+        });
+
+        let rendered = MarkdownRenderer.render(&response);
+        assert_eq!(response.table.as_ref().unwrap().rows.len(), 51);
+        assert!(rendered.contains("A\\|B<br>C"));
+        assert!(rendered.contains("row-49"));
+        assert!(!rendered.contains("row-50"));
+    }
+
+    #[test]
     fn renders_clarification_question_fields_and_safe_label_fallback() {
         let mut response = base_response();
         response.response_type = AssistantResponseType::Clarification;

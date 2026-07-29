@@ -36,6 +36,42 @@ pub(super) async fn execute_selected_capability(
             execution_transitions(TerminalState::WaitingForUserInput, "missing_intent"),
         );
     }
+    let clarification_facts = super::clarification_facts_from_intent(intent.as_ref());
+    let missing_fields =
+        crate::assistant::context::clarification_planner::defaultless_missing_fields(
+            catalog,
+            &capability_id,
+            &clarification_facts,
+        );
+    if !missing_fields.is_empty() {
+        let payload = ClarificationPayload {
+            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+            id: uuid::Uuid::new_v4(),
+            revision: 0,
+            kind: crate::assistant::clarification::ClarificationKind::CollectFields,
+            question: "What details should I use for this report?".into(),
+            options: Vec::new(),
+            fields: missing_fields,
+            attempt: active_payload.map_or(0, |p| p.attempt.saturating_add(1)),
+            source_intent: intent
+                .as_ref()
+                .map(|intent| source_intent_snapshot(intent, &intent.reason)),
+            allow_free_text: false,
+            is_missing_execution_parameters: true,
+        };
+        return graph_result(
+            memory,
+            TerminalState::WaitingForUserInput,
+            "missing_execution_parameters",
+            ResponseBuilder::clarification(payload.clone()),
+            recent_message_count,
+            Some(Some(payload)),
+            execution_transitions(
+                TerminalState::WaitingForUserInput,
+                "missing_execution_parameters",
+            ),
+        );
+    }
     if let Some(error) = memory
         .current_user_message_metadata
         .get("deterministic_extraction")
@@ -231,17 +267,35 @@ pub(super) async fn execute_selected_capability(
             execution_transitions(TerminalState::Completed, "execution_not_configured"),
         );
     };
-    match execute_plan(pool, catalog, &plan, &policy).await {
+    let limits = canonical
+        .map(|context| context.execution_limits)
+        .unwrap_or_default();
+    match execute_plan(pool, catalog, &plan, &policy, limits).await {
         Ok(result) => {
             let tool_result =
                 super::super::tool::tool_result_from_execution(&tool_request, result.clone());
-            let response = ResponseBuilder::from_tool_result(
+            let mut response = ResponseBuilder::from_tool_result(
                 intent.as_ref().expect("successful execution has intent"),
                 &plan,
                 &policy,
                 &tool_result,
                 catalog,
             );
+            if let Some(context) = canonical {
+                let jakarta =
+                    chrono::FixedOffset::east_opt(7 * 3600).expect("valid Jakarta offset");
+                let wall_today = context
+                    .reference_instant
+                    .with_timezone(&jakarta)
+                    .date_naive();
+                if let Some(note) = ResponseBuilder::reporting_date_note(
+                    context.business_today,
+                    context.business_date_source,
+                    wall_today,
+                ) {
+                    response.warnings.push(note);
+                }
+            }
             let mut result_state = graph_result(
                 memory,
                 TerminalState::Completed,
@@ -255,22 +309,35 @@ pub(super) async fn execute_selected_capability(
             result_state
         }
         Err(error) => {
+            let reason = if error.to_string() == "execution_timed_out" {
+                "execution_timed_out"
+            } else {
+                "execution_failed"
+            };
             tracing::warn!(
                 target: "assistant::execute_selected_capability",
                 capability_id = %capability_id,
                 query_id = %plan.query_id,
                 error = %error,
+                %reason,
                 "clarification-reply execute_plan failed; returning routing error"
             );
             memory.warnings = json!([{ "message": error.to_string() }]);
+            // Populate summary with plan/query info even on failure so the audit
+            // producer can emit `execution.timed_out` (Bundle 11 / W-L).
+            memory.execution_summary = json!({
+                "plan": plan,
+                "policy": policy,
+                "result": { "timed_out": reason == "execution_timed_out" },
+            });
             graph_result(
                 memory,
                 TerminalState::FailedOperational,
-                "execution_failed",
+                reason,
                 ResponseBuilder::error(),
                 recent_message_count,
                 pending_clarification,
-                execution_transitions(TerminalState::FailedOperational, "execution_failed"),
+                execution_transitions(TerminalState::FailedOperational, reason),
             )
         }
     }

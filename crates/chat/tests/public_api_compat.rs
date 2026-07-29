@@ -1,21 +1,14 @@
 #[test]
-fn legacy_public_paths_resolve_to_canonical_types() {
-    let _: Option<chat::chat::model::message::ChatMessage> =
-        None::<chat::conversation::model::message::ChatMessage>;
-    let _: Option<chat::chat::model::session::ChatSession> =
-        None::<chat::conversation::model::session::ChatSession>;
-    let _: Option<chat::chat::model::job::ChatJob> = None::<chat::job::model::ChatJob>;
-    let _: Option<chat::chat::repository::message::MessageRepository> =
-        None::<chat::conversation::repository::message::MessageRepository>;
-    let _: Option<chat::chat::repository::session::SessionRepository> =
-        None::<chat::conversation::repository::session::SessionRepository>;
-    let _: Option<chat::chat::repository::job::JobRepository> =
-        None::<chat::job::repository::JobRepository>;
-    let _: Option<chat::chat::service::message::MessageService> =
-        None::<chat::conversation::service::message::MessageService>;
-    let _: Option<chat::chat::service::session::SessionService> =
-        None::<chat::conversation::service::session::SessionService>;
-    let _: Option<chat::chat::service::job::JobService> = None::<chat::job::service::JobService>;
+fn canonical_public_paths_resolve() {
+    let _: Option<chat::conversation::model::message::ChatMessage> = None;
+    let _: Option<chat::conversation::model::session::ChatSession> = None;
+    let _: Option<chat::job::model::ChatJob> = None;
+    let _: Option<chat::conversation::repository::message::MessageRepository> = None;
+    let _: Option<chat::conversation::repository::session::SessionRepository> = None;
+    let _: Option<chat::job::repository::JobRepository> = None;
+    let _: Option<chat::conversation::service::message::MessageService> = None;
+    let _: Option<chat::conversation::service::session::SessionService> = None;
+    let _: Option<chat::job::service::JobService> = None;
 
     #[allow(unused_imports)]
     use chat::assistant::{
@@ -25,8 +18,6 @@ fn legacy_public_paths_resolve_to_canonical_types() {
         memory as _, renderer as _, reranker as _, response as _, response_builder as _,
         router as _, runtime as _, session_memory_repo as _, swiftide_index as _, tool as _,
     };
-    #[allow(unused_imports)]
-    use chat::chat::{classifier as _, llm as _};
 
     let _: Option<chat::assistant::context_builder::ContextBuilder> =
         None::<chat::assistant::context::builder::ContextBuilder>;

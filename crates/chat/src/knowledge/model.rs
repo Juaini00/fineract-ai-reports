@@ -267,6 +267,11 @@ pub struct QueryKnowledge {
 
     #[serde(default)]
     pub output_fields: Vec<QueryOutputField>,
+
+    /// Per-query Postgres statement-timeout budget in milliseconds. Absent falls
+    /// back to `QueryConfig.default_timeout_ms` at execution.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -282,6 +287,22 @@ pub struct QueryParameter {
     pub source: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sensitivity {
+    PublicBusiness,
+    Pii,
+}
+
+impl Sensitivity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PublicBusiness => "public_business",
+            Self::Pii => "pii",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct QueryOutputField {
     pub name: String,
@@ -289,5 +310,5 @@ pub struct QueryOutputField {
     #[serde(rename = "type")]
     pub kind: String,
 
-    pub sensitivity: String,
+    pub sensitivity: Sensitivity,
 }

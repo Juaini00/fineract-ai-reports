@@ -75,7 +75,7 @@ pub struct ClassificationResult {
     #[serde(default)]
     pub candidates: Vec<ClassificationCandidate>,
     #[serde(default)]
-    pub layers: Vec<crate::assistant::legacy_pipeline::lqr::LayerTrace>,
+    pub layers: Vec<super::lqr::LayerTrace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

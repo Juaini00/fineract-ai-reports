@@ -22,6 +22,7 @@ examples:
 - Top 10 clients by deposit volume this month.
 - Which clients deposited the most in Q2?
 - Show top 5 depositors from 2026-01-01 to 2026-06-30 in IDR.
+- Nasabah dengan setoran terbesar berdasarkan volume.
 supported_intents:
 - ranking clients by deposit amount in a date range
 unsupported_intents:
@@ -32,9 +33,6 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: true
-cost_class: medium
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -53,7 +51,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date
@@ -66,5 +64,5 @@ parameters:
   limit:
     type: integer
     required: false
-    default: unbounded
+    default: "10"
     hard_cap: 100

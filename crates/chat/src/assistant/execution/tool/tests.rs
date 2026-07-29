@@ -78,6 +78,7 @@ fn extracts_dates_currency_products_and_limit() {
             parameter("limit", false),
         ],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let extraction =
         extract_message_facts("show top 5 savings in USD from 2026-01-01 to 2026-01-31");
@@ -127,6 +128,7 @@ fn verified_quantity_overrides_missing_llm_quantity() {
         metrics: Vec::new(),
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let extraction = extract_message_facts("show top 10 clients");
     let params = params_from_verified(
@@ -152,6 +154,7 @@ fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
         metrics: Vec::new(),
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let params = params_from_verified(
         &query,
@@ -178,6 +181,7 @@ fn hallucinated_optional_currency_is_omitted_without_verified_extraction() {
         metrics: Vec::new(),
         parameters: vec![parameter("currency_code", false)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let mut intent = intent_with_quantity(None);
     intent.constraints.currency_code = Some("USD".into());
@@ -230,6 +234,7 @@ fn hallucinated_required_search_rejected_without_trusted_entity() {
         metrics: Vec::new(),
         parameters: vec![parameter("search", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let mut intent = intent_with_quantity(None);
     intent.entities.push(AssistantEntity {
@@ -254,6 +259,7 @@ fn trusted_named_tony_fills_search() {
         metrics: Vec::new(),
         parameters: vec![parameter("search", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let extraction = extract_message_facts("find client named Tony");
     let params = params_from_verified(
@@ -327,6 +333,7 @@ fn defaults_business_today_when_policy_declares_it() {
         metrics: Vec::new(),
         parameters: vec![parameter("from_date", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let policies = vec![ParameterPolicy {
         name: "from_date".into(),
@@ -357,7 +364,7 @@ fn defaults_business_today_when_policy_declares_it() {
 }
 
 #[test]
-fn defaults_unbounded_limit_when_policy_declares_it() {
+fn unbounded_limit_is_clamped_to_hard_cap() {
     use crate::knowledge::catalog::parameter_policy::{
         DefaultExpr, EvaluationContext, ParameterPolicy, ParameterType,
     };
@@ -370,6 +377,7 @@ fn defaults_unbounded_limit_when_policy_declares_it() {
         metrics: Vec::new(),
         parameters: vec![parameter("limit", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let policies = vec![ParameterPolicy {
         name: "limit".into(),
@@ -396,7 +404,49 @@ fn defaults_unbounded_limit_when_policy_declares_it() {
     )
     .unwrap();
 
-    assert_eq!(params["limit"], i64::MAX);
+    assert_eq!(params["limit"], 100);
+}
+
+#[test]
+fn hard_cap_clamps_over_cap_and_preserves_within_cap_values() {
+    let policies = [
+        crate::knowledge::catalog::parameter_policy::ParameterPolicy {
+            name: "limit".into(),
+            kind: crate::knowledge::catalog::parameter_policy::ParameterType::Integer,
+            required: false,
+            default: None,
+            fill_when_missing: true,
+            user_may_override: true,
+            hard_cap: Some(100),
+        },
+    ];
+    let mut over = serde_json::Map::from_iter([("limit".into(), serde_json::json!(5_000))]);
+    super::parameters::clamp_hard_caps(&mut over, &policies);
+    assert_eq!(over["limit"], 100);
+
+    let mut within = serde_json::Map::from_iter([("limit".into(), serde_json::json!(25))]);
+    super::parameters::clamp_hard_caps(&mut within, &policies);
+    assert_eq!(within["limit"], 25);
+}
+
+#[test]
+fn limit_without_hard_cap_is_not_clamped() {
+    let mut params = serde_json::Map::from_iter([("limit".into(), serde_json::json!(5_000))]);
+    let policies = [
+        crate::knowledge::catalog::parameter_policy::ParameterPolicy {
+            name: "limit".into(),
+            kind: crate::knowledge::catalog::parameter_policy::ParameterType::Integer,
+            required: false,
+            default: None,
+            fill_when_missing: true,
+            user_may_override: true,
+            hard_cap: None,
+        },
+    ];
+
+    super::parameters::clamp_hard_caps(&mut params, &policies);
+
+    assert_eq!(params["limit"], 5_000);
 }
 
 #[test]
@@ -413,6 +463,7 @@ fn defaults_authorized_scope_when_policy_declares_it() {
         metrics: Vec::new(),
         parameters: vec![parameter("office_ids", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let policies = vec![ParameterPolicy {
         name: "office_ids".into(),
@@ -453,6 +504,7 @@ fn still_bails_when_no_policy_and_no_default() {
         metrics: Vec::new(),
         parameters: vec![parameter("from_date", true)],
         output_fields: Vec::new(),
+        timeout_ms: None,
     };
     let error =
         params_from_verified(&query, &intent_with_quantity(None), None, &[], None).unwrap_err();

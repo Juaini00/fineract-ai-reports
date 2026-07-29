@@ -1,14 +1,36 @@
 # 007 — Analyst-grade knowledge catalog and request mapping
 
-Status: active — requirements defined; execution pending
+Status: active — Bundles 0–8 implemented; Bundle 9 consumes Bundle 8's final catalog
 Severity: high
 Area: knowledge | catalog | retrieval | clarification | temporal | LLM extraction | SQL | client contract | presentation | currency | performance | observability
 Created: 2026-07-24
-Resolved:
+Resolved: Bundle 6 (W-I/F3) on 2026-07-28 — query metadata is loaded, an approved-SQL row backstop and truncation warning are enforced, and PostgreSQL statement timeout failures are sanitized and audited through the existing terminal-failure path.
 
 Depends on: 005 (unified clarification contract, shipped), 006 (management observability, shipped)
 Design reference: `docs/superpowers/specs/2026-07-24-llm-extraction-gateway-design.md`
 Plan reference: `docs/superpowers/plans/2026-07-24-llm-extraction-gateway.md`
+
+## Bundle 7 implementation status (2026-07-28)
+
+[D1's finalized test plan](../../superpowers/plans/2026-07-28-issue-007-b7-bilingual-retrieval-regression.md) adds a real-catalog, fixture-driven 72-phrase Indonesian/English regression suite. It preserves the active floor/gap and records 28 observed scoring failures as Bundle 8's catalog-enrichment work list, rather than changing the scorer or declaring partial/missing rows supported. It also proves a restricted out-of-catalog request is `Unsupported` with no alternatives. The English E1 pending-charges phrase is one of those 28 gaps and remains a Bundle 8 acceptance item.
+
+## Bundle 8 implementation status (2026-07-28)
+
+Bundle 8 re-audited Bundle 7's 28 phrase-level gaps and closes all of them without lowering `classification.min_floor: 0.40` or `classification.min_gap: 0.05`. The fallback scorer now uses normalized lexical coverage rather than raw-hit saturation, while targeted catalog descriptions/examples supply truthful bilingual analyst vocabulary. The English E1 pending-charges phrase ranks `savings_pending_charges_clients` first. G1 was documented as covered because `amount_levied_total` was already selected; G2 gained the approved, office-scoped `savings_strictly_overdue_charges_clients` query, which filters only `charge_due_date < as_of_date`. Loan rows remain owned by issue 008.
+
+## Bundle 6 implementation status (2026-07-28)
+
+The current source of truth for W-I/F3 is the completed
+[`Bundle 6 plan`](../../superpowers/plans/2026-07-27-issue-007-b6-query-budget-timeout.md).
+It loads query-level `timeout_ms`, reads `QUERY_DEFAULT_TIMEOUT_MS` as the
+fallback, and applies PostgreSQL `SET LOCAL statement_timeout` inside the SQL
+repository transaction. A declared `hard_cap` remains the first ceiling; a
+capability without one receives `QUERY_GLOBAL_MAX_ROWS` (default `50000`). When
+a cap replaces a missing or over-cap request, the repository fetches one surplus
+row, trims it, and surfaces `result_truncated`. Within-cap monthly top-N ranks
+are intentionally not treated as a global row ceiling. The generic sanitized
+`ChatJobFailed` terminal path remains the audit event; a dedicated timeout event
+is deferred to Bundle 11.
 
 ## Problem
 
@@ -143,6 +165,12 @@ requires an object `{ from, to }`. Result:
 
 Tracked here for completeness; frontend work is explicitly out of scope for this
 issue's backend workstreams (see W-F).
+
+> **Cross-repo action (user, not backend):** Open a matching issue in the
+> `ai_report_dashboard` repository for the `{from,to}` `date_range` control (submit the
+> object shape, not a string; see `docs/current/chat-client-integration.md`
+> §"Clarification answer value shapes per `field_type`"). Link its identifier here:
+> `ai_report_dashboard#TBD`. E5 stays open until that issue is linked and the picker lands.
 
 ## Goals
 
@@ -1037,9 +1065,13 @@ this issue (the link to the frontend issue), no code.
 
 **Acceptance:**
 - A corresponding issue exists in the `ai_report_dashboard` repository and is linked from
-  E5 by identifier.
-- `docs/current/management-dashboard-integration.md` documents the exact value shape for
-  every `field_type`, with a worked request and response for each.
+  E5 by identifier. **Status: pending user action** — backend docs (W-F1/F2) are published
+  in `docs/current/chat-client-integration.md` §"Clarification answer value shapes per
+  `field_type`"; the dashboard issue id is not yet linked (`ai_report_dashboard#TBD` at E5).
+- `docs/current/chat-client-integration.md` documents the exact value shape for every
+  `field_type`, with a worked request and response for each. (The plan originally named
+  `management-dashboard-integration.md`; that doc is the `/management/dashboard` contract
+  and unrelated to clarification. Clarification lives in `chat-client-integration.md`.)
 - This issue's resolution criteria contain no item that requires frontend code to be
   merged.
 
@@ -2406,9 +2438,10 @@ This issue is resolved when all of the following hold:
   and large. Recommended first five, in order: `loans_in_arrears_clients`,
   `loan_overdue_installments`, `loan_outstanding_balances_clients`,
   `loan_unpaid_charges_clients`, `loan_portfolio_summary_by_office` (rationale and source
-  tables in A.2.1). **Scope decision still needed:** these are five full capabilities —
-  fold them into W-A3, or split them into a follow-up issue so W-A3 stays savings-only?
-  Appendix A.2 is the reference either way.
+  tables in A.2.1). **Scope decision RESOLVED (2026-07-27): split into follow-up
+  `docs/issues/active/008-loan-domain-analyst-capabilities.md`.** W-A3 stays savings +
+  client. W-A1 still enumerates loan questions marked `missing` so the gap remains visible
+  here. Appendix A.2 is the reference for 008.
 
 ### New open questions raised by Appendix A
 

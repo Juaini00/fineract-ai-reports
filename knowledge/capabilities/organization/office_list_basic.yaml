@@ -21,6 +21,7 @@ examples:
 - berikan 3 office yg ada pada system saat ini
 - List the offices in my authorized scope.
 - Show me all offices.
+- Daftar kantor pada cakupan otorisasi saya.
 supported_intents:
 - plain browse/list of offices with no ranking metric
 unsupported_intents:
@@ -32,9 +33,6 @@ defaults:
 guards:
   require_office_scope: true
   max_limit: 200
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

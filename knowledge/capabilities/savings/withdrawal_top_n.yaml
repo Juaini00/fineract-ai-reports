@@ -22,18 +22,13 @@ examples:
 - Show the largest withdrawals this month.
 - Top 10 savings withdrawals this week.
 - Penarikan terbesar bulan ini.
+- Largest cash-out withdrawal transactions by client.
 defaults:
   exclude_reversed: true
 guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-  - client_id
-  - client_display_name
-cost_class: medium
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -49,7 +44,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date
@@ -70,5 +65,5 @@ parameters:
   limit:
     type: integer
     required: false
-    default: unbounded
+    default: "10"
     hard_cap: 100

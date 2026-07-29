@@ -24,6 +24,8 @@ examples:
 - What is the total deposit this month?
 - Total deposits from January to September 2026.
 - How much savings deposit did we receive today?
+- Jumlah total setoran tabungan untuk periode berjalan.
+- Total setoran bulan berjalan.
 supported_intents:
 - total savings deposits by date range
 - total deposits for authorized offices
@@ -38,20 +40,6 @@ defaults:
 guards:
   require_office_scope: true
   max_date_range_days: 366
-pii:
-  returns_pii: false
-  behavior: aggregate_only
-  never_return:
-  - client_display_name
-  - account_no
-  - external_id
-  - ref_no
-cost_class: low
-output_fields:
-- from_date
-- to_date
-- total_deposit_amount
-- deposit_count
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -67,7 +55,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date

@@ -40,14 +40,5 @@ pub(super) fn extract_person_name(message: &str) -> Option<String> {
             return Some(pair[1].to_string());
         }
     }
-    for pair in parts.windows(2) {
-        let next = pair[1].to_ascii_lowercase();
-        if matches!(pair[0].to_ascii_lowercase().as_str(), "client" | "find")
-            && !matches!(next.as_str(), "client" | "name" | "named")
-            && pair[1].chars().any(char::is_alphabetic)
-        {
-            return Some(pair[1].to_string());
-        }
-    }
     None
 }

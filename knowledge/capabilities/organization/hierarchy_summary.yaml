@@ -21,14 +21,12 @@ examples:
 - Show office hierarchy summary.
 - How deep is our office hierarchy?
 - How many root and leaf offices are in my authorized scope?
+- "Ringkasan hierarki kantor: akar, daun, dan kedalaman."
 defaults:
   authorized_scope_only: true
 guards:
   require_office_scope: true
   snapshot_only: true
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

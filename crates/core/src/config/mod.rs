@@ -53,6 +53,8 @@ pub struct AuthConfig {
 #[derive(Clone, Debug)]
 pub struct QueryConfig {
     pub default_timeout_ms: u64,
+    /// Row ceiling used when a capability has no declared `hard_cap`.
+    pub global_max_rows: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -215,6 +217,9 @@ impl AppConfig {
                 default_timeout_ms: get_env_or("QUERY_DEFAULT_TIMEOUT_MS", "3000")
                     .parse()
                     .context("QUERY_DEFAULT_TIMEOUT_MS must be an integer")?,
+                global_max_rows: get_env_or("QUERY_GLOBAL_MAX_ROWS", "50000")
+                    .parse()
+                    .context("QUERY_GLOBAL_MAX_ROWS must be an integer")?,
             },
             llm: LlmConfig {
                 provider: get_env_or("LLM_PROVIDER", "deepseek"),

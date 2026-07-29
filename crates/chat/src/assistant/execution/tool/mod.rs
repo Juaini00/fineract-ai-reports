@@ -46,6 +46,9 @@ pub struct ToolResult {
     pub error: Option<ToolValidationError>,
     #[serde(default)]
     pub evidence_refs: Vec<String>,
+    /// When the row cap trimmed the result, the number of rows actually shown.
+    #[serde(default)]
+    pub truncated: Option<u64>,
 }
 
 pub const APPROVED_SQL_TOOL: &str = "approved_catalog_sql";
@@ -75,6 +78,11 @@ pub fn tool_result_from_execution(request: &ToolRequest, execution_result: Value
             .map(|count| format!("{count} row(s) returned")),
         error: None,
         evidence_refs: request.evidence_refs.clone(),
+        truncated: execution_result
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .filter(|truncated| *truncated)
+            .and(execution_result.get("shown").and_then(Value::as_u64)),
     }
 }
 

@@ -5,9 +5,9 @@
 
 use app_core::auth::model::PrincipalContext;
 use chat::assistant::ClarificationFieldType;
-use chat::chat::planner::{
-    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus,
-    RetrievalPlan, evaluate_policy,
+use chat::assistant::execution::plan::{
+    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
+    evaluate_policy,
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
@@ -159,6 +159,48 @@ fn approved_catalog_includes_foundation_capabilities() {
         assert!(query.sql_file.ends_with(".sql"));
         assert!(!query.sql_file.contains(".."));
     }
+}
+
+#[test]
+fn strictly_overdue_savings_charge_capability_has_an_approved_contract() {
+    let catalog = load_catalog();
+    let capability = catalog
+        .capabilities
+        .iter()
+        .find(|item| item.id == "savings_strictly_overdue_charges_clients")
+        .expect("strictly-overdue savings charge capability");
+    assert_eq!(capability.status, "approved_mvp");
+    assert_eq!(
+        capability.query_id,
+        "savings.strictly_overdue_charges_clients"
+    );
+
+    let query = catalog
+        .queries
+        .iter()
+        .find(|item| item.id == capability.query_id)
+        .expect("strictly-overdue savings charge query");
+    assert!(query.parameters.iter().any(|parameter| {
+        parameter.name == "as_of_date" && parameter.kind == "date" && !parameter.required
+    }));
+    assert!(
+        query
+            .output_fields
+            .iter()
+            .any(|field| field.name == "days_overdue")
+    );
+
+    let sql = std::fs::read_to_string(workspace_root().join(&query.sql_file))
+        .expect("read strictly-overdue approved SQL");
+    assert!(
+        sql.contains("sac.charge_due_date < $2::date"),
+        "strict-overdue SQL must exclude same-day, future, and undated charges"
+    );
+    assert!(
+        sql.contains("c.office_id = ANY($1::bigint[])"),
+        "office scope must remain inside approved SQL"
+    );
+    assert!(sql.contains("LIMIT $3"), "limit must remain bound");
 }
 
 #[test]
@@ -320,7 +362,6 @@ fn pii_policy_uses_selected_query_output_fields() {
         params: json!({}),
         retrieval_plan: RetrievalPlan::default(),
         evidence_evaluation: EvidenceEvaluation::default(),
-        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     };
 
@@ -345,7 +386,6 @@ fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
         params: json!({ "search": "Tony" }),
         retrieval_plan: RetrievalPlan::default(),
         evidence_evaluation: EvidenceEvaluation::default(),
-        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     };
     let mut client = client(false);
@@ -361,6 +401,157 @@ fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
     client.can_view_pii = true;
     let allowed = evaluate_policy(&client, Some(&plan), &catalog);
     assert_eq!(allowed.status, PolicyDecisionStatus::Allowed);
+}
+
+#[test]
+fn every_fully_defaulted_capability_plans_without_asking() {
+    use chat::assistant::context::clarification_planner::defaultless_missing_fields;
+    use chat::assistant::plan_selected_capability_verified;
+    use chat::assistant::{
+        AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind,
+        AssistantLanguage, ClarificationFacts, ContextReference,
+    };
+    use chat::knowledge::catalog::parameter_policy::EvaluationContext;
+
+    let catalog = load_catalog();
+    let ctx = EvaluationContext {
+        business_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        wall_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        authorized_office_ids: vec![1],
+    };
+    for capability in catalog
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "approved_mvp")
+    {
+        if !defaultless_missing_fields(&catalog, &capability.id, &ClarificationFacts::default())
+            .is_empty()
+        {
+            continue;
+        }
+        let domain = match capability.domain.as_str() {
+            "savings" => AssistantDomain::Savings,
+            "client" => AssistantDomain::Client,
+            "organization" => AssistantDomain::Organization,
+            "group_center" => AssistantDomain::GroupCenter,
+            "loan" => AssistantDomain::Loan,
+            "accounting" => AssistantDomain::Accounting,
+            "tax" => AssistantDomain::Tax,
+            "audit" => AssistantDomain::Audit,
+            _ => AssistantDomain::Unknown,
+        };
+        let intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain,
+            request_shape: Default::default(),
+            language: AssistantLanguage::En,
+            entities: Vec::new(),
+            constraints: AssistantConstraints::default(),
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 0.9,
+            reason: capability.id.clone(),
+        };
+        let plan =
+            plan_selected_capability_verified(&catalog, &capability.id, &intent, None, Some(&ctx))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fully-defaulted capability {} must plan without asking: {e}",
+                        capability.id
+                    )
+                });
+        let query = catalog
+            .queries
+            .iter()
+            .find(|q| q.id == capability.query_id)
+            .unwrap();
+        for parameter in query
+            .parameters
+            .iter()
+            .filter(|p| p.required && p.source.as_deref() != Some("authorized_scope"))
+        {
+            assert!(
+                plan.params.get(&parameter.name).is_some(),
+                "capability {} left required parameter {} unfilled — it would ask",
+                capability.id,
+                parameter.name
+            );
+        }
+    }
+}
+
+#[test]
+fn every_approved_capability_appears_in_management_knowledge_and_resolves_detail() {
+    use chat::api::dto::management::KnowledgeQuery;
+    use chat::management::knowledge::KnowledgeService;
+    use std::sync::Arc;
+
+    let catalog = load_catalog();
+    let approved_ids: Vec<String> = catalog
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "approved_mvp")
+        .map(|c| c.id.clone())
+        .collect();
+    let service = KnowledgeService::new(Arc::new(catalog));
+    let list = service
+        .list(&KnowledgeQuery {
+            kind: None,
+            status: None,
+            domain_id: None,
+            cursor: None,
+            limit: Some(1000),
+        })
+        .unwrap_or_else(|_| panic!("knowledge list must succeed"));
+    let listed_ids: Vec<String> = list
+        .items
+        .iter()
+        .filter_map(|item| item.id.strip_prefix("catalog:").map(str::to_string))
+        .collect();
+    for id in &approved_ids {
+        assert!(
+            listed_ids.contains(id),
+            "approved capability {id} missing from /management/knowledge"
+        );
+    }
+    for item in &list.items {
+        let detail = service
+            .detail(&item.id)
+            .unwrap_or_else(|| panic!("list id {} did not resolve on detail", item.id));
+        assert_eq!(detail.id, item.id);
+    }
+}
+
+#[test]
+fn management_knowledge_detail_leaks_no_sql_for_derived_column_capability() {
+    use chat::management::knowledge::KnowledgeService;
+    use std::sync::Arc;
+
+    let catalog = load_catalog();
+    let capability_id = "savings_pending_charges_clients";
+    let sql_path = workspace_root().join("queries/savings/pending_charges_clients.sql");
+    let sql = std::fs::read_to_string(&sql_path).expect("read approved SQL");
+    let service = KnowledgeService::new(Arc::new(catalog));
+    let detail = service
+        .detail(&format!("catalog:{capability_id}"))
+        .expect("derived-column capability resolves");
+    let serialised = serde_json::to_string(&detail).expect("serialise detail");
+    for keyword in ["SELECT ", "FROM ", "WHERE ", "JOIN ", "GROUP BY"] {
+        assert!(
+            !serialised.to_ascii_uppercase().contains(keyword),
+            "detail leaked SQL keyword `{keyword}`: {serialised}"
+        );
+    }
+    for line in sql
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.len() > 20 && !l.starts_with("--"))
+    {
+        assert!(
+            !serialised.contains(line),
+            "detail leaked SQL substring `{line}`"
+        );
+    }
 }
 
 fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {

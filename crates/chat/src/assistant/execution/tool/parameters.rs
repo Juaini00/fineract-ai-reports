@@ -91,7 +91,32 @@ pub(super) fn normalize_effective_parameters(
             bail!("missing parameter {}", parameter.name);
         }
     }
+    clamp_hard_caps(&mut params, &capability.parameter_policies);
     Ok(Value::Object(params))
+}
+
+pub(super) fn clamp_hard_caps(
+    params: &mut serde_json::Map<String, Value>,
+    policies: &[ParameterPolicy],
+) {
+    for policy in policies {
+        let Some(cap) = policy.hard_cap else {
+            continue;
+        };
+        let Some(requested) = params.get(&policy.name).and_then(Value::as_i64) else {
+            continue;
+        };
+        if requested > cap {
+            tracing::warn!(
+                target: "assistant::hard_cap_clamp",
+                parameter = %policy.name,
+                requested,
+                applied = cap,
+                "row-limit clamped to catalog hard_cap"
+            );
+            params.insert(policy.name.clone(), json!(cap));
+        }
+    }
 }
 
 fn validate_effective_date_range(effective: &EffectiveConstraints) -> Result<()> {
@@ -269,6 +294,7 @@ pub(super) fn params_from_verified(
         }
     }
 
+    clamp_hard_caps(&mut params, policies);
     Ok(Value::Object(params))
 }
 
@@ -294,9 +320,10 @@ fn resolved_to_value(resolved: ResolvedValue) -> Value {
         ResolvedValue::Date(d) => json!(d.to_string()),
         ResolvedValue::Integer(i) => json!(i),
         ResolvedValue::IntegerArray(ids) => json!(ids),
-        // Unbounded: no user-supplied cap. The runtime clamps to i64::MAX so
-        // callers that require an integer parameter (e.g. `LIMIT $n`) still
-        // bind successfully; catalog `hard_cap` is enforced elsewhere.
+        // Unbounded: no user-supplied cap. Bound as i64::MAX so callers that
+        // require an integer parameter (e.g. `LIMIT $n`) still bind; the SQL
+        // repository clamps this to the effective row cap (declared hard_cap or
+        // the configured global backstop) before binding.
         // ponytail: i64::MAX sentinel, upgrade to LIMIT-omitting SQL if a real
         // "no limit" query appears.
         ResolvedValue::Unbounded => json!(i64::MAX),

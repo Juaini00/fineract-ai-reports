@@ -22,14 +22,13 @@ examples:
 - Show office summary.
 - How many offices are in my authorized scope?
 - Show active staff count for my offices.
+- Office staffing summary with active staff count.
+- Ringkasan kantor beserta jumlah staf aktif.
 defaults:
   authorized_scope_only: true
 guards:
   require_office_scope: true
   snapshot_only: true
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

@@ -175,6 +175,9 @@ pub enum AuditEventType {
     ChatJobFailed,
     ChatSessionArchived,
     ChatSessionDeleted,
+    BusinessDateFallbackUsed,
+    ExecutionResultTruncated,
+    ExecutionTimedOut,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]

@@ -193,8 +193,18 @@ pub enum Quantity {
 pub enum ContextReference {
     #[default]
     None,
+    /// RESERVED for the drill-down follow-up (issue 009), not issue 007.
+    /// Never produced or consumed today: no code carries a prior result set or
+    /// capability forward, and nothing branches on this value. Do not delete —
+    /// removing it would silently narrow the extractor's accepted contract, and
+    /// the follow-up depends on it. See issue 007 §W-H / §F5.
+    // ponytail: reserved surface, kept deliberately dead until issue 009 starts.
     PreviousJob,
     PendingClarification,
+    /// RESERVED for the drill-down follow-up (issue 009), not issue 007.
+    /// Never produced or consumed today. Do not delete — see `PreviousJob` above
+    /// and issue 007 §W-H / §F5.
+    // ponytail: reserved surface, kept deliberately dead until issue 009 starts.
     SessionTopic,
 }
 

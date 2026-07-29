@@ -25,6 +25,7 @@ examples:
 - Show customer savings activity this month.
 - List savings transactions this week.
 - Show all savings activity for authorized offices.
+- Aktivitas transaksi tabungan mingguan.
 supported_intents:
 - savings activity list by date range
 - recent savings transactions for authorized offices
@@ -34,34 +35,6 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-  - client_id
-  - client_display_name
-  omitted_when_cannot_view_pii:
-  - client_id
-  - client_display_name
-  never_return:
-  - account_no
-  - external_id
-  - ref_no
-  - payment_detail_id
-cost_class: medium
-output_fields:
-  public:
-  - transaction_id
-  - transaction_date
-  - transaction_type
-  - amount
-  - currency_code
-  - office_id
-  - office_name
-  - product_id
-  - product_name
-  pii_conditional:
-  - client_id
-  - client_display_name
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -73,7 +46,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date

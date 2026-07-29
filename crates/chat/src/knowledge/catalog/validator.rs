@@ -35,14 +35,6 @@ const OUTPUT_MODES: &[&str] = &[
 ];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];
 const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "array_bigint"];
-const SENSITIVITY_CLASSES: &[&str] = &[
-    "public_business",
-    "pii",
-    "sensitive_business_identifier",
-    "security_sensitive",
-    "secret_never_expose",
-    "free_text_sensitive",
-];
 const UNSAFE_SQL_COMMANDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP", "ALTER", "CREATE", "GRANT", "REVOKE", "COPY",
     "VACUUM", "ANALYZE",
@@ -233,6 +225,7 @@ impl KnowledgeValidator {
                     query,
                     &catalog.parameter_inputs,
                 )?;
+                validate_clarification_contract(capability, query)?;
             }
 
             validate_refs(
@@ -292,13 +285,6 @@ impl KnowledgeValidator {
                 if field.name.trim().is_empty() {
                     bail!("query {} has output field with empty name", query.id);
                 }
-
-                validate_status(
-                    "query output sensitivity",
-                    &format!("{}.{}", query.id, field.name),
-                    &field.sensitivity,
-                    SENSITIVITY_CLASSES,
-                )?;
             }
 
             let sql_path = resolve_sql_path(catalog, query);
@@ -462,6 +448,34 @@ fn validate_parameter_input_registry(
         }
     }
 
+    Ok(())
+}
+
+/// A capability may never require `from_date`/`to_date` (date_range) without a
+/// covering policy default — that is the shape W-E removed (E2). Rejecting it at
+/// load time makes reintroduction a build failure, not a silent regression.
+fn validate_clarification_contract(
+    capability: &CapabilityKnowledge,
+    query: &QueryKnowledge,
+) -> Result<()> {
+    for parameter in query.parameters.iter().filter(|p| {
+        p.required
+            && p.source.as_deref() != Some("authorized_scope")
+            && matches!(p.name.as_str(), "from_date" | "to_date")
+    }) {
+        let covered = capability.parameter_policies.iter().any(|policy| {
+            policy.name == parameter.name && !policy.required && policy.default.is_some()
+        });
+        if !covered {
+            bail!(
+                "capability {} requires {} with no policy default; this reintroduces \
+                 the date clarification W-E removed — add `required: false` with a \
+                 `default` expression",
+                capability.id,
+                parameter.name
+            );
+        }
+    }
     Ok(())
 }
 
@@ -731,6 +745,13 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
 
     validate_placeholders(query, trimmed)?;
 
+    if !currency_join_is_fanout_safe(&upper) {
+        bail!(
+            "query {} joins m_organisation_currency without LEFT JOIN LATERAL and LIMIT 1",
+            query.id
+        );
+    }
+
     if has_parameter(query, "office_ids") {
         let office_pos = parameter_position(query, "office_ids");
         let expected = format!("ANY(${office_pos}::BIGINT[])");
@@ -770,6 +791,12 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ponytail: string-level guard; join-graph analysis is unnecessary for this one table.
+fn currency_join_is_fanout_safe(sql_upper: &str) -> bool {
+    !sql_upper.contains("M_ORGANISATION_CURRENCY")
+        || (sql_upper.contains("LEFT JOIN LATERAL") && sql_upper.contains("LIMIT 1"))
 }
 
 fn validate_placeholders(query: &QueryKnowledge, sql: &str) -> Result<()> {
@@ -929,6 +956,81 @@ mod tests {
         assert_eq!(
             placeholder_cast("SELECT $3::bigint[]", 3).as_deref(),
             Some("bigint[]")
+        );
+    }
+
+    #[test]
+    fn currency_join_lateral_is_safe() {
+        let sql = "SELECT sa.currency_code FROM m_savings_account sa LEFT JOIN LATERAL (SELECT display_symbol FROM m_organisation_currency WHERE code = sa.currency_code LIMIT 1) cur ON true";
+        assert!(currency_join_is_fanout_safe(&sql.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn plain_currency_equality_join_is_rejected() {
+        let sql = "SELECT sa.currency_code FROM m_savings_account sa LEFT JOIN m_organisation_currency cur ON cur.code = sa.currency_code";
+        assert!(!currency_join_is_fanout_safe(&sql.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn query_without_currency_table_is_unaffected() {
+        assert!(currency_join_is_fanout_safe("SELECT C.ID FROM M_CLIENT C"));
+    }
+
+    #[test]
+    fn rejects_required_date_parameter_without_a_policy_default() {
+        use crate::knowledge::catalog::parameter_policy::{ParameterPolicy, ParameterType};
+        use crate::knowledge::model::{
+            CapabilityDefaults, CapabilityGuards, CapabilityKnowledge, QueryKnowledge,
+            QueryParameter,
+        };
+        let capability = CapabilityKnowledge {
+            id: "test_cap".into(),
+            status: "approved_mvp".into(),
+            domain: "test".into(),
+            query_id: "test.q".into(),
+            output_mode: "table".into(),
+            request_shape: Default::default(),
+            display_name: None,
+            description: None,
+            data_areas: vec![],
+            metrics: vec![],
+            examples: vec![],
+            required_parameters: vec![],
+            optional_parameters: vec![],
+            defaults: CapabilityDefaults::default(),
+            guards: CapabilityGuards::default(),
+            parameter_policies: vec![ParameterPolicy {
+                name: "from_date".into(),
+                kind: ParameterType::Date,
+                required: true,
+                default: None,
+                fill_when_missing: false,
+                user_may_override: true,
+                hard_cap: None,
+            }],
+        };
+        let query = QueryKnowledge {
+            id: "test.q".into(),
+            database: "db".into(),
+            sql_file: "test.sql".into(),
+            data_areas: vec![],
+            tables: vec![],
+            metrics: vec![],
+            parameters: vec![QueryParameter {
+                name: "from_date".into(),
+                kind: "date".into(),
+                required: true,
+                source: None,
+            }],
+            output_fields: vec![],
+            timeout_ms: None,
+        };
+        let err = validate_clarification_contract(&capability, &query)
+            .expect_err("required defaultless date must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("from_date") && msg.contains("default"),
+            "validator must reject a required date param with no default: {msg}"
         );
     }
 }

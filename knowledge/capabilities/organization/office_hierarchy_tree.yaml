@@ -21,6 +21,7 @@ examples:
 - Show my office hierarchy tree.
 - List offices with parent and depth.
 - Office org structure top 200.
+- Pohon hierarki kantor dengan kantor induk dan kedalaman.
 supported_intents:
 - office hierarchy walk with parent and depth per node
 unsupported_intents:
@@ -30,9 +31,6 @@ defaults:
 guards:
   require_office_scope: true
   max_limit: 500
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

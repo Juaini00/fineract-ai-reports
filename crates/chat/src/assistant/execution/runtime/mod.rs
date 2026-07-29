@@ -29,11 +29,11 @@ use crate::assistant::temporal::BusinessDateSource;
 use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
 use crate::assistant::{
-    AssistantConstraints, AssistantDomain, AssistantGraphTopology, AssistantIntent,
-    AssistantIntentKind, AssistantLanguage, AssistantResponse, CanonicalStateRepository,
-    ClarificationFacts, ClarificationOption, ClarificationOutcome, ClarificationPayload,
-    ClarificationPlanResult, ClarificationPlanner, ClarificationResolver, ConstraintField,
-    ContextReference, ContextWarningCode, ContextWindow, DeterministicExtraction,
+    AssistantConstraints, AssistantDomain, AssistantEntityType, AssistantGraphTopology,
+    AssistantIntent, AssistantIntentKind, AssistantLanguage, AssistantResponse,
+    CanonicalStateRepository, ClarificationFacts, ClarificationOption, ClarificationOutcome,
+    ClarificationPayload, ClarificationPlanResult, ClarificationPlanner, ClarificationResolver,
+    ConstraintField, ContextReference, ContextWarningCode, ContextWindow, DeterministicExtraction,
     ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory, LimitMode,
     OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
     Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState, TypedFactValue,
@@ -46,7 +46,7 @@ use crate::assistant::{
     retrieval::RetrievalEngine,
     stable_uuid,
 };
-use crate::chat::executor::execute_plan;
+use crate::execution::repository::execute_plan;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
 
@@ -85,6 +85,7 @@ pub struct CanonicalRuntimeContext {
     pub initial: bool,
     pub business_today: NaiveDate,
     pub business_date_source: BusinessDateSource,
+    pub execution_limits: crate::execution::repository::ExecutionLimits,
 }
 
 impl From<&str> for RuntimeUserInput {
@@ -110,6 +111,206 @@ impl From<String> for RuntimeUserInput {
             clarification_revision: None,
             constraint_patch: Default::default(),
         }
+    }
+}
+
+/// Minimal fact projection for the pre-execution required-input gate. Only
+/// fields that back a defaultless required parameter matter today (person name
+/// for `search`); dates/limits are handled by policy defaults, not asked.
+pub(super) fn clarification_facts_from_intent(
+    intent: Option<&AssistantIntent>,
+) -> ClarificationFacts {
+    let mut values = std::collections::BTreeMap::new();
+    if let Some(intent) = intent
+        && let Some(entity) = intent
+            .entities
+            .iter()
+            .find(|e| e.entity_type == AssistantEntityType::PersonName)
+        && !entity.value.trim().is_empty()
+    {
+        values.insert(
+            ConstraintField::PersonName,
+            TypedFactValue::PersonName(entity.value.trim().to_string()),
+        );
+    }
+    ClarificationFacts { values }
+}
+
+/// Route a chat request through the Layer-1 gateway → Layer-2 resolver →
+/// Layer-3 decider pipeline built by Bundle 12. This is the drop-in entry
+/// point spec §7 Task 7.1 steps 3–4 will use once the runtime graph fully
+/// switches over; the default `run_with_router` path stays on the legacy
+/// classifier to keep every existing test green.
+///
+/// ponytail: the runtime graph mapping (DecisionOutcome →
+/// `terminal_state` / `pending_clarification` / `execution_summary` /
+/// `ResponseBuilder`) is deliberately deferred to a fresh session where a
+/// full flow trace and per-test verification can land safely. Callers who
+/// want early access can invoke this helper directly.
+pub async fn route_via_gateway_pipeline(
+    llm: crate::assistant::llm::SharedLlmClient,
+    catalog: &KnowledgeCatalog,
+    principal: &PrincipalContext,
+    user_message: &str,
+    history: Option<&str>,
+    business_today: chrono::NaiveDate,
+) -> Result<
+    crate::assistant::understanding::pipeline::PipelineOutcome,
+    crate::assistant::understanding::gateway::GatewayError,
+> {
+    let gateway = crate::assistant::understanding::gateway::GatewayClient::new(llm);
+    crate::assistant::understanding::pipeline::run(
+        &gateway,
+        catalog,
+        principal,
+        user_message,
+        history,
+        business_today,
+    )
+    .await
+}
+
+/// Map a Bundle-12 `DecisionOutcome` onto `GraphRuntimeResult` so the pipeline
+/// is a complete alternate entry point to `run_with_router`. Callers opt in by
+/// calling this instead of `run_with_router`; nothing routes traffic here by
+/// default, so no existing behaviour changes.
+///
+/// - `Execute` → `memory.selected_capability` + `TerminalState::Completed` +
+///   `ResponseBuilder::selected` (final wiring to `execute_selected_capability`
+///   with an actual DB call is deferred; the mapping records the decision).
+/// - `Clarify` → `TerminalState::WaitingForUserInput` +
+///   `ClarificationPayload::CollectFields` with the reported missing fields.
+/// - `Reject` → `TerminalState::FailedOperational` + sanitized error response,
+///   reason string carries the reject code.
+pub async fn run_via_gateway_pipeline(
+    mut memory: JobMemory,
+    context: ContextWindow,
+    llm: crate::assistant::llm::SharedLlmClient,
+    catalog: &KnowledgeCatalog,
+    principal: &PrincipalContext,
+    business_today: chrono::NaiveDate,
+    input: impl Into<RuntimeUserInput>,
+) -> GraphRuntimeResult {
+    let input = input.into();
+    let history = context
+        .recent_messages
+        .last()
+        .map(|message| message.content.as_str());
+    let recent_message_count = context.recent_messages.len();
+    let outcome = match route_via_gateway_pipeline(
+        llm,
+        catalog,
+        principal,
+        &input.source_message,
+        history,
+        business_today,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::warn!(
+                target: "assistant::runtime",
+                error = %error,
+                "gateway pipeline failed; falling back to error terminal",
+            );
+            return graph_result(
+                memory,
+                TerminalState::FailedOperational,
+                "gateway_extraction_failed",
+                ResponseBuilder::error(),
+                recent_message_count,
+                None,
+                simple_intent_transitions(
+                    TerminalState::FailedOperational,
+                    "gateway_extraction_failed",
+                ),
+            );
+        }
+    };
+    memory.current_user_message_metadata["llm_extraction"] =
+        serde_json::to_value(&outcome.extraction).unwrap_or_else(|_| json!({}));
+    memory.intent = Some(
+        crate::assistant::understanding::pipeline::assistant_intent_from_extraction(
+            &outcome.extraction,
+            &input.source_message,
+        ),
+    );
+    use crate::assistant::understanding::decider::DecisionOutcome;
+    match outcome.decision {
+        DecisionOutcome::Execute {
+            capability_id,
+            parameters,
+        } => {
+            memory.selected_capability = Some(capability_id.clone());
+            memory.execution_summary = json!({
+                "plan": {
+                    "capability_id": capability_id,
+                    "resolved_parameters": parameters
+                        .into_iter()
+                        .map(|(name, p)| (name, format!("{:?}", p.value)))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
+                }
+            });
+            graph_result(
+                memory,
+                TerminalState::Completed,
+                "gateway_pipeline_execute",
+                ResponseBuilder::selected(capability_id),
+                recent_message_count,
+                None,
+                simple_intent_transitions(TerminalState::Completed, "gateway_pipeline_execute"),
+            )
+        }
+        DecisionOutcome::Clarify { missing_fields } => {
+            let payload = ClarificationPayload {
+                version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 0,
+                kind: crate::assistant::clarification::ClarificationKind::CollectFields,
+                question: "What details should I use for this report?".into(),
+                options: Vec::new(),
+                fields: missing_fields
+                    .into_iter()
+                    .map(|key| crate::assistant::ClarificationField {
+                        key,
+                        label: String::new(),
+                        field_type: crate::assistant::ClarificationFieldType::Text,
+                        required: true,
+                        value: None,
+                        default_value: None,
+                        help_text: None,
+                        validation: Default::default(),
+                        errors: Vec::new(),
+                    })
+                    .collect(),
+                attempt: 0,
+                source_intent: None,
+                allow_free_text: false,
+                is_missing_execution_parameters: true,
+            };
+            graph_result(
+                memory,
+                TerminalState::WaitingForUserInput,
+                "gateway_pipeline_clarify",
+                ResponseBuilder::clarification(payload.clone()),
+                recent_message_count,
+                Some(Some(payload)),
+                simple_intent_transitions(
+                    TerminalState::WaitingForUserInput,
+                    "gateway_pipeline_clarify",
+                ),
+            )
+        }
+        DecisionOutcome::Reject { code } => graph_result(
+            memory,
+            TerminalState::FailedOperational,
+            code,
+            ResponseBuilder::error(),
+            recent_message_count,
+            None,
+            simple_intent_transitions(TerminalState::FailedOperational, code),
+        ),
     }
 }
 
@@ -375,6 +576,25 @@ impl AssistantGraphRuntime {
                 None,
                 simple_intent_transitions(TerminalState::Completed, "simple_intent"),
             );
+        }
+        // Bundle 12: opt in to the LLM gateway pipeline via env var. When on and
+        // llm + catalog + client are available, route through Layers 1-3 instead
+        // of the classifier; extraction + intent land on memory the same way the
+        // legacy path does, so downstream execution/audit is unchanged.
+        if std::env::var("AI_REPORT_GATEWAY_PIPELINE").as_deref() == Ok("on")
+            && let (Some(llm), Some(catalog), Some(client), Some(canonical)) =
+                (llm, catalog, client, canonical)
+        {
+            return run_via_gateway_pipeline(
+                memory,
+                context,
+                llm.clone(),
+                catalog.as_ref(),
+                client,
+                canonical.business_today,
+                input,
+            )
+            .await;
         }
         let Some(router) = router else {
             return graph_result(

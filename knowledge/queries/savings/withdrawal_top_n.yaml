@@ -70,7 +70,6 @@ guards:
   single_statement: true
   require_office_filter: true
 timeout_ms: 3000
-cost_class: medium
 checks:
   - id: sql_file_exists
     rule: sql_file must exist under queries/.

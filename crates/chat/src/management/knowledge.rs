@@ -114,7 +114,7 @@ impl KnowledgeService {
                 .iter()
                 .map(|field| crate::api::dto::management::OutputFieldResponse {
                     name: field.name.clone(),
-                    sensitivity: field.sensitivity.clone(),
+                    sensitivity: field.sensitivity.as_str().to_string(),
                 })
                 .collect(),
             limitations: Vec::new(),

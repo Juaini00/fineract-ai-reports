@@ -22,6 +22,7 @@ examples:
 - Top 3 deposits per month this year.
 - Show the biggest savings deposit per month.
 - Setoran terbesar setiap bulan tahun ini.
+- Largest deposit transaction each month.
 defaults:
   exclude_reversed: true
   default_limit: 1
@@ -29,12 +30,6 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit_per_month: 20
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-  - client_id
-  - client_display_name
-cost_class: high
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -50,7 +45,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: business_today - 12m
     fill_when_missing: true
   to_date:
     type: date
@@ -71,5 +66,5 @@ parameters:
   limit:
     type: integer
     required: false
-    default: unbounded
+    default: "10"
     hard_cap: 10000

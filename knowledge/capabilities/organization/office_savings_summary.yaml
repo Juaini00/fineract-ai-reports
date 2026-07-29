@@ -22,6 +22,7 @@ examples:
 - Top offices by savings balance.
 - Which office holds the most savings?
 - Office savings summary top 10 in IDR.
+- Kantor dengan saldo tabungan terbesar.
 supported_intents:
 - office ranking by savings balance
 - per-office savings account count and total balance
@@ -32,9 +33,6 @@ defaults:
 guards:
   require_office_scope: true
   max_limit: 100
-pii:
-  returns_pii: false
-cost_class: medium
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

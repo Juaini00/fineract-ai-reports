@@ -21,6 +21,7 @@ examples:
 - Monthly office openings for 2026.
 - How many offices opened each month last year?
 - Show office opening trend from 2026-01-01 to 2026-06-30.
+- Jumlah kantor yang dibuka setiap bulan.
 supported_intents:
 - monthly office opening counts in a date range
 - office expansion trend across authorized scope
@@ -32,9 +33,6 @@ defaults:
 guards:
   require_office_scope: true
   max_date_range_days: 1096
-pii:
-  returns_pii: false
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -48,7 +46,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: business_today - 12m
     fill_when_missing: true
   to_date:
     type: date

@@ -423,6 +423,7 @@ async fn spawn_app_with_options(
         },
         query: QueryConfig {
             default_timeout_ms: 3000,
+            global_max_rows: 50000,
         },
         llm: LlmConfig {
             provider: "test".into(),

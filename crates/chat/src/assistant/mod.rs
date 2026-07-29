@@ -1,6 +1,5 @@
 pub mod context;
 pub mod execution;
-pub mod legacy_pipeline;
 pub mod llm;
 pub mod presentation;
 pub mod retrieval;
@@ -71,5 +70,8 @@ pub use state::graph::{
 pub use understanding::clarification_resolver::ClarificationResolver;
 pub use understanding::extraction::{
     DeterministicExtraction, PayloadCandidate, PayloadField, PayloadSource, PayloadTrust,
-    TemporalProvenance, TemporalValidationError, extract_message_facts, extract_message_facts_at,
+    TemporalProvenance, TemporalValidationError,
 };
+// Bundle 12 Task 7.2: extractors demoted to `pub(crate)` verification helpers;
+// re-exports use the crate-visible path so runtime/extraction stays green.
+pub(crate) use understanding::extraction::{extract_message_facts, extract_message_facts_at};

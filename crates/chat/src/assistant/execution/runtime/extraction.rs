@@ -108,7 +108,14 @@ pub(super) fn extract_for_context(
     canonical: Option<&CanonicalRuntimeContext>,
 ) -> DeterministicExtraction {
     canonical
-        .map(|context| extract_message_facts_at(message, context.reference_instant, 366))
+        .map(|context| {
+            extract_message_facts_at(
+                message,
+                context.reference_instant,
+                context.business_today,
+                366,
+            )
+        })
         .unwrap_or_else(|| extract_message_facts(message))
 }
 

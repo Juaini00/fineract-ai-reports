@@ -36,7 +36,6 @@ guards:
     - external_id
     - mobile_no
     - email
-cost_class: low
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.

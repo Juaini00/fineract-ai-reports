@@ -21,6 +21,8 @@ request_shape:
 examples:
 - Which offices had the most transactions this month?
 - Top 10 busiest offices by transaction count in Q2.
+- Busiest offices ranked by transaction count.
+- Kantor paling aktif berdasarkan jumlah transaksi tabungan.
 supported_intents:
 - office ranking by transaction volume in a date range
 unsupported_intents:
@@ -31,9 +33,6 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: false
-cost_class: medium
 checks:
 - id: query_exists
   rule: query_id must exist in knowledge/queries.
@@ -52,7 +51,7 @@ parameters:
   from_date:
     type: date
     required: false
-    default: business_today
+    default: start_of_month(business_today)
     fill_when_missing: true
   to_date:
     type: date
@@ -62,5 +61,5 @@ parameters:
   limit:
     type: integer
     required: false
-    default: unbounded
+    default: "10"
     hard_cap: 100

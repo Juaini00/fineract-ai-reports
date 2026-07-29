@@ -9,8 +9,9 @@ use crate::{
         ClarificationPayload, ClarificationValidation, ConstraintField, ConstraintPatch, LimitMode,
         OTHER_CLARIFICATION_OPTION_ID, TypedFactValue,
     },
-    knowledge::model::{
-        CapabilityKnowledge, KnowledgeCatalog, ParameterInputKnowledge, QueryKnowledge,
+    knowledge::{
+        catalog::parameter_policy::ParameterPolicy,
+        model::{CapabilityKnowledge, KnowledgeCatalog, ParameterInputKnowledge, QueryKnowledge},
     },
 };
 
@@ -133,6 +134,50 @@ impl<'a> ClarificationPlanner<'a> {
             defaults,
         })
     }
+}
+
+/// Required user inputs for `capability_id` whose backing query parameters have
+/// no policy default and are not yet satisfied by `facts`. The confident routing
+/// path may ask only for these — parameters with a default are filled silently
+/// (W-E). Today the set is `{ search }` for `client_name_lookup` and empty
+/// elsewhere.
+/// ponytail: general loop; a new defaultless required parameter is covered with
+/// no further code change.
+pub fn defaultless_missing_fields(
+    catalog: &KnowledgeCatalog,
+    capability_id: &str,
+    facts: &ClarificationFacts,
+) -> Vec<ClarificationField> {
+    let Some(capability) = catalog
+        .capabilities
+        .iter()
+        .find(|c| c.id == capability_id && c.status == "approved_mvp")
+    else {
+        return Vec::new();
+    };
+    let Some(query) = catalog.queries.iter().find(|q| q.id == capability.query_id) else {
+        return Vec::new();
+    };
+    let inputs = required_inputs(query, &catalog.parameter_inputs);
+    let defaults = limit_default(capability, query, &inputs);
+    inputs
+        .into_iter()
+        .filter(|input| {
+            input.parameters.iter().all(|name| {
+                !(parameter_has_default(&capability.parameter_policies, name)
+                    || (matches!(name.as_str(), "limit" | "top_n")
+                        && capability.defaults.default_limit.is_some()))
+            })
+        })
+        .filter(|input| !input_satisfied(input, facts, &defaults))
+        .map(|input| field_for(input, facts, capability))
+        .collect()
+}
+
+fn parameter_has_default(policies: &[ParameterPolicy], name: &str) -> bool {
+    policies
+        .iter()
+        .any(|policy| policy.name == name && !policy.required && policy.default.is_some())
 }
 
 struct Candidate<'a> {
@@ -385,6 +430,30 @@ mod tests {
             },
         }
     }
+    fn date_policy(name: &str) -> ParameterPolicy {
+        use crate::knowledge::catalog::parameter_policy::{DefaultExpr, ParameterType};
+        ParameterPolicy {
+            name: name.into(),
+            kind: ParameterType::Date,
+            required: false,
+            default: Some(DefaultExpr::BusinessToday),
+            fill_when_missing: true,
+            user_may_override: true,
+            hard_cap: None,
+        }
+    }
+    fn required_no_default(name: &str) -> ParameterPolicy {
+        use crate::knowledge::catalog::parameter_policy::ParameterType;
+        ParameterPolicy {
+            name: name.into(),
+            kind: ParameterType::String,
+            required: true,
+            default: None,
+            fill_when_missing: false,
+            user_may_override: true,
+            hard_cap: None,
+        }
+    }
     fn param(name: &str) -> QueryParameter {
         QueryParameter {
             name: name.into(),
@@ -435,6 +504,7 @@ mod tests {
                     vec![param("from_date"), param("to_date")]
                 },
                 output_fields: vec![],
+                timeout_ms: None,
             })
             .collect();
         KnowledgeCatalog {
@@ -580,6 +650,51 @@ mod tests {
             payload.fields[0].value,
             Some(json!({"from":"2024-01-01","to":null}))
         );
+    }
+    #[test]
+    fn defaulted_capability_has_no_defaultless_fields() {
+        let mut c = catalog(vec![("total", None, None)]);
+        c.capabilities[0].parameter_policies =
+            vec![date_policy("from_date"), date_policy("to_date")];
+        let fields = defaultless_missing_fields(&c, "total", &ClarificationFacts::default());
+        assert!(
+            fields.is_empty(),
+            "defaulted params must not be asked: {fields:?}"
+        );
+    }
+    #[test]
+    fn defaultless_required_param_is_asked_when_fact_absent() {
+        let mut c = catalog(vec![("lookup", None, None)]);
+        c.queries[0].parameters = vec![param("search")];
+        c.parameter_inputs.push(input(
+            "search",
+            vec!["search"],
+            ClarificationFieldType::Text,
+        ));
+        c.capabilities[0].parameter_policies = vec![required_no_default("search")];
+        let fields = defaultless_missing_fields(&c, "lookup", &ClarificationFacts::default());
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, "search");
+    }
+    #[test]
+    fn present_fact_satisfies_defaultless_required_param() {
+        let mut c = catalog(vec![("lookup", None, None)]);
+        c.queries[0].parameters = vec![param("search")];
+        c.parameter_inputs.push(input(
+            "search",
+            vec!["search"],
+            ClarificationFieldType::Text,
+        ));
+        c.capabilities[0].parameter_policies = vec![required_no_default("search")];
+        let facts = ClarificationFacts {
+            values: [(
+                ConstraintField::PersonName,
+                TypedFactValue::PersonName("Tony".into()),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        assert!(defaultless_missing_fields(&c, "lookup", &facts).is_empty());
     }
     #[test]
     fn incompatible_date_bounds_do_not_lift_shared_field() {
