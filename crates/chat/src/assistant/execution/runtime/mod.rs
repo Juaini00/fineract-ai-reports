@@ -170,6 +170,144 @@ pub async fn route_via_gateway_pipeline(
     .await
 }
 
+/// Map a Bundle-12 `DecisionOutcome` onto `GraphRuntimeResult` so the pipeline
+/// is a complete alternate entry point to `run_with_router`. Callers opt in by
+/// calling this instead of `run_with_router`; nothing routes traffic here by
+/// default, so no existing behaviour changes.
+///
+/// - `Execute` → `memory.selected_capability` + `TerminalState::Completed` +
+///   `ResponseBuilder::selected` (final wiring to `execute_selected_capability`
+///   with an actual DB call is deferred; the mapping records the decision).
+/// - `Clarify` → `TerminalState::WaitingForUserInput` +
+///   `ClarificationPayload::CollectFields` with the reported missing fields.
+/// - `Reject` → `TerminalState::FailedOperational` + sanitized error response,
+///   reason string carries the reject code.
+pub async fn run_via_gateway_pipeline(
+    mut memory: JobMemory,
+    context: ContextWindow,
+    llm: crate::assistant::llm::SharedLlmClient,
+    catalog: &KnowledgeCatalog,
+    principal: &PrincipalContext,
+    business_today: chrono::NaiveDate,
+    input: impl Into<RuntimeUserInput>,
+) -> GraphRuntimeResult {
+    let input = input.into();
+    let history = context
+        .recent_messages
+        .last()
+        .map(|message| message.content.as_str());
+    let recent_message_count = context.recent_messages.len();
+    let outcome = match route_via_gateway_pipeline(
+        llm,
+        catalog,
+        principal,
+        &input.source_message,
+        history,
+        business_today,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::warn!(
+                target: "assistant::runtime",
+                error = %error,
+                "gateway pipeline failed; falling back to error terminal",
+            );
+            return graph_result(
+                memory,
+                TerminalState::FailedOperational,
+                "gateway_extraction_failed",
+                ResponseBuilder::error(),
+                recent_message_count,
+                None,
+                simple_intent_transitions(
+                    TerminalState::FailedOperational,
+                    "gateway_extraction_failed",
+                ),
+            );
+        }
+    };
+    memory.current_user_message_metadata["llm_extraction"] =
+        serde_json::to_value(&outcome.extraction).unwrap_or_else(|_| json!({}));
+    use crate::assistant::understanding::decider::DecisionOutcome;
+    match outcome.decision {
+        DecisionOutcome::Execute {
+            capability_id,
+            parameters,
+        } => {
+            memory.selected_capability = Some(capability_id.clone());
+            memory.execution_summary = json!({
+                "plan": {
+                    "capability_id": capability_id,
+                    "resolved_parameters": parameters
+                        .into_iter()
+                        .map(|(name, p)| (name, format!("{:?}", p.value)))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
+                }
+            });
+            graph_result(
+                memory,
+                TerminalState::Completed,
+                "gateway_pipeline_execute",
+                ResponseBuilder::selected(capability_id),
+                recent_message_count,
+                None,
+                simple_intent_transitions(TerminalState::Completed, "gateway_pipeline_execute"),
+            )
+        }
+        DecisionOutcome::Clarify { missing_fields } => {
+            let payload = ClarificationPayload {
+                version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
+                id: uuid::Uuid::new_v4(),
+                revision: 0,
+                kind: crate::assistant::clarification::ClarificationKind::CollectFields,
+                question: "What details should I use for this report?".into(),
+                options: Vec::new(),
+                fields: missing_fields
+                    .into_iter()
+                    .map(|key| crate::assistant::ClarificationField {
+                        key,
+                        label: String::new(),
+                        field_type: crate::assistant::ClarificationFieldType::Text,
+                        required: true,
+                        value: None,
+                        default_value: None,
+                        help_text: None,
+                        validation: Default::default(),
+                        errors: Vec::new(),
+                    })
+                    .collect(),
+                attempt: 0,
+                source_intent: None,
+                allow_free_text: false,
+                is_missing_execution_parameters: true,
+            };
+            graph_result(
+                memory,
+                TerminalState::WaitingForUserInput,
+                "gateway_pipeline_clarify",
+                ResponseBuilder::clarification(payload.clone()),
+                recent_message_count,
+                Some(Some(payload)),
+                simple_intent_transitions(
+                    TerminalState::WaitingForUserInput,
+                    "gateway_pipeline_clarify",
+                ),
+            )
+        }
+        DecisionOutcome::Reject { code } => graph_result(
+            memory,
+            TerminalState::FailedOperational,
+            code,
+            ResponseBuilder::error(),
+            recent_message_count,
+            None,
+            simple_intent_transitions(TerminalState::FailedOperational, code),
+        ),
+    }
+}
+
 pub struct AssistantGraphRuntime;
 
 impl AssistantGraphRuntime {

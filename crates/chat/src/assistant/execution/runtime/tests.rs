@@ -1319,3 +1319,104 @@ async fn long_message_continues_missing_parameters() {
     );
     assert_eq!(result.pending_clarification, Some(None));
 }
+
+#[tokio::test]
+async fn gateway_pipeline_runtime_entry_maps_execute_to_completed() {
+    use crate::assistant::execution::runtime::run_via_gateway_pipeline;
+    use crate::assistant::llm::FakeLlmClient;
+    let fake = std::sync::Arc::new(FakeLlmClient::default());
+    fake.push_structured(serde_json::json!({
+        "intent_kind": "report_request",
+        "domain": "savings",
+        "language": "en",
+        "entities": [],
+        "candidates": [
+            { "capability_id": "savings_deposit_total", "confidence": 0.95, "why": "totals" }
+        ]
+    }));
+    let llm: crate::assistant::llm::SharedLlmClient = fake;
+    let catalog = runtime_test_catalog();
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["savings_deposit_total".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let result = run_via_gateway_pipeline(
+        empty_memory(),
+        empty_context(),
+        llm,
+        &catalog,
+        &client,
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        RuntimeUserInput {
+            message: "How much did we deposit?".into(),
+            source_message: "How much did we deposit?".into(),
+            selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+    assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
+    assert_eq!(
+        result.memory.selected_capability.as_deref(),
+        Some("savings_deposit_total")
+    );
+}
+
+#[tokio::test]
+async fn gateway_pipeline_runtime_entry_maps_clarify_to_waiting() {
+    use crate::assistant::execution::runtime::run_via_gateway_pipeline;
+    use crate::assistant::llm::FakeLlmClient;
+    let fake = std::sync::Arc::new(FakeLlmClient::default());
+    fake.push_structured(serde_json::json!({
+        "intent_kind": "data_lookup",
+        "domain": "client",
+        "language": "en",
+        "entities": [],
+        "candidates": [
+            { "capability_id": "client_name_lookup", "confidence": 0.9, "why": "lookup" }
+        ]
+    }));
+    let llm: crate::assistant::llm::SharedLlmClient = fake;
+    let catalog = runtime_test_catalog();
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["client_name_lookup".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let result = run_via_gateway_pipeline(
+        empty_memory(),
+        empty_context(),
+        llm,
+        &catalog,
+        &client,
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        RuntimeUserInput {
+            message: "look up a client".into(),
+            source_message: "look up a client".into(),
+            selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+    assert_eq!(
+        result.memory.terminal_state,
+        Some(TerminalState::WaitingForUserInput)
+    );
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|p| p.as_ref())
+        .expect("clarification payload attached");
+    assert!(payload.fields.iter().any(|f| f.key == "search"));
+}
