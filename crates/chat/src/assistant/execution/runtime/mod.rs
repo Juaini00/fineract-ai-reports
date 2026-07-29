@@ -136,6 +136,40 @@ pub(super) fn clarification_facts_from_intent(
     ClarificationFacts { values }
 }
 
+/// Route a chat request through the Layer-1 gateway → Layer-2 resolver →
+/// Layer-3 decider pipeline built by Bundle 12. This is the drop-in entry
+/// point spec §7 Task 7.1 steps 3–4 will use once the runtime graph fully
+/// switches over; the default `run_with_router` path stays on the legacy
+/// classifier to keep every existing test green.
+///
+/// ponytail: the runtime graph mapping (DecisionOutcome →
+/// `terminal_state` / `pending_clarification` / `execution_summary` /
+/// `ResponseBuilder`) is deliberately deferred to a fresh session where a
+/// full flow trace and per-test verification can land safely. Callers who
+/// want early access can invoke this helper directly.
+pub async fn route_via_gateway_pipeline(
+    llm: crate::assistant::llm::SharedLlmClient,
+    catalog: &KnowledgeCatalog,
+    principal: &PrincipalContext,
+    user_message: &str,
+    history: Option<&str>,
+    business_today: chrono::NaiveDate,
+) -> Result<
+    crate::assistant::understanding::pipeline::PipelineOutcome,
+    crate::assistant::understanding::gateway::GatewayError,
+> {
+    let gateway = crate::assistant::understanding::gateway::GatewayClient::new(llm);
+    crate::assistant::understanding::pipeline::run(
+        &gateway,
+        catalog,
+        principal,
+        user_message,
+        history,
+        business_today,
+    )
+    .await
+}
+
 pub struct AssistantGraphRuntime;
 
 impl AssistantGraphRuntime {
