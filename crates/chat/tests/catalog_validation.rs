@@ -403,6 +403,83 @@ fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
     assert_eq!(allowed.status, PolicyDecisionStatus::Allowed);
 }
 
+#[test]
+fn every_fully_defaulted_capability_plans_without_asking() {
+    use chat::assistant::context::clarification_planner::defaultless_missing_fields;
+    use chat::assistant::plan_selected_capability_verified;
+    use chat::assistant::{
+        AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind,
+        AssistantLanguage, ClarificationFacts, ContextReference,
+    };
+    use chat::knowledge::catalog::parameter_policy::EvaluationContext;
+
+    let catalog = load_catalog();
+    let ctx = EvaluationContext {
+        business_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        wall_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        authorized_office_ids: vec![1],
+    };
+    for capability in catalog
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "approved_mvp")
+    {
+        if !defaultless_missing_fields(&catalog, &capability.id, &ClarificationFacts::default())
+            .is_empty()
+        {
+            continue;
+        }
+        let domain = match capability.domain.as_str() {
+            "savings" => AssistantDomain::Savings,
+            "client" => AssistantDomain::Client,
+            "organization" => AssistantDomain::Organization,
+            "group_center" => AssistantDomain::GroupCenter,
+            "loan" => AssistantDomain::Loan,
+            "accounting" => AssistantDomain::Accounting,
+            "tax" => AssistantDomain::Tax,
+            "audit" => AssistantDomain::Audit,
+            _ => AssistantDomain::Unknown,
+        };
+        let intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain,
+            request_shape: Default::default(),
+            language: AssistantLanguage::En,
+            entities: Vec::new(),
+            constraints: AssistantConstraints::default(),
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 0.9,
+            reason: capability.id.clone(),
+        };
+        let plan =
+            plan_selected_capability_verified(&catalog, &capability.id, &intent, None, Some(&ctx))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fully-defaulted capability {} must plan without asking: {e}",
+                        capability.id
+                    )
+                });
+        let query = catalog
+            .queries
+            .iter()
+            .find(|q| q.id == capability.query_id)
+            .unwrap();
+        for parameter in query
+            .parameters
+            .iter()
+            .filter(|p| p.required && p.source.as_deref() != Some("authorized_scope"))
+        {
+            assert!(
+                plan.params.get(&parameter.name).is_some(),
+                "capability {} left required parameter {} unfilled — it would ask",
+                capability.id,
+                parameter.name
+            );
+        }
+    }
+}
+
 fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {
     let workspace_root = workspace_root();
     let catalog = KnowledgeLoader::new(

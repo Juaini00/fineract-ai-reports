@@ -77,6 +77,19 @@ fn extracts_trusted_person_name() {
     }));
 }
 
+#[test]
+fn adjacency_to_client_does_not_scavenge_a_filler_word() {
+    let extraction = extract_message_facts("Search client by display name.");
+    assert!(
+        !extraction
+            .entities
+            .iter()
+            .any(|e| e.entity_type == AssistantEntityType::PersonName),
+        "no person name should be invented from adjacency: {:?}",
+        extraction.entities
+    );
+}
+
 fn reference(value: &str) -> DateTime<Utc> {
     value.parse().unwrap()
 }

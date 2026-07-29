@@ -272,9 +272,9 @@ async fn required_parameter_without_default_asks_and_answer_continues_same_job()
 
 /// The date parameters of `savings_deposit_total` declare `default: business_today`,
 /// so the pipeline must fill them itself and answer in a single turn instead of
-/// demanding a date range. No approved capability currently reaches the
-/// clarification path for a missing required parameter, so this asserts the
-/// auto-fill contract directly rather than pretending one does.
+/// demanding a date range. The durable catalog-wide guarantee for W-E now lives in
+/// `catalog_validation.rs::every_fully_defaulted_capability_plans_without_asking`;
+/// this test remains the single end-to-end witness through the HTTP + canonical stack.
 #[tokio::test(flavor = "multi_thread")]
 async fn date_parameters_with_a_policy_default_are_auto_filled_without_asking() {
     let app = spawn_app().await;

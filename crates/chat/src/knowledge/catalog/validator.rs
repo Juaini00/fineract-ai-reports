@@ -225,6 +225,7 @@ impl KnowledgeValidator {
                     query,
                     &catalog.parameter_inputs,
                 )?;
+                validate_clarification_contract(capability, query)?;
             }
 
             validate_refs(
@@ -447,6 +448,34 @@ fn validate_parameter_input_registry(
         }
     }
 
+    Ok(())
+}
+
+/// A capability may never require `from_date`/`to_date` (date_range) without a
+/// covering policy default — that is the shape W-E removed (E2). Rejecting it at
+/// load time makes reintroduction a build failure, not a silent regression.
+fn validate_clarification_contract(
+    capability: &CapabilityKnowledge,
+    query: &QueryKnowledge,
+) -> Result<()> {
+    for parameter in query.parameters.iter().filter(|p| {
+        p.required
+            && p.source.as_deref() != Some("authorized_scope")
+            && matches!(p.name.as_str(), "from_date" | "to_date")
+    }) {
+        let covered = capability.parameter_policies.iter().any(|policy| {
+            policy.name == parameter.name && !policy.required && policy.default.is_some()
+        });
+        if !covered {
+            bail!(
+                "capability {} requires {} with no policy default; this reintroduces \
+                 the date clarification W-E removed — add `required: false` with a \
+                 `default` expression",
+                capability.id,
+                parameter.name
+            );
+        }
+    }
     Ok(())
 }
 
@@ -945,5 +974,63 @@ mod tests {
     #[test]
     fn query_without_currency_table_is_unaffected() {
         assert!(currency_join_is_fanout_safe("SELECT C.ID FROM M_CLIENT C"));
+    }
+
+    #[test]
+    fn rejects_required_date_parameter_without_a_policy_default() {
+        use crate::knowledge::catalog::parameter_policy::{ParameterPolicy, ParameterType};
+        use crate::knowledge::model::{
+            CapabilityDefaults, CapabilityGuards, CapabilityKnowledge, QueryKnowledge,
+            QueryParameter,
+        };
+        let capability = CapabilityKnowledge {
+            id: "test_cap".into(),
+            status: "approved_mvp".into(),
+            domain: "test".into(),
+            query_id: "test.q".into(),
+            output_mode: "table".into(),
+            request_shape: Default::default(),
+            display_name: None,
+            description: None,
+            data_areas: vec![],
+            metrics: vec![],
+            examples: vec![],
+            required_parameters: vec![],
+            optional_parameters: vec![],
+            defaults: CapabilityDefaults::default(),
+            guards: CapabilityGuards::default(),
+            parameter_policies: vec![ParameterPolicy {
+                name: "from_date".into(),
+                kind: ParameterType::Date,
+                required: true,
+                default: None,
+                fill_when_missing: false,
+                user_may_override: true,
+                hard_cap: None,
+            }],
+        };
+        let query = QueryKnowledge {
+            id: "test.q".into(),
+            database: "db".into(),
+            sql_file: "test.sql".into(),
+            data_areas: vec![],
+            tables: vec![],
+            metrics: vec![],
+            parameters: vec![QueryParameter {
+                name: "from_date".into(),
+                kind: "date".into(),
+                required: true,
+                source: None,
+            }],
+            output_fields: vec![],
+            timeout_ms: None,
+        };
+        let err = validate_clarification_contract(&capability, &query)
+            .expect_err("required defaultless date must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("from_date") && msg.contains("default"),
+            "validator must reject a required date param with no default: {msg}"
+        );
     }
 }
