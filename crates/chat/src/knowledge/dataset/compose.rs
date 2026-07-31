@@ -51,9 +51,7 @@ pub fn compose(
         );
     };
 
-    // Filter placeholders continue after whatever `$n` positions `source_sql`
-    // already consumes (e.g. authored parameters like office scope).
-    let mut placeholder = source_sql.matches('$').count();
+    let mut placeholder = dataset.parameters.len();
     let mut predicates = String::new();
     let mut filter_binds = Vec::new();
     for filter in &dataset.filters {
@@ -131,6 +129,7 @@ mod tests {
     use crate::knowledge::dataset::model::{
         DatasetKnowledge, FilterOperator, FilterSlot, OrderByOption, ShapeOption,
     };
+    use crate::knowledge::model::QueryParameter;
 
     fn shape(id: &str, fragment: Option<&str>, order_by: Vec<&str>) -> ShapeOption {
         ShapeOption {
@@ -160,7 +159,16 @@ mod tests {
                 expr: "sac.created_on_utc DESC, sac.id DESC".into(),
             }],
             output_fields: Vec::new(),
-            parameters: Vec::new(),
+            // Every fixture's source SQL embeds exactly one `$1` (office scope),
+            // so `parameters` must declare exactly that one placeholder — this
+            // is what sizes the base the composer's filter placeholders start
+            // counting from.
+            parameters: vec![QueryParameter {
+                name: "office_ids".into(),
+                kind: "array_bigint".into(),
+                required: true,
+                source: Some("authorized_scope".into()),
+            }],
             timeout_ms: None,
         }
     }
