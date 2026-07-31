@@ -8,9 +8,9 @@ SELECT
     ch.id AS charge_definition_id,
     ch.name AS charge_name,
     sac.is_penalty,
-    sac.charge_time_enum AS charge_timing_enum,
+    sac.charge_time_enum::bigint AS charge_timing_enum,
     sa.currency_code,
-    sa.currency_digits,
+    sa.currency_digits::bigint AS currency_digits,
     cur.display_symbol AS currency_display_symbol,
     sac.amount AS amount_due_current,
     COALESCE(sac.amount_paid_derived, 0) AS amount_paid,
@@ -22,11 +22,11 @@ SELECT
     + sac.amount_outstanding_derived AS amount_levied_total,
     sac.amount_outstanding_derived AS amount_outstanding,
     sac.charge_due_date AS due_date,
-    CASE
+    (CASE
         WHEN sac.charge_due_date IS NULL THEN NULL
         WHEN $2::date > sac.charge_due_date THEN $2::date - sac.charge_due_date
         ELSE 0
-    END AS days_overdue
+    END)::bigint AS days_overdue
 FROM m_savings_account_charge sac
 JOIN m_savings_account sa ON sa.id = sac.savings_account_id
 JOIN m_client c ON c.id = sa.client_id

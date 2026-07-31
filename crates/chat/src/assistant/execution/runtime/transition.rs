@@ -50,6 +50,7 @@ pub(super) fn deterministic_intent(intent: AssistantIntentKind, message: &str) -
         domain: AssistantDomain::Unknown,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: message.to_string(),
         entities: Vec::new(),
         constraints: AssistantConstraints::default(),
         context_reference: ContextReference::None,

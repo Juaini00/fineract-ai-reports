@@ -26,6 +26,7 @@ pub enum RequestOperation {
     Lookup,
     RandomSample,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -34,11 +35,13 @@ pub enum RequestOperation {
 pub enum RequestSubject {
     SavingsTransaction,
     SavingsAccount,
+    SavingsAccountCharge,
     Client,
     Office,
     OrganizationHierarchy,
     Product,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -50,6 +53,7 @@ pub enum RequestGrouping {
     Office,
     Product,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -63,6 +67,7 @@ pub enum RequestOutput {
     TimeSeries,
     Lookup,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -73,6 +78,7 @@ pub enum RequestPii {
     ClientIdentity,
     ConditionalClientIdentity,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -86,6 +92,13 @@ pub struct AssistantIntent {
     pub request_shape: RequestShape,
     #[serde(default = "default_language")]
     pub language: AssistantLanguage,
+    /// The user's message translated to English, preserving all reporting
+    /// terminology, entities, and dates. Used to build the embedding query
+    /// against the (English) knowledge base instead of the raw message, so
+    /// non-English requests still retrieve the right capability. Leave equal
+    /// to the original message when it is already English.
+    #[serde(default)]
+    pub canonical_query_en: String,
     #[serde(default)]
     pub entities: Vec<AssistantEntity>,
     #[serde(default)]
@@ -127,6 +140,7 @@ pub enum AssistantDomain {
     Tax,
     Audit,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -140,6 +154,7 @@ pub enum AssistantLanguage {
     En,
     Id,
     Mixed,
+    #[serde(other)]
     Unknown,
 }
 

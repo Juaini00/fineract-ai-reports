@@ -47,6 +47,9 @@ tables:
         sensitivity: public_business
       - name: is_penalty
         sensitivity: public_business
+      - name: created_on_utc
+        sensitivity: public_business
+        description: Audit creation timestamp approved only for ordering recently-created savings account charge reports; it is not a business or due date.
       - name: charge_due_date
         sensitivity: public_business
       - name: charge_time_enum

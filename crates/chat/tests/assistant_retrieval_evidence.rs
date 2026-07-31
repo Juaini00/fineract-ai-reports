@@ -18,6 +18,7 @@ fn intent(kind: AssistantIntentKind, domain: AssistantDomain) -> AssistantIntent
         domain,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: vec![],
         constraints: Default::default(),
         context_reference: ContextReference::None,

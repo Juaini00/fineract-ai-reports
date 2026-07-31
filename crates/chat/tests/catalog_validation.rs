@@ -445,6 +445,7 @@ fn every_fully_defaulted_capability_plans_without_asking() {
             domain,
             request_shape: Default::default(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: Vec::new(),
             constraints: AssistantConstraints::default(),
             context_reference: ContextReference::None,

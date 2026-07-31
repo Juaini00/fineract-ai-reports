@@ -149,6 +149,7 @@ pub(super) fn pending_clarification_intent(context: &ContextWindow) -> Assistant
         },
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             quantity,
@@ -288,6 +289,7 @@ pub(super) fn intent_from_source(
             domain: source.domain.clone(),
             request_shape: source.request_shape.clone(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: source.entities.clone(),
             constraints: source.constraints.clone(),
             context_reference: ContextReference::PendingClarification,

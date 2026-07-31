@@ -51,6 +51,7 @@ pub fn assistant_intent_from_extraction(
         domain: extraction.domain.clone(),
         request_shape: RequestShape::default(),
         language: extraction.language.clone(),
+        canonical_query_en: user_message.to_string(),
         entities,
         constraints: Default::default(),
         context_reference: Default::default(),

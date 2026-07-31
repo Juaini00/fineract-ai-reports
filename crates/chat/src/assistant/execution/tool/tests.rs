@@ -18,6 +18,7 @@ fn extracts_tony_for_client_name_lookup_plan() {
             domain: AssistantDomain::Client,
             request_shape: Default::default(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: vec![AssistantEntity {
                 entity_type: AssistantEntityType::PersonName,
                 value: "Tony".into(),
@@ -48,6 +49,7 @@ fn missing_person_name_requires_clarification() {
             domain: AssistantDomain::Client,
             request_shape: Default::default(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: vec![],
             constraints: Default::default(),
             context_reference: ContextReference::None,
@@ -89,6 +91,7 @@ fn extracts_dates_currency_products_and_limit() {
             domain: AssistantDomain::Savings,
             request_shape: Default::default(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: Vec::new(),
             constraints: AssistantConstraints {
                 from_date: Some("2026-01-01".into()),
@@ -307,6 +310,7 @@ fn intent_with_quantity(quantity: Option<Quantity>) -> AssistantIntent {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: AssistantConstraints {
             quantity,

@@ -1,0 +1,109 @@
+id: savings.account_charges_recent
+database: fineract
+sql_file: queries/savings/account_charges_recent.sql
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_charges_fees
+tables:
+  - m_savings_account_charge
+  - m_savings_account
+  - m_client
+  - m_office
+  - m_charge
+metrics:
+  - savings.charge_amount_outstanding
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: limit
+    type: integer
+    required: true
+required_filters:
+  - m_client.office_id constrained to authorized office_ids
+  - ordered by m_savings_account_charge.created_on_utc descending, then id descending
+  - bounded by limit
+output_fields:
+  - name: client_id
+    type: bigint
+    sensitivity: public_business
+  - name: client_display_name
+    type: string
+    sensitivity: pii
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: savings_account_id
+    type: bigint
+    sensitivity: public_business
+  - name: savings_account_charge_id
+    type: bigint
+    sensitivity: public_business
+  - name: charge_definition_id
+    type: bigint
+    sensitivity: public_business
+  - name: charge_name
+    type: string
+    sensitivity: public_business
+  - name: is_penalty
+    type: boolean
+    sensitivity: public_business
+  - name: charge_timing_enum
+    type: integer
+    sensitivity: public_business
+  - name: currency_code
+    type: string
+    sensitivity: public_business
+  - name: currency_digits
+    type: integer
+    sensitivity: public_business
+  - name: currency_display_symbol
+    type: string
+    sensitivity: public_business
+  - name: amount_due_current
+    type: decimal
+    sensitivity: public_business
+  - name: amount_paid
+    type: decimal
+    sensitivity: public_business
+  - name: amount_waived
+    type: decimal
+    sensitivity: public_business
+  - name: amount_written_off
+    type: decimal
+    sensitivity: public_business
+  - name: amount_outstanding
+    type: decimal
+    sensitivity: public_business
+  - name: due_date
+    type: date
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  parameterized_only: true
+timeout_ms: 3000
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: office_filter_is_bound
+    rule: SQL must constrain c.office_id with ANY($1::bigint[]).
+  - id: recent_ordering_is_bound
+    rule: SQL must order by sac.created_on_utc DESC, sac.id DESC.
+  - id: limit_is_bound
+    rule: SQL must use bound LIMIT $2.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: pii_columns_labelled
+    rule: client_display_name output field must be sensitivity=pii.
+  - id: no_raw_identifiers
+    rule: Query must not output account_no, external_id, mobile_no, or email_address.

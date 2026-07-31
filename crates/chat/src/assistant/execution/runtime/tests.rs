@@ -187,6 +187,7 @@ fn preserves_limit_from_direct_report_intent() {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: Default::default(),
         context_reference: ContextReference::None,
@@ -236,6 +237,7 @@ fn preserves_explicit_quantity_from_direct_report_intent() {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             quantity: Some(Quantity::Limit { value: 5 }),
@@ -267,6 +269,7 @@ fn records_deterministic_conflicts_before_merge() {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             quantity: Some(Quantity::Limit { value: 20 }),
@@ -1060,6 +1063,7 @@ fn clarification_options_show_period_already_given_in_the_request() {
         domain: AssistantDomain::Savings,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             from_date: Some("2026-07-01".into()),
@@ -1091,6 +1095,7 @@ fn test_plan() -> RetrievalPlan {
             domain: AssistantDomain::Savings,
             request_shape: Default::default(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: Vec::new(),
             constraints: Default::default(),
             context_reference: ContextReference::None,

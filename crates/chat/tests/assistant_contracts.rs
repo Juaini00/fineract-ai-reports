@@ -47,6 +47,7 @@ fn assistant_contracts_representative_round_trip() {
         domain: AssistantDomain::Savings,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: vec![AssistantEntity {
             entity_type: AssistantEntityType::PersonName,
             value: "Tony".into(),

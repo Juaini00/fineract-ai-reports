@@ -220,8 +220,13 @@ pub(super) async fn complete_semantic_route(
                     }
                 }
             }
+            let retrieval_query = if intent.canonical_query_en.trim().is_empty() {
+                message
+            } else {
+                intent.canonical_query_en.as_str()
+            };
             let plan = RetrievalPlan::new(
-                message,
+                retrieval_query,
                 &intent,
                 allow_all_capabilities(&context),
                 allowed_capabilities(&context),

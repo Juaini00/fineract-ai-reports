@@ -38,6 +38,7 @@ fn extraction_merges_metric_when_absent() {
         domain: AssistantDomain::Unknown,
         request_shape: Default::default(),
         language: crate::assistant::AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: Default::default(),
         context_reference: Default::default(),

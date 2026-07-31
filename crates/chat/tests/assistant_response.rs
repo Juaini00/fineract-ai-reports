@@ -89,6 +89,7 @@ fn intent() -> AssistantIntent {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: AssistantConstraints::default(),
         context_reference: ContextReference::None,

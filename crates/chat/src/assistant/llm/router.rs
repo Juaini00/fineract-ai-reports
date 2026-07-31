@@ -27,7 +27,9 @@ impl SemanticRouter {
                 "domain MUST match the primary subject of the request, not a noun that merely appears in the sentence. Example: 'top 3 clients by savings account count' → subject=client, domain=client (NOT savings).",
                 "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients') without a ranking metric are unsupported by the approved catalog — return intent=unsupported_in_domain instead of inventing a shape.",
                 "When a request_shape dimension is genuinely ambiguous set it to unknown rather than guessing.",
-                "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support."
+                "request_shape.subject MUST be exactly one of: savings_transaction, savings_account, savings_account_charge, client, office, organization_hierarchy, product, unknown. Never invent a value outside this list. Use savings_account_charge for charges or fees applied to a savings account; use savings_account for a request framed around the account itself. The same rule applies to every other request_shape/domain/intent enum field: only emit values defined by the schema, defaulting to unknown/unsupported_in_domain rather than fabricating a new enum member.",
+                "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support.",
+                "canonical_query_en MUST be the user's message translated to English, keeping every reporting term, entity, metric, and date intact (e.g. 'hutang' -> 'debt/unpaid charge', 'jatuh tempo' -> 'due date', 'terlambat'/'lewat jatuh tempo' -> 'overdue'). If the message is already English, copy it unchanged. Never leave it empty."
             ]
         })
         .to_string();

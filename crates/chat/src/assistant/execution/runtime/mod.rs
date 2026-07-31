@@ -625,7 +625,7 @@ impl AssistantGraphRuntime {
             Err(error) => tracing::warn!(
                 target: "assistant::mapping",
                 message = %message,
-                error = %error,
+                error = ?error,
                 "router failed"
             ),
         }

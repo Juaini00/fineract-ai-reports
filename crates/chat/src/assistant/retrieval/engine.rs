@@ -71,7 +71,15 @@ impl RetrievalEngine {
             }
         }
 
-        Ok(merge(evidence))
+        let evidence = merge(evidence);
+        if let Some(catalog) = catalog {
+            return Ok(evidence
+                .into_iter()
+                .filter(|item| item.score >= catalog.classification.min_floor)
+                .collect());
+        }
+
+        Ok(evidence)
     }
 }
 
@@ -86,23 +94,19 @@ pub fn shape_score(
     let request = &plan.request_shape;
     let cap = &capability.request_shape;
     let mut hits = 0u8;
-    if enum_compatible(
-        &request.operation,
-        &cap.operation,
-        &RequestOperation::Unknown,
-    ) {
+    if request.operation != RequestOperation::Unknown && request.operation == cap.operation {
         hits += 1;
     }
-    if enum_compatible(&request.subject, &cap.subject, &RequestSubject::Unknown) {
+    if request.subject != RequestSubject::Unknown && request.subject == cap.subject {
         hits += 1;
     }
-    if enum_compatible(&request.grouping, &cap.grouping, &RequestGrouping::Unknown) {
+    if request.grouping != RequestGrouping::Unknown && request.grouping == cap.grouping {
         hits += 1;
     }
-    if enum_compatible(&request.output, &cap.output, &RequestOutput::Unknown) {
+    if request.output != RequestOutput::Unknown && request.output == cap.output {
         hits += 1;
     }
-    if pii_compatible(&request.pii, &cap.pii) {
+    if request.pii != RequestPii::Unknown && pii_compatible(&request.pii, &cap.pii) {
         hits += 1;
     }
     (hits as f32) / 5.0
