@@ -151,6 +151,7 @@ fn catalog() -> KnowledgeCatalog {
         responses: Vec::new(),
         parameter_inputs: Vec::new(),
         classification: Default::default(),
+        datasets: Vec::new(),
     }
 }
 

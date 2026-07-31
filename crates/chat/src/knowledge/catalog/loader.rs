@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::knowledge::catalog::parameter_policy::{DefaultExpr, ParameterPolicy, ParameterType};
+use crate::knowledge::dataset::model::DatasetKnowledge;
 use crate::knowledge::model::{
     CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
     ParameterInputKnowledge, QueryKnowledge,
@@ -32,6 +33,7 @@ impl KnowledgeLoader {
         let policies = self.load_yaml_dir::<GenericKnowledge>("policies")?;
         let responses = self.load_yaml_dir::<GenericKnowledge>("responses")?;
         let parameter_inputs = self.load_yaml_dir::<ParameterInputKnowledge>("parameters")?;
+        let datasets = self.load_yaml_dir::<DatasetKnowledge>("datasets")?;
 
         let classification = self.load_classification_policy()?;
 
@@ -48,6 +50,7 @@ impl KnowledgeLoader {
             responses,
             parameter_inputs,
             classification,
+            datasets,
         })
     }
 

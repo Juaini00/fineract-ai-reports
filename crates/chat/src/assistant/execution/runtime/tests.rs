@@ -402,6 +402,7 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         responses: Vec::new(),
         parameter_inputs: Vec::new(),
         classification: Default::default(),
+        datasets: Vec::new(),
     };
     let llm = Arc::new(FakeLlm) as SharedLlmClient;
     let router = SemanticRouter::new(llm.clone(), &catalog);

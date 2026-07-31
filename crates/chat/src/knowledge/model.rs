@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::assistant::intent::RequestShape;
 use crate::assistant::{ClarificationFieldType, ClarificationValidation};
+use crate::knowledge::dataset::model::DatasetKnowledge;
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeCatalog {
@@ -19,6 +20,7 @@ pub struct KnowledgeCatalog {
     pub responses: Vec<GenericKnowledge>,
     pub parameter_inputs: Vec<ParameterInputKnowledge>,
     pub classification: ClassificationPolicy,
+    pub datasets: Vec<DatasetKnowledge>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

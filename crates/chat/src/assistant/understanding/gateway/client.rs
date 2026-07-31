@@ -196,6 +196,7 @@ mod tests {
             responses: vec![],
             parameter_inputs: vec![],
             classification: ClassificationPolicy::default(),
+            datasets: vec![],
         }
     }
 

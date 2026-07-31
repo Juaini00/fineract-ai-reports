@@ -531,6 +531,7 @@ mod tests {
                 ),
             ],
             classification: ClassificationPolicy::default(),
+            datasets: vec![],
         }
     }
     fn plan(

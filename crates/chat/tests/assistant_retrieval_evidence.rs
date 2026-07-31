@@ -154,6 +154,7 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
         responses: vec![],
         parameter_inputs: Vec::new(),
         classification: ClassificationPolicy::default(),
+        datasets: Vec::new(),
     });
     let plan = RetrievalPlan::new(
         "show savings deposits",

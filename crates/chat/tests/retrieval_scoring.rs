@@ -70,6 +70,7 @@ fn catalog_with(capability: CapabilityKnowledge) -> KnowledgeCatalog {
         responses: vec![],
         parameter_inputs: Vec::new(),
         classification: Default::default(),
+        datasets: Vec::new(),
     }
 }
 

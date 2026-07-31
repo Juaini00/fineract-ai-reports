@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use sqlx::{AssertSqlSafe, Column, Executor, PgPool, SqlSafeStr, Statement};
 
 use crate::assistant::ClarificationFieldType;
@@ -715,7 +715,75 @@ pub async fn validate_runtime(catalog: &KnowledgeCatalog, fineract_pool: &PgPool
         }
     }
 
+    validate_dataset_runtime(catalog, fineract_pool).await?;
+
     Ok(())
+}
+
+/// Prepares every executable `shape x order_by` combination of every authored
+/// dataset. Composition errors are catalog errors and the catalog is fully
+/// enumerable at boot, so a user request must never be what discovers a broken
+/// fragment.
+async fn validate_dataset_runtime(
+    catalog: &KnowledgeCatalog,
+    fineract_pool: &PgPool,
+) -> Result<()> {
+    use crate::knowledge::dataset::compose::compose;
+    use crate::knowledge::dataset::plan::executable_combinations;
+
+    for dataset in &catalog.datasets {
+        if dataset.database != "fineract" {
+            continue;
+        }
+        let source_path = resolve_catalog_sql_path(catalog, &dataset.source_sql);
+        let source = std::fs::read_to_string(&source_path)
+            .with_context(|| format!("read source_sql for dataset {}", dataset.id))?;
+
+        for (shape_id, order_by_id) in executable_combinations(dataset) {
+            let fragment = match dataset.shape(&shape_id).and_then(|s| s.fragment.clone()) {
+                Some(path) => {
+                    let fragment_path = resolve_catalog_sql_path(catalog, &path);
+                    Some(
+                        std::fs::read_to_string(&fragment_path)
+                            .with_context(|| format!("read fragment {path}"))?,
+                    )
+                }
+                None => None,
+            };
+            let composed = compose(
+                dataset,
+                &shape_id,
+                order_by_id.as_deref(),
+                &source,
+                fragment.as_deref(),
+            )?;
+            let sql = composed.sql.trim().trim_end_matches(';').to_string();
+            fineract_pool
+                .prepare(AssertSqlSafe(sql).into_sql_str())
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "dataset {} shape {shape_id} order_by {order_by_id:?} failed prepare: {err}",
+                        dataset.id
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolves a repo-relative SQL path declared in a dataset, using the same
+/// convention as `resolve_sql_path` for queries.
+fn resolve_catalog_sql_path(catalog: &KnowledgeCatalog, relative: &str) -> PathBuf {
+    if relative.starts_with("queries/") {
+        catalog
+            .query_path
+            .parent()
+            .unwrap_or(&catalog.query_path)
+            .join(relative)
+    } else {
+        catalog.query_path.join(relative)
+    }
 }
 
 fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
