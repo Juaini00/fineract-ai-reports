@@ -38,26 +38,35 @@ pub struct ChatAppState {
 
 impl ChatAppState {
     pub async fn new(core: AppState) -> anyhow::Result<Self> {
-        if core.config.catalog.sync_on_startup {
+        // The vector index must track the on-disk catalog: a stale index makes
+        // newly approved capabilities unreachable by embedding retrieval while
+        // still appearing authorized. `sync_if_stale` no-ops when hashes match,
+        // so this costs one catalog load per boot, not a re-embed.
+        {
             let loader =
                 KnowledgeLoader::new(&core.config.catalog.path, &core.config.catalog.query_path);
             let embedding_client = VoyageEmbeddingClient::new(&core.config.voyage_ai)?;
-            let summary = KnowledgeSyncService::with_embeddings(
+            let sync = KnowledgeSyncService::with_embeddings(
                 loader,
                 core.pools.app.clone(),
                 embedding_client,
                 core.config.voyage_ai.embedding_model.clone(),
                 core.config.voyage_ai.embedding_dimensions,
-            )
-            .sync()
-            .await?;
-
-            tracing::info!(
-                catalog_version_id = %summary.catalog_version_id,
-                document_count = summary.document_count,
-                embedding_model = summary.embedding_model.as_deref().unwrap_or("none"),
-                "knowledge catalog synced"
             );
+            let summary = if core.config.catalog.sync_on_startup {
+                Some(sync.sync().await?)
+            } else {
+                sync.sync_if_stale().await?
+            };
+            match summary {
+                Some(summary) => tracing::info!(
+                    catalog_version_id = %summary.catalog_version_id,
+                    document_count = summary.document_count,
+                    embedding_model = summary.embedding_model.as_deref().unwrap_or("none"),
+                    "knowledge catalog synced"
+                ),
+                None => tracing::debug!("knowledge catalog index already current"),
+            }
         }
 
         let catalog =

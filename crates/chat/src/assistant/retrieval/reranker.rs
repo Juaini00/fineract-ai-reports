@@ -32,7 +32,9 @@ plausibly fit and the user should choose.\n\
 - Confidence must reflect actual certainty, not retrieval-score arithmetic.\n\
 - Prefer specificity: \"total\" queries pick totals; \"top N\"/\"highest\"/\"largest\" \
 queries pick top_n variants; \"per month\"/\"monthly\" queries pick monthly variants; \
-\"random\"/\"sample\" queries pick random_sample variants when present.\n\
+\"random\"/\"sample\" queries pick random_sample variants when present; \
+\"newest\"/\"latest\"/\"most recent\"/\"paling baru\" queries pick the recency \
+variant over status variants like pending/overdue/outstanding.\n\
 - Keep the reason short (one sentence).";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

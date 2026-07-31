@@ -55,7 +55,7 @@ impl LlmClient for RigLlmClient {
             bail!("LLM_API_KEY is required for semantic routing");
         }
         let started = Instant::now();
-        let body = |response_format: Value| {
+        let body = |response_format: Value, system: &str| {
             json!({
                 "model": self.llm.model,
                 "messages": [
@@ -73,7 +73,7 @@ impl LlmClient for RigLlmClient {
             .http
             .post(self.chat_url())
             .bearer_auth(&self.llm.api_key)
-            .json(&body(schema_format))
+            .json(&body(schema_format, system))
             .send()
             .await
             .context("send structured LLM request")?;
@@ -82,16 +82,18 @@ impl LlmClient for RigLlmClient {
                 .http
                 .post(self.chat_url())
                 .bearer_auth(&self.llm.api_key)
-                .json(&body(json!({"type":"json_object"})))
+                .json(&body(
+                    json!({"type":"json_object"}),
+                    &json_object_system(system, &schema),
+                ))
                 .send()
                 .await
                 .context("send structured LLM json_object fallback")?;
         }
         if !response.status().is_success() {
-            bail!(
-                "structured LLM request failed with status {}",
-                response.status()
-            );
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("structured LLM request failed with status {status}: {body}");
         }
         let wire: ChatResponse = response
             .json()
@@ -181,6 +183,23 @@ impl LlmClient for RigLlmClient {
     }
 }
 
+/// System prompt for the `json_object` fallback, used when a provider rejects
+/// `json_schema` (DeepSeek among them). Two things must be restated here that
+/// `json_schema` would have enforced on the wire:
+///
+/// 1. The literal word "JSON" — DeepSeek 400s on `json_object` without it.
+/// 2. The schema itself. `json_object` only constrains the reply to *some*
+///    JSON object, so without the schema the model omits fields at random.
+///    Omitted fields land on their serde defaults, which silently turns a real
+///    request into whichever variant happens to be `#[default]`.
+fn json_object_system(system: &str, schema: &Value) -> String {
+    let schema = serde_json::to_string(schema).unwrap_or_default();
+    format!(
+        "{system}\n\nRespond with a single JSON object and nothing else. \
+It must conform to this JSON Schema, including every required field:\n{schema}"
+    )
+}
+
 fn parse_structured_content(content: &str) -> Result<Value> {
     let value: Value = serde_json::from_str(content)
         .map_err(|error| anyhow!("malformed structured LLM JSON: {error}"))?;
@@ -227,4 +246,20 @@ struct EmbeddingData {
 #[derive(Deserialize)]
 struct EmbeddingUsage {
     prompt_tokens: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_object_system_carries_the_word_json_and_the_schema() {
+        let schema = json!({"required": ["intent"]});
+        let prompt = json_object_system("Route the user request.", &schema);
+        // DeepSeek 400s on json_object without a literal "json" in the prompt.
+        assert!(prompt.to_lowercase().contains("json"));
+        // Without the schema the model omits fields and serde defaults them.
+        assert!(prompt.contains("\"required\":[\"intent\"]"));
+        assert!(prompt.starts_with("Route the user request."));
+    }
 }

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -54,12 +54,50 @@ impl KnowledgeSyncService {
         }
     }
 
+    /// Syncs only when the on-disk catalog hash differs from the indexed one.
+    /// Without this, editing knowledge YAML leaves the vector index pinned to
+    /// an older catalog version: the new capability is authorized (in-memory
+    /// catalog) but invisible to embedding retrieval, so it can never win
+    /// ranking against indexed competitors.
+    pub async fn sync_if_stale(&self) -> Result<Option<KnowledgeSyncSummary>> {
+        let catalog = self.loader.load()?;
+        KnowledgeValidator::validate(&catalog)?;
+        let documents = RetrievalDocumentBuilder::build(&catalog);
+        // An empty catalog is never a legitimate sync: it means the loader
+        // found nothing (wrong CATALOG_PATH, wrong working directory), and
+        // syncing it would replace a good index with zero documents and
+        // silently disable all retrieval. Refuse instead of destroying it.
+        if documents.is_empty() {
+            bail!(
+                "knowledge catalog loaded 0 documents; refusing to replace the retrieval index \
+                 (check CATALOG_PATH and the process working directory)"
+            );
+        }
+        let content_hash = catalog_content_hash(&documents);
+
+        let indexed = self.repository.latest_catalog_version().await?;
+        if indexed.is_some_and(|version| {
+            version.content_hash == content_hash && version.status == "embedded"
+        }) {
+            return Ok(None);
+        }
+        self.sync_documents(documents, content_hash).await.map(Some)
+    }
+
     pub async fn sync(&self) -> Result<KnowledgeSyncSummary> {
         let catalog = self.loader.load()?;
         KnowledgeValidator::validate(&catalog)?;
 
         let documents = RetrievalDocumentBuilder::build(&catalog);
         let content_hash = catalog_content_hash(&documents);
+        self.sync_documents(documents, content_hash).await
+    }
+
+    async fn sync_documents(
+        &self,
+        documents: Vec<RetrievalDocument>,
+        content_hash: String,
+    ) -> Result<KnowledgeSyncSummary> {
         let indexed_documents = self.indexed_documents(documents).await?;
         let catalog_version_id = self
             .repository
