@@ -300,6 +300,10 @@ impl KnowledgeValidator {
             validate_sql_safety(query, &sql_path)?;
         }
 
+        for dataset in &catalog.datasets {
+            crate::knowledge::dataset::validate::validate_dataset(dataset)?;
+        }
+
         Ok(())
     }
 }
