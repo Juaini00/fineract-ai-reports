@@ -774,6 +774,25 @@ mod tests {
     }
 
     #[test]
+    fn between_reserves_two_placeholders_so_later_operators_do_not_collide() {
+        let filters = vec![FilterSlot {
+            id: "due_date".into(),
+            expr: "sac.charge_due_date".into(),
+            kind: "date".into(),
+            operators: vec![FilterOperator::Between, FilterOperator::Eq],
+        }];
+        let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
+
+        let composed = compose(&data, "list", None, "SELECT a FROM t WHERE x = $1", Some("SELECT * FROM base")).unwrap();
+
+        assert!(composed.sql.contains("sac.charge_due_date BETWEEN $2 AND $3"));
+        // Eq must take $4, not $3, or it would reuse BETWEEN's upper bound.
+        assert!(composed.sql.contains("($4::date IS NULL OR sac.charge_due_date = $4)"));
+        assert_eq!(composed.filter_binds[0].placeholder, 2);
+        assert_eq!(composed.filter_binds[1].placeholder, 4);
+    }
+
+    #[test]
     fn rejects_an_order_by_expression_that_fails_the_grammar() {
         let mut data = dataset(Vec::new(), vec![shape("list", Some("f"), vec!["evil"])]);
         data.order_by.push(OrderByOption {
@@ -873,6 +892,10 @@ pub fn compose(
                 operator: *operator,
                 placeholder,
             });
+            if matches!(operator, FilterOperator::Between) {
+                // BETWEEN consumes a second placeholder for the upper bound.
+                placeholder += 1;
+            }
         }
     }
 
