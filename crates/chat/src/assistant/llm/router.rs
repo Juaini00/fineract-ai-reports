@@ -58,7 +58,7 @@ mod tests {
 
     use super::*;
     use crate::assistant::{
-        AssistantDomain, AssistantIntentKind, AssistantLanguage, ContextReference,
+        AssistantDomain, AssistantIntentKind, AssistantLanguage, ContextReference, RetrievalPlan,
         llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
     };
 
@@ -170,78 +170,65 @@ mod tests {
         assert_eq!(intent.domain, AssistantDomain::Client);
     }
 
-    /// LLM returns a value for `request_shape.operation` outside the
-    /// `RequestOperation` enum. The router must reject it with a
-    /// schema-level error naming the offending field, not a generic
-    /// `serde_json` decode failure.
-    struct InvalidEnumFakeLlm;
-
-    #[async_trait]
-    impl LlmClient for InvalidEnumFakeLlm {
-        async fn structured_value(
-            &self,
-            _purpose: crate::assistant::llm::LlmPurpose,
-            _system: &str,
-            _user: &str,
-            _schema: serde_json::Value,
-        ) -> Result<LlmResponse<serde_json::Value>> {
-            Ok(LlmResponse {
-                value: json!({
-                    "intent": "report_request",
-                    "domain": "savings",
-                    "request_shape": {"operation": "not_a_real_operation"},
-                    "language": "en",
-                    "entities": [],
-                    "constraints": {},
-                    "context_reference": "none",
-                    "confidence": 0.9,
-                    "reason": "fake"
-                }),
-                usage: TokenUsage::default(),
-                cost_usd: None,
-                provider: "fake".into(),
-                model: "fake".into(),
-                latency_ms: 0,
-            })
-        }
-
-        async fn embed(
-            &self,
-            _purpose: crate::assistant::llm::LlmPurpose,
-            text: &str,
-        ) -> Result<EmbeddingResponse> {
-            Ok(EmbeddingResponse {
-                vector: fake_embedding(text),
-                usage: TokenUsage::default(),
-                cost_usd: None,
-                provider: "fake".into(),
-                model: "fake".into(),
-                latency_ms: 0,
-            })
-        }
-    }
-
+    /// An invalid `request_shape.operation` value must degrade safely to
+    /// `RequestOperation::Unknown` (via `#[serde(other)]`) rather than being
+    /// silently accepted as some real variant or failing the whole router
+    /// call. `Unknown` is safe specifically because `shape_score` never
+    /// counts it as a match, so a hallucinated enum value can never produce
+    /// a confident wrong capability selection.
     #[tokio::test]
-    async fn router_rejects_invalid_request_shape_operation_with_field_level_error() {
-        let catalog = empty_catalog();
-        let router = SemanticRouter::new(Arc::new(InvalidEnumFakeLlm), &catalog);
-        let error = router
-            .route("client list", &empty_context())
-            .await
-            .expect_err("invalid enum value must be rejected");
-        let message = error
-            .chain()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(" | ");
-        assert!(
-            message.contains("request_shape.operation") || message.contains("operation"),
-            "error should name the offending field, got: {message}"
+    async fn invalid_request_shape_operation_degrades_to_unknown_and_scores_no_match() {
+        let request_shape: crate::assistant::RequestShape = serde_json::from_value(json!({
+            "operation": "not_a_real_operation",
+            "subject": "client",
+            "grouping": "none",
+            "output": "ranking",
+            "pii": "client_identity"
+        }))
+        .expect("unknown enum values must still deserialize");
+        assert_eq!(
+            request_shape.operation,
+            crate::assistant::RequestOperation::Unknown,
+            "invalid operation value must degrade to Unknown, not a guessed variant"
         );
-        assert!(
-            !message.contains("structured LLM response schema mismatch")
-                || message.contains("operation"),
-            "generic fallback message must not swallow the field-level detail: {message}"
+
+        let plan = RetrievalPlan {
+            query_text: "top clients".into(),
+            domain: AssistantDomain::Client,
+            intent: AssistantIntentKind::ReportRequest,
+            request_shape,
+            entities: Vec::new(),
+            constraints: json!({}),
+            metadata_filters: Default::default(),
+            allow_all_capabilities: true,
+            allowed_capabilities: Vec::new(),
+            source_snippets: Vec::new(),
+        };
+
+        // A capability whose request_shape is fully specified, matching every
+        // dimension except operation.
+        let capability: crate::knowledge::model::CapabilityKnowledge =
+            serde_json::from_value(json!({
+                "id": "cap.client.rank_by_metric",
+                "status": "approved_mvp",
+                "domain": "client",
+                "query_id": "q.client.rank_by_metric",
+                "output_mode": "ranking",
+                "request_shape": {
+                    "operation": "rank",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "ranking",
+                    "pii": "client_identity"
+                }
+            }))
+            .unwrap();
+
+        let score = crate::assistant::retrieval::engine::shape_score(&plan, &capability);
+        assert_eq!(
+            score, 0.8,
+            "Unknown operation must contribute zero even though every other \
+             dimension matches, proving it cannot drive a confident wrong pick"
         );
     }
 }
