@@ -646,7 +646,119 @@ git commit -m "feat(chat): stream job events over redis pub/sub instead of polli
 
 ---
 
-### Task 6: Emit stage progress from the pipeline
+### Task 6: Run the pipeline in a background task
+
+**Without this task, nothing downstream can work.** `JobService::create` and
+`::respond` currently `await` `run_graph_skeleton` inline — there is no
+`tokio::spawn` anywhere in the job service (the only spawns in `crates/chat` are
+the audit worker at `audit/mod.rs:83` and the outbox dispatcher at
+`management/outbox.rs:86`). So `POST /chat/jobs` does not return until the job
+has already finished, and by the time a client holds a `job_id` there is nothing
+left to observe. Tasks 7 and 8 would publish into a channel no one can subscribe
+to in time.
+
+`CLAUDE.md:70` claims the opposite ("`JobService::create`/`respond` spawn
+pipeline work via `tokio::spawn`"). That documentation is wrong and this task
+corrects it.
+
+**Files:**
+- Modify: `crates/chat/src/job/service/mod.rs` (`create` ~line 185, `respond` ~line 314)
+- Modify: `CLAUDE.md` (correct the false Phase 9 claim)
+
+**Interfaces:**
+- Produces: `POST /chat/jobs` returns as soon as the job row exists, with
+  `status` reflecting the queued state rather than a finished result. `GET
+  /chat/jobs/{id}` and the SSE stream remain the way a client learns the outcome.
+
+**Frontend impact — already compatible, verified.** `useChat.ts`'s
+`adoptStartedJob` consumes only `session_id`, `user_message_id` and `job_id`
+from the create response; the result is obtained through `useChatJob`. So this
+change does not require an FE change to keep working.
+
+- [ ] **Step 1: Establish the current behaviour in a test**
+
+Add a test asserting that `create` returns before the pipeline has produced a
+terminal result — i.e. the returned `status` is the queued/running state, not
+`completed`. Place it beside the existing job-service tests. Run it and watch it
+FAIL against today's synchronous implementation; that failure is the proof the
+bug is real.
+
+- [ ] **Step 2: Spawn the pipeline in `create`**
+
+`JobService` is `Clone` (it lives inside `ChatServices`, which is `Clone`).
+Clone what the spawned task needs, move it in, and return the created job
+immediately:
+
+```rust
+let service = self.clone();
+let spawn_client = client.clone();
+tokio::spawn(async move {
+    if let Err(error) = service
+        .run_graph_skeleton(session_id, job_id, &spawn_client, input, canonical_turn)
+        .await
+    {
+        tracing::error!(job_id = %job_id, error = %error, "chat job pipeline failed");
+    }
+});
+```
+
+Requirements:
+- The spawned task must record failure into the job row (status `failed`) and
+  emit an `error` event, so a client watching the stream is not left waiting
+  forever. Reuse the existing failure path rather than inventing a new one.
+- A panic inside the spawned task must not take down the process, and must still
+  mark the job failed. Handle the `JoinHandle` result or guard the body.
+- Do not change the returned `CreatedChatJob` shape beyond `status` /
+  `current_step`.
+
+- [ ] **Step 3: Do the same for `respond`**
+
+`respond` has the same inline `await` at ~line 314. Clarification answers must
+also run in the background, or the clarification round trip has the same
+problem.
+
+- [ ] **Step 4: Run the test suite**
+
+Run: `cargo test -p chat`
+
+Existing tests that assert a completed result directly from `create` will now
+fail — that is expected and correct. Update each to await the outcome through
+the job record (poll `get` until terminal, with a bounded timeout) rather than
+asserting on `create`'s return. **Do not** re-serialise the pipeline to make a
+test pass; that would undo the task.
+
+- [ ] **Step 5: Prove the window exists**
+
+This is the acceptance evidence for the whole plan. Boot from the repository
+root (`cargo run -p app`), then:
+
+1. `POST /auth/login` (`admin` / `password123`) for an `access_token`.
+2. `POST /chat/jobs` with `{"session_id":null,"message":"berapa total deposit bulan ini?"}`.
+3. Confirm the response returns **immediately** with a non-terminal status.
+4. Open `GET /chat/jobs/{job_id}/stream` and confirm a `final` event arrives
+   **after** the stream was opened — not before.
+
+Record the timing and the actual SSE output in your report. If the response
+still blocks until completion, the task is not done.
+
+- [ ] **Step 6: Correct CLAUDE.md**
+
+`CLAUDE.md:70` documents this as already wired. After this task it is true;
+before it, it was not. Adjust the sentence so it describes reality, including
+that the SSE stream now subscribes to a Redis channel rather than polling
+`latest_event` at 1s (changed in Task 5).
+
+- [ ] **Step 7: Commit**
+
+```bash
+cargo fmt -p chat
+git add crates/chat/src/job/service/mod.rs CLAUDE.md
+git commit -m "feat(chat): run the chat pipeline in a background task"
+```
+
+---
+
+### Task 7: Emit stage progress from the pipeline
 
 Wires Task 1's sink into the real pipeline. This is the task that makes the
 stream show something before the answer exists.
@@ -706,7 +818,7 @@ git commit -m "feat(chat): emit pipeline stage progress over SSE"
 
 ---
 
-### Task 7: Emit progressive prose deltas
+### Task 8: Emit progressive prose deltas
 
 **Files:**
 - Modify: `crates/chat/src/job/service/run.rs` (around the existing final `emit_event` at line ~297)
@@ -749,7 +861,7 @@ git commit -m "feat(chat): stream response prose as ordered deltas"
 
 ---
 
-### Task 8: FE consumes the new events
+### Task 9: FE consumes the new events
 
 **Files:**
 - Modify: FE `src/module/chat/service/stream.ts`
@@ -788,7 +900,7 @@ git commit -m "feat(chat): accept stage, delta, final and error stream events"
 
 ---
 
-### Task 9: FE renders live stages and progressive prose
+### Task 10: FE renders live stages and progressive prose
 
 **Files:**
 - Modify: FE `src/module/chat/hooks/useChatJob.ts`
