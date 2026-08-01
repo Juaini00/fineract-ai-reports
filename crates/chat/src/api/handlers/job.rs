@@ -20,8 +20,42 @@ use uuid::Uuid;
 
 use crate::api::ChatAppState;
 use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
-use crate::job::model::{CreateChatJobInput, RespondToChatJobInput};
+use crate::job::model::{ChatJobEvent, CreateChatJobInput, RespondToChatJobInput};
 use crate::job::service::{RespondToChatJobOutcome, redis_url_log_value};
+
+/// Statuses `chat_jobs.status` reaches at the end of a run — mirrors the
+/// `chat_job:{id}:live_state` values `JobService::emit_event` writes on
+/// `final`/`error`.
+fn is_terminal_job_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed")
+}
+
+/// Re-derives the SSE wire shape `JobService::emit_event` publishes live
+/// (`{kind, step, payload, at}`), so a replayed durable event is
+/// indistinguishable from one the client would have received live.
+fn replay_event_to_sse(event: &ChatJobEvent) -> Event {
+    let body = serde_json::json!({
+        "kind": event.event_type,
+        "step": event.step,
+        "payload": event.payload_json,
+        "at": event.created_at,
+    })
+    .to_string();
+    Event::default().event(event.event_type.clone()).data(body)
+}
+
+/// Best-effort peek at whether the job finished *during* the subscribe race
+/// (Task C1 part 2). Redis is live coordination only — any failure here
+/// (down, timeout, key expired) must fall through to the normal live stream,
+/// never fail or block the request.
+async fn live_state_is_terminal(redis_client: &redis::Client, job_id: Uuid) -> bool {
+    let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await else {
+        return false;
+    };
+    let key = format!("chat_job:{job_id}:live_state");
+    let value: redis::RedisResult<Option<String>> = redis::AsyncCommands::get(&mut conn, key).await;
+    matches!(value, Ok(Some(state)) if is_terminal_job_status(&state))
+}
 
 #[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
@@ -102,7 +136,7 @@ pub async fn stream(
     let Some(job) = state
         .chat
         .jobs
-        .get(client, job_id)
+        .get(client.clone(), job_id)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -121,6 +155,25 @@ pub async fn stream(
             async move { Ok::<_, Infallible>(Event::default().event("status").data(snapshot)) },
         )
     };
+
+    // Part 1 (C1): pub/sub has no history. If the job already finished
+    // before this subscriber connected — page reload, restored tab, a fast
+    // job, or just the gap between POST /chat/jobs and opening the stream —
+    // subscribing would hang forever waiting for a `final`/`error` message
+    // that already happened. Replay the durable log instead and end,
+    // without ever subscribing.
+    if is_terminal_job_status(&job.status) {
+        let events = state
+            .chat
+            .jobs
+            .replay_events(client, job_id)
+            .await
+            .map_err(ApiError::internal)?
+            .unwrap_or_default();
+        let replay_events: Vec<_> = events.iter().map(replay_event_to_sse).collect();
+        let replay = stream::iter(replay_events.into_iter().map(Ok::<_, Infallible>));
+        return Ok(Sse::new(status_event().chain(replay)).into_response());
+    }
 
     let Some(redis_client) = state.core.pools.redis.clone() else {
         return Ok(Sse::new(status_event())
@@ -146,8 +199,28 @@ pub async fn stream(
             .into_response());
     }
 
-    // Subscribe to the job's pub/sub channel (Task 4) and forward each event under
-    // its own `kind` as the SSE event name, terminating on `final`/`error`.
+    // Part 2 (C1): the job may have finished between the status snapshot
+    // above and this subscribe call — events published during that race are
+    // lost to pub/sub (no history), so a late `final`/`error` could be the
+    // only thing this subscription ever sees, or nothing at all. Re-check
+    // and, if the job already finished, replay the durable log instead of
+    // trusting the channel.
+    if live_state_is_terminal(&redis_client, job_id).await {
+        let events = state
+            .chat
+            .jobs
+            .replay_events(client, job_id)
+            .await
+            .map_err(ApiError::internal)?
+            .unwrap_or_default();
+        let replay_events: Vec<_> = events.iter().map(replay_event_to_sse).collect();
+        let replay = stream::iter(replay_events.into_iter().map(Ok::<_, Infallible>));
+        return Ok(Sse::new(status_event().chain(replay)).into_response());
+    }
+
+    // Part 3: subscribe to the job's pub/sub channel and forward each event
+    // under its own `kind` as the SSE event name, terminating on
+    // `final`/`error`.
     let message_stream = Box::pin(pubsub.into_on_message());
     let events = status_event().chain(stream::unfold(Some(message_stream), |state| async move {
         let mut message_stream = state?;

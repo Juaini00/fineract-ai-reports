@@ -75,6 +75,16 @@ pub struct ChatJobAuditTimeline {
     pub events: Vec<ChatJobAuditEvent>,
 }
 
+/// A durable row from `chat_job_events` (the SSE event log), replayed to a
+/// client that subscribes after the live pub/sub race is already over.
+#[derive(Debug, Clone)]
+pub struct ChatJobEvent {
+    pub event_type: String,
+    pub step: Option<String>,
+    pub payload_json: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatJobAuditEvent {
     pub id: Uuid,

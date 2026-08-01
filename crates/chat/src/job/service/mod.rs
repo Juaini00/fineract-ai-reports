@@ -230,6 +230,22 @@ impl JobService {
         Ok(Some(ChatJobAuditTimeline { job_id, events }))
     }
 
+    /// Durable SSE event replay (C1) for a stream subscriber that connects
+    /// after the job already reached a terminal status, or after the job
+    /// finished during the subscribe race — pub/sub has no history, so those
+    /// clients must be served from `chat_job_events` instead of ever
+    /// subscribing.
+    #[tracing::instrument(skip(self, client), fields(user_id = %client.user_id, job_id = %job_id))]
+    pub async fn replay_events(
+        &self,
+        client: PrincipalContext,
+        job_id: Uuid,
+    ) -> Result<Option<Vec<crate::job::model::ChatJobEvent>>> {
+        self.jobs
+            .list_events_for_replay(job_id, client.user_id, client.role == "admin")
+            .await
+    }
+
     #[tracing::instrument(skip(self, input), fields(user_id = %input.client.user_id, job_id = %input.job_id))]
     pub async fn respond(&self, input: RespondToChatJobInput) -> Result<RespondToChatJobOutcome> {
         let structured = input.clarification_id.is_some()

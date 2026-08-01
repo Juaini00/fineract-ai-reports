@@ -12,7 +12,7 @@ use crate::conversation::model::ChatMessage;
 use crate::conversation::repository::SessionRepository;
 use crate::conversation::repository::message::{ChatMessageRow, MessageRepository};
 use crate::job::model::{
-    ChatJob, ChatJobAuditEvent, CreatedChatJob, ValidatedClarificationSubmission,
+    ChatJob, ChatJobAuditEvent, ChatJobEvent, CreatedChatJob, ValidatedClarificationSubmission,
 };
 use crate::management::model::{
     AuditAggregateType, AuditEventType, AuditOutcome, AuditSummary, NormalizedErrorCode,
@@ -292,6 +292,39 @@ impl JobRepository {
                 error_json,
                 created_at
             FROM chat_job_audit_events
+            WHERE job_id = $1
+            ORDER BY created_at, id
+            "#,
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(Some(rows.into_iter().map(Into::into).collect()))
+    }
+
+    /// Durable SSE event replay for a late/reconnecting subscriber. Sibling of
+    /// `list_audit_events_for_user`, but reads `chat_job_events` (the small
+    /// client-safe SSE log) rather than `chat_job_audit_events` (the full
+    /// internal audit trail).
+    pub async fn list_events_for_replay(
+        &self,
+        job_id: Uuid,
+        user_id: Uuid,
+        include_legacy: bool,
+    ) -> Result<Option<Vec<ChatJobEvent>>> {
+        if self
+            .get_for_user(job_id, user_id, include_legacy)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let rows = sqlx::query_as::<_, ChatJobEventRow>(
+            r#"
+            SELECT event_type, step, payload_json, created_at
+            FROM chat_job_events
             WHERE job_id = $1
             ORDER BY created_at, id
             "#,
@@ -767,8 +800,13 @@ impl JobRepository {
         Ok(())
     }
 
-    pub async fn fail(&self, job_id: Uuid, error_json: serde_json::Value) -> Result<()> {
-        sqlx::query(
+    /// Marks a job failed, but never overwrites a job that already reached a
+    /// terminal status (`completed`/`failed`). A late failure to emit the
+    /// terminal SSE event must not un-complete a job whose result is already
+    /// durably persisted (I1) — returns `false` when the job was already
+    /// terminal so the caller knows not to publish a misleading error event.
+    pub async fn fail(&self, job_id: Uuid, error_json: serde_json::Value) -> Result<bool> {
+        let result = sqlx::query(
             r#"
             UPDATE chat_jobs
             SET
@@ -778,6 +816,7 @@ impl JobRepository {
                 failed_at = now(),
                 updated_at = now()
             WHERE id = $2
+              AND status NOT IN ('completed', 'failed')
             "#,
         )
         .bind(error_json)
@@ -785,7 +824,7 @@ impl JobRepository {
         .execute(&self.pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 }
 
@@ -838,6 +877,25 @@ struct ChatJobAuditEventRow {
     flags_json: serde_json::Value,
     error_json: Option<serde_json::Value>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct ChatJobEventRow {
+    event_type: String,
+    step: Option<String>,
+    payload_json: serde_json::Value,
+    created_at: DateTime<Utc>,
+}
+
+impl From<ChatJobEventRow> for ChatJobEvent {
+    fn from(row: ChatJobEventRow) -> Self {
+        Self {
+            event_type: row.event_type,
+            step: row.step,
+            payload_json: row.payload_json,
+            created_at: row.created_at,
+        }
+    }
 }
 
 impl From<ChatJobAuditEventRow> for ChatJobAuditEvent {
