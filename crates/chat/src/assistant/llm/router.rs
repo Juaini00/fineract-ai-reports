@@ -171,13 +171,22 @@ mod tests {
     }
 
     /// An invalid `request_shape.operation` value must degrade safely to
-    /// `RequestOperation::Unknown` (via `#[serde(other)]`) rather than being
-    /// silently accepted as some real variant or failing the whole router
-    /// call. `Unknown` is safe specifically because `shape_score` never
-    /// counts it as a match, so a hallucinated enum value can never produce
-    /// a confident wrong capability selection.
+    /// `RequestOperation::Unknown` (via `#[serde(other)]`) rather than
+    /// failing deserialization or silently aliasing to some real variant.
+    ///
+    /// This test proves exactly two things about `shape_score`, and no
+    /// more: (1) an `Unknown` dimension contributes zero to the score
+    /// (never counted as a match), and (2) a hallucinated enum value
+    /// deserializes into `Unknown` instead of erroring or guessing a real
+    /// variant. It does NOT prove a hallucinated operation "cannot drive a
+    /// confident wrong pick" — `shape_score` only excludes the `Unknown`
+    /// dimension from the count, so a capability that matches every other
+    /// dimension still scores 0.8/1.0 (4 of 5) despite the operation
+    /// mismatch, as asserted below. Whether that residual score is
+    /// acceptable is a separate design decision, not something this test
+    /// evaluates.
     #[tokio::test]
-    async fn invalid_request_shape_operation_degrades_to_unknown_and_scores_no_match() {
+    async fn invalid_request_shape_operation_degrades_to_unknown_and_does_not_count_as_a_match() {
         let request_shape: crate::assistant::RequestShape = serde_json::from_value(json!({
             "operation": "not_a_real_operation",
             "subject": "client",
@@ -227,8 +236,8 @@ mod tests {
         let score = crate::assistant::retrieval::engine::shape_score(&plan, &capability);
         assert_eq!(
             score, 0.8,
-            "Unknown operation must contribute zero even though every other \
-             dimension matches, proving it cannot drive a confident wrong pick"
+            "Unknown operation must contribute zero to the score (4 of 5 \
+             dimensions still match, so the score is 0.8, not 1.0 and not 0.0)"
         );
     }
 }
