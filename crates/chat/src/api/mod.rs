@@ -12,7 +12,10 @@ use crate::audit::spawn_audit_worker;
 use crate::conversation::repository::{MessageRepository, SessionRepository};
 use crate::conversation::service::{MessageService, SessionService};
 use crate::job::{JobRepository, JobService};
-use crate::knowledge::catalog::{loader::KnowledgeLoader, validator::KnowledgeValidator};
+use crate::knowledge::catalog::{
+    loader::KnowledgeLoader,
+    validator::{KnowledgeValidator, validate_runtime},
+};
 use crate::knowledge::embedding::VoyageEmbeddingClient;
 use crate::knowledge::index::sync::KnowledgeSyncService;
 use crate::knowledge::model::KnowledgeCatalog;
@@ -73,6 +76,14 @@ impl ChatAppState {
             KnowledgeLoader::new(&core.config.catalog.path, &core.config.catalog.query_path)
                 .load()?;
         KnowledgeValidator::validate(&catalog)?;
+        if core.config.catalog.validate_on_startup {
+            validate_runtime(&catalog, &core.pools.fineract).await?;
+            tracing::info!("approved SQL validated against fineract at startup");
+        } else {
+            tracing::debug!(
+                "skipping runtime SQL validation at startup (CATALOG_VALIDATE_ON_STARTUP=false)"
+            );
+        }
         let catalog = Arc::new(catalog);
 
         let pool = core.pools.app.clone();
