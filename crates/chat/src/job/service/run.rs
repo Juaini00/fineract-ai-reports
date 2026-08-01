@@ -113,6 +113,28 @@ impl JobService {
         let Some((outcome, payload)) = body_result? else {
             return Ok(None);
         };
+        // Stream the rendered prose as ordered deltas before the authoritative
+        // `final` (or `clarification`/`error`) event below. Every terminal
+        // outcome here carries an assistant-visible message — a clarification
+        // question or an error explanation is still prose the user reads, so
+        // it gets the same typing effect as a completed answer. Never let
+        // chunking or a delta emit fail the job: `final` must still land with
+        // the untouched, complete markdown either way.
+        if let Some(markdown) = payload.get("markdown").and_then(Value::as_str) {
+            for (seq, text) in progress::chunk_markdown(markdown).into_iter().enumerate() {
+                if let Err(error) = self
+                    .emit_event(
+                        job_id,
+                        "delta",
+                        Some("formatting"),
+                        json!({ "seq": seq, "text": text }),
+                    )
+                    .await
+                {
+                    tracing::warn!(job_id = %job_id, error = %error, "failed to emit chat job delta event");
+                }
+            }
+        }
         self.emit_event(
             job_id,
             outcome.event_kind,
