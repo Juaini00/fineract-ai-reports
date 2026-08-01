@@ -1,4 +1,5 @@
 pub mod model;
+pub mod progress;
 pub mod repository;
 pub mod service;
 
