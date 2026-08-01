@@ -243,7 +243,13 @@ pub(super) async fn execute_selected_capability(
     let tool_request = super::super::tool::tool_request_from_plan(&plan, evidence_refs);
     memory.selected_tool = Some(tool_request.tool_name.clone());
     memory.tool_params = json!(tool_request);
+    crate::job::progress::started(crate::job::progress::Stage::Policy);
+    let policy_started_at = std::time::Instant::now();
     let policy = crate::assistant::guard_selected_capability(&execution_client, catalog, &plan);
+    crate::job::progress::finished(
+        crate::job::progress::Stage::Policy,
+        policy_started_at.elapsed().as_millis() as u64,
+    );
     memory.policy_decision = json!(policy);
     if policy.status != PolicyDecisionStatus::Allowed {
         return graph_result(
@@ -270,7 +276,14 @@ pub(super) async fn execute_selected_capability(
     let limits = canonical
         .map(|context| context.execution_limits)
         .unwrap_or_default();
-    match execute_plan(pool, catalog, &plan, &policy, limits).await {
+    crate::job::progress::started(crate::job::progress::Stage::Execution);
+    let execution_started_at = std::time::Instant::now();
+    let execution_result = execute_plan(pool, catalog, &plan, &policy, limits).await;
+    crate::job::progress::finished(
+        crate::job::progress::Stage::Execution,
+        execution_started_at.elapsed().as_millis() as u64,
+    );
+    match execution_result {
         Ok(result) => {
             let tool_result =
                 super::super::tool::tool_result_from_execution(&tool_request, result.clone());

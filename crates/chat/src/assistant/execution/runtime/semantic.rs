@@ -303,7 +303,13 @@ pub(super) async fn complete_semantic_route(
                 compatible_ids = ?catalog.map(|c| crate::assistant::retrieval::compatible_ids(&plan, c)),
                 "retrieval plan"
             );
+            crate::job::progress::started(crate::job::progress::Stage::Retrieval);
+            let retrieval_started_at = std::time::Instant::now();
             let evidence = RetrievalEngine::retrieve(&plan, llm, knowledge, catalog).await;
+            crate::job::progress::finished(
+                crate::job::progress::Stage::Retrieval,
+                retrieval_started_at.elapsed().as_millis() as u64,
+            );
             let (evidence, warning) = match evidence {
                 Ok(evidence) => (evidence, None),
                 Err(error) => (Vec::new(), Some(error.to_string())),
@@ -315,9 +321,15 @@ pub(super) async fn complete_semantic_route(
                 warning = ?warning,
                 "retrieval evidence"
             );
+            crate::job::progress::started(crate::job::progress::Stage::Reranking);
+            let reranking_started_at = std::time::Instant::now();
             let decision = LlmReranker::new(llm)
                 .rerank(&plan.query_text, &evidence)
                 .await;
+            crate::job::progress::finished(
+                crate::job::progress::Stage::Reranking,
+                reranking_started_at.elapsed().as_millis() as u64,
+            );
             tracing::info!(
                 target: "assistant::mapping",
                 decision = ?decision,

@@ -610,7 +610,13 @@ impl AssistantGraphRuntime {
                 ),
             );
         };
+        crate::job::progress::started(crate::job::progress::Stage::Routing);
+        let routing_started_at = std::time::Instant::now();
         let route = router.route(message, &context).await;
+        crate::job::progress::finished(
+            crate::job::progress::Stage::Routing,
+            routing_started_at.elapsed().as_millis() as u64,
+        );
         match &route {
             Ok(intent) => tracing::info!(
                 target: "assistant::mapping",

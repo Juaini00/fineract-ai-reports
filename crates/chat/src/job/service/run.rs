@@ -4,6 +4,7 @@ use futures::FutureExt;
 
 use super::*;
 
+use crate::job::progress::{self, ProgressSink};
 use crate::job::repository::ExecutionAuditContext;
 use crate::management::model::SafeIdentifier;
 
@@ -72,6 +73,13 @@ impl JobService {
         }
     }
 
+    /// Installs a task-local progress sink around the pipeline run and forwards
+    /// every stage event to `emit_event` concurrently. The forwarder is driven
+    /// alongside the pipeline via `tokio::join!` (not run-then-drain), and
+    /// `tokio::join!` only resolves once *both* futures finish — so by the
+    /// time this function proceeds to emit the terminal event below, every
+    /// stage event is already durably persisted and published. That ordering
+    /// is what guarantees a client sees `stage` events before `final`.
     pub(super) async fn run_graph_skeleton(
         &self,
         session_id: Uuid,
@@ -80,6 +88,49 @@ impl JobService {
         input: RuntimeUserInput,
         canonical_turn: CanonicalTurn,
     ) -> Result<Option<JobRunOutcome>> {
+        let (sink, mut receiver) = ProgressSink::new();
+        let forward_stage_events = async {
+            while let Some(event) = receiver.recv().await {
+                let stage = event.stage.as_str();
+                if let Err(error) = self
+                    .emit_event(
+                        job_id,
+                        "stage",
+                        Some(stage),
+                        json!({ "stage": stage, "state": event.state, "ms": event.ms }),
+                    )
+                    .await
+                {
+                    tracing::warn!(job_id = %job_id, error = %error, "failed to emit chat job stage event");
+                }
+            }
+        };
+        let pipeline = progress::scope(
+            sink,
+            self.run_graph_skeleton_body(session_id, job_id, client, input, canonical_turn),
+        );
+        let (body_result, ()) = tokio::join!(pipeline, forward_stage_events);
+        let Some((outcome, payload)) = body_result? else {
+            return Ok(None);
+        };
+        self.emit_event(
+            job_id,
+            outcome.event_kind,
+            Some("complete_or_wait"),
+            payload,
+        )
+        .await?;
+        Ok(Some(outcome))
+    }
+
+    async fn run_graph_skeleton_body(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        client: &PrincipalContext,
+        input: RuntimeUserInput,
+        canonical_turn: CanonicalTurn,
+    ) -> Result<Option<(JobRunOutcome, Value)>> {
         let memory = match self.job_memory.get(job_id, client.user_id).await? {
             Some(memory) => memory,
             None => {
@@ -237,6 +288,8 @@ impl JobService {
         let Some(response) = &memory.structured_response else {
             return Ok(None);
         };
+        progress::started(progress::Stage::Formatting);
+        let formatting_started_at = std::time::Instant::now();
         // Serialize once so every durable and live public projection carries the
         // exact same client-safe response contract.
         let structured_response = serde_json::to_value(response)?;
@@ -244,6 +297,10 @@ impl JobService {
             .rendered_markdown
             .clone()
             .unwrap_or_else(|| MarkdownRenderer.render(response));
+        progress::finished(
+            progress::Stage::Formatting,
+            formatting_started_at.elapsed().as_millis() as u64,
+        );
         let result_json = json!({
             "structured_response": structured_response.clone(),
             "warnings": response.warnings.clone(),
@@ -362,18 +419,12 @@ impl JobService {
         });
         self.audit.record(audit_event);
 
-        self.emit_event(
-            job_id,
-            outcome.event_kind,
-            Some("complete_or_wait"),
-            json!({
-                "response_type": response.response_type,
-                "structured_response": structured_response,
-                "markdown": rendered,
-            }),
-        )
-        .await?;
-        Ok(Some(outcome))
+        let payload = json!({
+            "response_type": response.response_type,
+            "structured_response": structured_response,
+            "markdown": rendered,
+        });
+        Ok(Some((outcome, payload)))
     }
 }
 
