@@ -148,7 +148,7 @@ impl JobService {
     pub async fn create(&self, input: CreateChatJobInput) -> Result<Option<CreatedChatJob>> {
         let mut client = input.client;
         project_admin_principal(&mut client, &self.catalog, &self.fineract_pool).await?;
-        let Some(mut created) = self
+        let Some(created) = self
             .jobs
             .create(
                 client.user_id,
@@ -182,24 +182,27 @@ impl JobService {
         audit_event.session_id = Some(created.session_id);
         audit_event.legacy_api_key_id = client.legacy_api_key_id;
         self.audit.record(audit_event);
-        let outcome = self
-            .run_graph_skeleton(
-                created.session_id,
-                created.job_id,
-                &client,
-                input.message.as_str().into(),
-                CanonicalTurn {
-                    message_id: created.user_message_id,
-                    observed_at: job_created_at,
-                    reference_instant: job_created_at,
-                    initial: true,
-                },
-            )
-            .await?;
-        if let Some(outcome) = outcome {
-            created.status = outcome.status.into();
-            created.current_step = outcome.current_step.into();
-        }
+        let service = self.clone();
+        let session_id = created.session_id;
+        let job_id = created.job_id;
+        let message = input.message;
+        let canonical_turn = CanonicalTurn {
+            message_id: created.user_message_id,
+            observed_at: job_created_at,
+            reference_instant: job_created_at,
+            initial: true,
+        };
+        tokio::spawn(async move {
+            service
+                .run_graph_skeleton_recording_failure(
+                    session_id,
+                    job_id,
+                    &client,
+                    message.as_str().into(),
+                    canonical_turn,
+                )
+                .await;
+        });
         Ok(Some(created))
     }
 
@@ -311,26 +314,34 @@ impl JobService {
             .await?
             .expect("responded job exists")
             .created_at;
-        self.run_graph_skeleton(
-            message.session_id,
-            input.job_id,
-            &client,
-            RuntimeUserInput {
-                message: submission.display_message,
-                source_message: message.content.clone(),
-                selected_option_id: submission.selected_option_id,
-                clarification_id: submission.clarification_id,
-                clarification_revision: submission.clarification_revision,
-                constraint_patch: submission.constraint_patch,
-            },
-            CanonicalTurn {
-                message_id: message.id,
-                observed_at: message.created_at,
-                reference_instant,
-                initial: false,
-            },
-        )
-        .await?;
+        let service = self.clone();
+        let session_id = message.session_id;
+        let job_id = input.job_id;
+        let runtime_input = RuntimeUserInput {
+            message: submission.display_message,
+            source_message: message.content.clone(),
+            selected_option_id: submission.selected_option_id,
+            clarification_id: submission.clarification_id,
+            clarification_revision: submission.clarification_revision,
+            constraint_patch: submission.constraint_patch,
+        };
+        let canonical_turn = CanonicalTurn {
+            message_id: message.id,
+            observed_at: message.created_at,
+            reference_instant,
+            initial: false,
+        };
+        tokio::spawn(async move {
+            service
+                .run_graph_skeleton_recording_failure(
+                    session_id,
+                    job_id,
+                    &client,
+                    runtime_input,
+                    canonical_turn,
+                )
+                .await;
+        });
         Ok(RespondToChatJobOutcome::Inserted(message))
     }
 }

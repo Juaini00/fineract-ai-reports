@@ -1,9 +1,77 @@
+use std::panic::AssertUnwindSafe;
+
+use futures::FutureExt;
+
 use super::*;
 
 use crate::job::repository::ExecutionAuditContext;
 use crate::management::model::SafeIdentifier;
 
 impl JobService {
+    /// Runs the pipeline in the background-task context: catches both a
+    /// returned `Err` and a panic, and in either case reuses the existing
+    /// failure path (`JobRepository::fail` + an `error` event) so a client
+    /// watching the stream is never left waiting forever. Terminal outcomes
+    /// that `run_graph_skeleton` already persists itself (including its own
+    /// `FailedOperational` branch) are left untouched here.
+    pub(super) async fn run_graph_skeleton_recording_failure(
+        &self,
+        session_id: Uuid,
+        job_id: Uuid,
+        client: &PrincipalContext,
+        input: RuntimeUserInput,
+        canonical_turn: CanonicalTurn,
+    ) {
+        let outcome = AssertUnwindSafe(self.run_graph_skeleton(
+            session_id,
+            job_id,
+            client,
+            input,
+            canonical_turn,
+        ))
+        .catch_unwind()
+        .await;
+
+        let error = match outcome {
+            Ok(Ok(_)) => return,
+            Ok(Err(error)) => error,
+            Err(panic) => {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|message| message.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                anyhow::anyhow!("chat job pipeline panicked: {message}")
+            }
+        };
+        tracing::error!(job_id = %job_id, error = %error, "chat job pipeline failed");
+
+        if let Err(fail_error) = self
+            .jobs
+            .fail(
+                job_id,
+                json!({
+                    "code": "assistant_failed",
+                    "message": "The assistant could not complete this request.",
+                }),
+            )
+            .await
+        {
+            tracing::error!(job_id = %job_id, error = %fail_error, "failed to record chat job failure");
+        }
+        if let Err(event_error) = self
+            .emit_event(
+                job_id,
+                "error",
+                None,
+                json!({ "message": "The assistant could not complete this request." }),
+            )
+            .await
+        {
+            tracing::error!(job_id = %job_id, error = %event_error, "failed to emit chat job error event");
+        }
+    }
+
     pub(super) async fn run_graph_skeleton(
         &self,
         session_id: Uuid,
@@ -363,7 +431,6 @@ pub(super) struct CanonicalTurn {
 
 pub(super) struct JobRunOutcome {
     pub(super) status: &'static str,
-    pub(super) current_step: &'static str,
     pub(super) event_kind: &'static str,
 }
 
@@ -372,17 +439,14 @@ impl JobRunOutcome {
         match state {
             TerminalState::WaitingForUserInput => Self {
                 status: "waiting_for_user_input",
-                current_step: "taking_decision",
                 event_kind: "clarification",
             },
             TerminalState::FailedOperational => Self {
                 status: "failed",
-                current_step: "response",
                 event_kind: "error",
             },
             _ => Self {
                 status: "completed",
-                current_step: "response",
                 event_kind: "final",
             },
         }

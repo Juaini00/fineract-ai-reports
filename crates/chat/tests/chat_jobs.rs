@@ -26,6 +26,31 @@ async fn create_job_without_bearer_is_unauthorized() {
     assert_eq!(resp.status(), 401);
 }
 
+/// Task 6 keystone: `POST /chat/jobs` must return as soon as the job row
+/// exists, not after the pipeline has produced a terminal result. Before the
+/// fix, `JobService::create` awaited `run_graph_skeleton` inline, so this
+/// assertion failed with `status == "completed"` (or another terminal state)
+/// returned directly from `create`.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_returns_immediately_with_a_non_terminal_status() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+
+    let started = Instant::now();
+    let job = create_job(&app, &token, "How much did we deposit?").await;
+    let elapsed = started.elapsed();
+
+    let status = job["status"].as_str().unwrap_or("");
+    assert!(
+        matches!(status, "queued" | "running"),
+        "create must return before the pipeline finishes: got status {status}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "create took {elapsed:?}, which suggests the pipeline ran inline again"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_message_is_rejected_by_validator() {
     let app = spawn_app().await;
