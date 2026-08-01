@@ -33,21 +33,18 @@ impl JobService {
         .catch_unwind()
         .await;
 
-        let error = match outcome {
-            Ok(Ok(_)) => return,
-            Ok(Err(error)) => error,
-            Err(panic) => {
-                let message = panic
-                    .downcast_ref::<&str>()
-                    .map(|message| message.to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown panic".to_string());
-                anyhow::anyhow!("chat job pipeline panicked: {message}")
-            }
+        let Some(error) = classify_run_outcome(outcome) else {
+            return;
         };
         tracing::error!(job_id = %job_id, error = %error, "chat job pipeline failed");
 
-        if let Err(fail_error) = self
+        // `fail` refuses to overwrite a job that already reached a terminal
+        // status, so a late failure here (e.g. the terminal event insert
+        // below) can never flip an already-completed job back to failed
+        // (I1). Only publish the "error" event when we actually transitioned
+        // the job — otherwise the client already has (or will replay) the
+        // correct terminal event and this would be a misleading duplicate.
+        let job_newly_failed = match self
             .jobs
             .fail(
                 job_id,
@@ -58,7 +55,14 @@ impl JobService {
             )
             .await
         {
-            tracing::error!(job_id = %job_id, error = %fail_error, "failed to record chat job failure");
+            Ok(newly_failed) => newly_failed,
+            Err(fail_error) => {
+                tracing::error!(job_id = %job_id, error = %fail_error, "failed to record chat job failure");
+                false
+            }
+        };
+        if !job_newly_failed {
+            return;
         }
         if let Err(event_error) = self
             .emit_event(
@@ -120,6 +124,14 @@ impl JobService {
         // it gets the same typing effect as a completed answer. Never let
         // chunking or a delta emit fail the job: `final` must still land with
         // the untouched, complete markdown either way.
+        //
+        // Pub/sub delivery is lossy (I2): a dropped `delta` silently
+        // corrupts a client that reconstructs prose by concatenation. The
+        // `payload` emitted below as `final`/`clarification`/`error` always
+        // carries the complete, authoritative `markdown` (built once, above,
+        // from the same `rendered` value every delta chunk is sliced from) —
+        // clients MUST treat that field as the full text and replace their
+        // accumulated buffer with it, never append to it.
         if let Some(markdown) = payload.get("markdown").and_then(Value::as_str) {
             for (seq, text) in progress::chunk_markdown(markdown).into_iter().enumerate() {
                 if let Err(error) = self
@@ -526,6 +538,35 @@ impl JobRunOutcome {
     }
 }
 
+/// Decides whether a finished pipeline attempt must be routed down the
+/// failure path (`jobs.fail` + `error` event), and if so, with what error.
+///
+/// `Ok(None)` — the body ran to completion but produced no structured
+/// response (an abandoned run, e.g. `memory.structured_response == None`) —
+/// is treated the same as `Err`: without this, the job would stay in a
+/// non-terminal status forever and an SSE client would wait indefinitely
+/// (C2). A bare `Ok(_)` match here would silently swallow that case, since
+/// it matches both `Ok(Some(_))` and `Ok(None)`.
+fn classify_run_outcome(
+    outcome: std::thread::Result<Result<Option<JobRunOutcome>>>,
+) -> Option<anyhow::Error> {
+    match outcome {
+        Ok(Ok(Some(_))) => None,
+        Ok(Ok(None)) => Some(anyhow::anyhow!(
+            "chat job pipeline produced no terminal outcome (abandoned run)"
+        )),
+        Ok(Err(error)) => Some(error),
+        Err(panic) => {
+            let message = panic
+                .downcast_ref::<&str>()
+                .map(|message| message.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Some(anyhow::anyhow!("chat job pipeline panicked: {message}"))
+        }
+    }
+}
+
 /// Extract capability/query identifiers and row count from the graph's
 /// `execution_summary` blob. Returns `None` when no capability was executed
 /// (clarification, unsupported, or intent-only flows).
@@ -557,4 +598,35 @@ fn execution_audit_from_memory(
         truncated,
         timed_out,
     })
+}
+
+#[cfg(test)]
+mod classify_run_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn some_outcome_is_not_a_failure() {
+        let outcome: std::thread::Result<Result<Option<JobRunOutcome>>> =
+            Ok(Ok(Some(JobRunOutcome {
+                status: "completed",
+                event_kind: "final",
+            })));
+        assert!(classify_run_outcome(outcome).is_none());
+    }
+
+    #[test]
+    fn abandoned_run_is_classified_as_a_failure() {
+        // C2: `Ok(None)` must not be treated the same as success — an
+        // abandoned run still needs to reach the fail+emit path so the job
+        // becomes terminal and a waiting SSE client gets an `error` event.
+        let outcome: std::thread::Result<Result<Option<JobRunOutcome>>> = Ok(Ok(None));
+        assert!(classify_run_outcome(outcome).is_some());
+    }
+
+    #[test]
+    fn returned_error_is_classified_as_a_failure() {
+        let outcome: std::thread::Result<Result<Option<JobRunOutcome>>> =
+            Ok(Err(anyhow::anyhow!("boom")));
+        assert!(classify_run_outcome(outcome).is_some());
+    }
 }
