@@ -100,6 +100,7 @@ fn extracts_dates_currency_products_and_limit() {
                 product_ids: Some(vec![7]),
                 office_ids: None,
                 metric: None,
+                transaction_amount: None,
                 quantity: Some(Quantity::TopN { value: 5 }),
             },
             context_reference: ContextReference::None,

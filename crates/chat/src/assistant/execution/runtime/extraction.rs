@@ -86,6 +86,10 @@ pub(super) fn prefer_current_turn_extraction(
                 .office_ids
                 .or(source.constraints.office_ids),
             metric: current.constraints.metric.or(source.constraints.metric),
+            transaction_amount: current
+                .constraints
+                .transaction_amount
+                .or(source.constraints.transaction_amount),
         },
         domain: current.domain.or(source.domain),
         entities: if current.entities.is_empty() {

@@ -471,6 +471,7 @@ mod tests {
                     status: "approved_mvp".into(),
                     domain: "test".into(),
                     query_id: format!("{id}_query"),
+                    dataset_recipe: None,
                     output_mode: "table".into(),
                     request_shape: RequestShape::default(),
                     display_name: None,

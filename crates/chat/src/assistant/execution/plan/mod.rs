@@ -6,6 +6,7 @@ use serde_json::Value;
 use app_core::auth::model::PrincipalContext;
 
 use crate::assistant::understanding::classifier::{ClassificationOutcome, ClassificationResult};
+use crate::knowledge::dataset::model::DatasetSelection;
 use crate::knowledge::model::KnowledgeCatalog;
 use crate::policy::authorization::{effective_office_scope, ensure_capability_allowed};
 
@@ -21,6 +22,8 @@ pub struct ExecutionPlan {
     pub domain: String,
     pub capability: String,
     pub query_id: String,
+    #[serde(default)]
+    pub dataset_selection: Option<DatasetSelection>,
     pub output_mode: String,
     pub params: Value,
     pub retrieval_plan: RetrievalPlan,
@@ -83,6 +86,7 @@ pub fn build_execution_plan(
         domain: capability_knowledge.domain.clone(),
         capability: capability.to_string(),
         query_id: query.id.clone(),
+        dataset_selection: None,
         output_mode: capability_knowledge.output_mode.clone(),
         params: classification.params.clone(),
         retrieval_plan: build_retrieval_plan(classification, capability_knowledge),

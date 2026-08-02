@@ -160,6 +160,7 @@ fn effective_parameter(effective: &EffectiveConstraints, name: &str) -> Option<V
                     .and_then(|v| v.parse().ok())
                     .map(|id: i64| json!(id))
             }),
+        "product_name" => typed_string(value(ConstraintField::Product)).map(Value::String),
         "search" | "name" => [
             ConstraintField::PersonName,
             ConstraintField::Office,
@@ -169,6 +170,9 @@ fn effective_parameter(effective: &EffectiveConstraints, name: &str) -> Option<V
         .find_map(|field| typed_string(value(field)))
         .map(Value::String),
         "office" | "office_name" => typed_string(value(ConstraintField::Office)).map(Value::String),
+        "latest_transaction_amount" => {
+            typed_string(value(ConstraintField::TransactionAmount)).map(Value::String)
+        }
         "limit" | "top_n" => match (
             value(ConstraintField::LimitMode),
             value(ConstraintField::LimitValue),
@@ -186,6 +190,7 @@ fn effective_parameter(effective: &EffectiveConstraints, name: &str) -> Option<V
 fn typed_string(value: Option<&TypedFactValue>) -> Option<String> {
     match value? {
         TypedFactValue::Date(v)
+        | TypedFactValue::Decimal(v)
         | TypedFactValue::CurrencyCode(v)
         | TypedFactValue::Metric(v)
         | TypedFactValue::PersonName(v)
@@ -224,7 +229,7 @@ pub(super) fn validate_snapshot_parameters(query: &QueryKnowledge, params: &Valu
             continue;
         };
         let valid = match parameter.kind.as_str() {
-            "date" | "string" => value.is_string(),
+            "date" | "string" | "decimal" => value.is_string(),
             "integer" => value.as_i64().is_some(),
             "array_bigint" => value
                 .as_array()
@@ -280,8 +285,12 @@ pub(super) fn params_from_verified(
                         .and_then(|value| value.parse::<i64>().ok())
                         .map(|value| json!(value))
                 }),
+            "product_name" => product.map(|value| json!(value)),
             "search" | "name" => person_name.or(office).or(product).map(|value| json!(value)),
             "office" | "office_name" => office.map(|value| json!(value)),
+            "latest_transaction_amount" => trusted
+                .and_then(|constraints| constraints.transaction_amount.as_ref())
+                .map(|value| json!(value)),
             "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
             _ => None,
         }

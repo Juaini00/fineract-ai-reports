@@ -1,7 +1,8 @@
 //! The dataset contract: one source, plus whitelists for filters, shapes and
 //! ordering. See docs/superpowers/specs/2026-07-31-dataset-model-design.md.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::assistant::RequestShape;
 use crate::knowledge::model::{QueryParameter, Sensitivity};
@@ -35,6 +36,49 @@ pub struct DatasetKnowledge {
     pub timeout_ms: Option<u64>,
 }
 
+/// Catalog-owned recipe attached to an authorized capability. Values are read
+/// from normalized capability parameters; no SQL identifiers come from the LLM.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DatasetRecipe {
+    pub dataset_id: String,
+    pub shape_id: String,
+    #[serde(default)]
+    pub order_by_id: Option<String>,
+    #[serde(default)]
+    pub filters: Vec<DatasetRecipeFilter>,
+    #[serde(default)]
+    pub projection: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DatasetRecipeFilter {
+    pub filter_id: String,
+    pub operator: FilterOperator,
+    #[serde(default)]
+    pub parameter: Option<String>,
+    #[serde(default)]
+    pub value: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetSelection {
+    pub dataset_id: String,
+    pub shape_id: String,
+    #[serde(default)]
+    pub order_by_id: Option<String>,
+    #[serde(default)]
+    pub filters: Vec<DatasetFilterSelection>,
+    #[serde(default)]
+    pub projection: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetFilterSelection {
+    pub filter_id: String,
+    pub operator: FilterOperator,
+    pub value: Value,
+}
+
 impl DatasetKnowledge {
     /// Fields rendered for every request, regardless of projection hints.
     pub fn core_field_names(&self) -> Vec<String> {
@@ -65,10 +109,12 @@ pub struct FilterSlot {
     pub expr: String,
     #[serde(rename = "type")]
     pub kind: String,
+    #[serde(default)]
+    pub case_insensitive: bool,
     pub operators: Vec<FilterOperator>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOperator {
     Eq,
@@ -103,6 +149,28 @@ pub struct ShapeOption {
     pub fragment: Option<String>,
     #[serde(default)]
     pub order_by: Vec<String>,
+    #[serde(default)]
+    pub output_fields: Vec<DatasetOutputField>,
+    #[serde(default)]
+    pub parameters: Vec<QueryParameter>,
+}
+
+impl ShapeOption {
+    pub fn output_fields<'a>(&'a self, dataset: &'a DatasetKnowledge) -> &'a [DatasetOutputField] {
+        if self.output_fields.is_empty() {
+            &dataset.output_fields
+        } else {
+            &self.output_fields
+        }
+    }
+
+    pub fn parameters<'a>(&'a self, dataset: &'a DatasetKnowledge) -> &'a [QueryParameter] {
+        if self.parameters.is_empty() {
+            &dataset.parameters
+        } else {
+            &self.parameters
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

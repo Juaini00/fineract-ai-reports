@@ -93,6 +93,10 @@ pub(super) fn validate(
                 TypedFactValue::CurrencyCode(_)
             )
             | (ConstraintField::Metric, TypedFactValue::Metric(_))
+            | (
+                ConstraintField::TransactionAmount,
+                TypedFactValue::Decimal(_)
+            )
             | (ConstraintField::Domain, TypedFactValue::Domain(_))
             | (ConstraintField::PersonName, TypedFactValue::PersonName(_))
             | (ConstraintField::Office, TypedFactValue::Office(_))

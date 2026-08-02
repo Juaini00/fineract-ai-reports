@@ -316,6 +316,7 @@ mod tests {
             status: "active".to_string(),
             domain: "test_domain".to_string(),
             query_id: "test_query".to_string(),
+            dataset_recipe: None,
             output_mode: "table".to_string(),
             request_shape: Default::default(),
             display_name: display_name.map(str::to_string),

@@ -52,6 +52,7 @@ fn make_capability(id: &str, domain: &str, subject: RequestSubject) -> Capabilit
         optional_parameters: vec![],
         defaults: Default::default(),
         guards: Default::default(),
+        dataset_recipe: None,
         parameter_policies: vec![],
     }
 }

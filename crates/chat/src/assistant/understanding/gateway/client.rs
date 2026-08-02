@@ -173,6 +173,7 @@ mod tests {
                 status: "approved_mvp".into(),
                 domain: "savings".into(),
                 query_id: "savings.deposit_top_n".into(),
+                dataset_recipe: None,
                 output_mode: "top_n".into(),
                 request_shape: Default::default(),
                 display_name: None,

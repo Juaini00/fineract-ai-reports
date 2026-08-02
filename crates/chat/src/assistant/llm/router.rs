@@ -29,6 +29,7 @@ impl SemanticRouter {
                 "When a request_shape dimension is genuinely ambiguous set it to unknown rather than guessing.",
                 "request_shape.subject MUST be exactly one of: savings_transaction, savings_account, savings_account_charge, client, office, organization_hierarchy, product, unknown. Never invent a value outside this list. Use savings_account_charge for charges or fees applied to a savings account; use savings_account for a request framed around the account itself. The same rule applies to every other request_shape/domain/intent enum field: only emit values defined by the schema, defaulting to unknown/unsupported_in_domain rather than fabricating a new enum member.",
                 "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support.",
+                "When the user explicitly gives a transaction amount used to identify a transaction/account, copy it exactly as decimal text into constraints.transaction_amount; never round or convert it to floating point.",
                 "canonical_query_en MUST be the user's message translated to English, keeping every reporting term, entity, metric, and date intact (e.g. 'hutang' -> 'debt/unpaid charge', 'jatuh tempo' -> 'due date', 'terlambat'/'lewat jatuh tempo' -> 'overdue'). If the message is already English, copy it unchanged. Never leave it empty."
             ]
         })

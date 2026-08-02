@@ -7,11 +7,22 @@ use anyhow::{Result, bail};
 use crate::knowledge::dataset::grammar::validate_sql_expr;
 use crate::knowledge::dataset::model::DatasetKnowledge;
 
+const FILTER_TYPES: &[&str] = &["date", "integer", "boolean", "string", "decimal"];
+const OUTPUT_TYPES: &[&str] = &["bigint", "integer", "string", "date", "decimal", "boolean"];
+
 pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
     let mut filter_ids = HashSet::new();
     for filter in &dataset.filters {
         if !filter_ids.insert(filter.id.as_str()) {
             bail!("dataset {} declares filter {} twice", dataset.id, filter.id);
+        }
+        if !FILTER_TYPES.contains(&filter.kind.as_str()) {
+            bail!(
+                "dataset {} filter {} has unsupported type {}",
+                dataset.id,
+                filter.id,
+                filter.kind
+            );
         }
         if filter.operators.is_empty() {
             bail!(
@@ -65,13 +76,59 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
                 shape.id
             );
         }
-    }
-
-    if !dataset.output_fields.is_empty() && !dataset.output_fields.iter().any(|field| field.core) {
-        bail!(
-            "dataset {} declares no core output field, so projection would render an empty table",
-            dataset.id
-        );
+        let mut output_field_names = HashSet::new();
+        let fields = shape.output_fields(dataset);
+        if fields.is_empty() {
+            bail!(
+                "dataset {} shape {} declares no output fields",
+                dataset.id,
+                shape.id
+            );
+        }
+        for field in fields {
+            if field.name.trim().is_empty() {
+                bail!(
+                    "dataset {} shape {} has output field with empty name",
+                    dataset.id,
+                    shape.id
+                );
+            }
+            if !output_field_names.insert(field.name.as_str()) {
+                bail!(
+                    "dataset {} shape {} declares output field {} twice",
+                    dataset.id,
+                    shape.id,
+                    field.name
+                );
+            }
+            if !OUTPUT_TYPES.contains(&field.kind.as_str()) {
+                bail!(
+                    "dataset {} shape {} output field {} has unsupported type {}",
+                    dataset.id,
+                    shape.id,
+                    field.name,
+                    field.kind
+                );
+            }
+        }
+        if !fields.iter().any(|field| field.core) {
+            bail!(
+                "dataset {} shape {} declares no core output field",
+                dataset.id,
+                shape.id
+            );
+        }
+        let mut parameter_names = HashSet::new();
+        for parameter in shape.parameters(dataset) {
+            if !parameter_names.insert(parameter.name.as_str()) {
+                bail!(
+                    "dataset {} shape {} declares parameter {} twice",
+                    dataset.id,
+                    shape.id,
+                    parameter.name
+                );
+            }
+        }
     }
 
     Ok(())
@@ -98,6 +155,7 @@ mod tests {
                 id: "due_date".into(),
                 expr: "sac.charge_due_date".into(),
                 kind: "date".into(),
+                case_insensitive: false,
                 operators: vec![FilterOperator::Eq],
             }],
             shapes: vec![ShapeOption {
@@ -111,6 +169,8 @@ mod tests {
                 },
                 fragment: Some("queries/savings/account_charges.list.frag.sql".into()),
                 order_by: vec!["created_desc".into()],
+                output_fields: Vec::new(),
+                parameters: Vec::new(),
             }],
             order_by: vec![OrderByOption {
                 id: "created_desc".into(),
@@ -170,6 +230,34 @@ mod tests {
         let mut dataset = valid();
         dataset.order_by[0].expr = "sac.id /* x */".into();
         assert!(validate_dataset(&dataset).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_filter_type() {
+        let mut dataset = valid();
+        dataset.filters[0].kind = "jsonb".into();
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+
+        assert!(error.contains("unsupported type"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unsupported_output_fields() {
+        let mut dataset = valid();
+        dataset.output_fields.push(dataset.output_fields[0].clone());
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(
+            error.contains("output field") && error.contains("twice"),
+            "got: {error}"
+        );
+
+        let mut dataset = valid();
+        dataset.output_fields[0].kind = "jsonb".into();
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("unsupported type"), "got: {error}");
     }
 
     #[test]

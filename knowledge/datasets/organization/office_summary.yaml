@@ -1,0 +1,23 @@
+id: organization.office_summary
+database: fineract
+source_sql: queries/organization/office_summary.sql
+tables:
+  - m_office
+  - m_staff
+filters: []
+shapes:
+  - id: summary
+    request_shape:
+      operation: summary
+      subject: office
+      grouping: none
+      output: summary
+      pii: none
+output_fields:
+  - { name: office_count, type: bigint, sensitivity: public_business, core: true }
+  - { name: root_office_count, type: bigint, sensitivity: public_business, core: true }
+  - { name: oldest_opening_date, type: date, sensitivity: public_business, core: true }
+  - { name: active_staff_count, type: bigint, sensitivity: public_business, core: true }
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

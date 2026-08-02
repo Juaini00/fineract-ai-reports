@@ -59,12 +59,25 @@ pub(super) fn plan_selected_capability_verified(
         &capability.parameter_policies,
         ctx,
     )?;
+    let dataset_selection = capability
+        .dataset_recipe
+        .as_ref()
+        .map(|recipe| {
+            let dataset = catalog
+                .datasets
+                .iter()
+                .find(|dataset| dataset.id == recipe.dataset_id)
+                .ok_or_else(|| anyhow::anyhow!("selected capability has no approved dataset"))?;
+            crate::knowledge::dataset::resolve::resolve_recipe(dataset, recipe, &params)
+        })
+        .transpose()?;
 
     Ok(ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: capability.id.clone(),
         query_id: query.id.clone(),
+        dataset_selection,
         output_mode: capability.output_mode.clone(),
         params,
         retrieval_plan: RetrievalPlan {
@@ -99,11 +112,28 @@ pub(super) fn plan_from_snapshot(
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
     validate_snapshot_parameters(query, &snapshot.normalized_parameters)?;
+    let dataset_selection = capability
+        .dataset_recipe
+        .as_ref()
+        .map(|recipe| {
+            let dataset = catalog
+                .datasets
+                .iter()
+                .find(|dataset| dataset.id == recipe.dataset_id)
+                .ok_or_else(|| anyhow::anyhow!("selected capability has no approved dataset"))?;
+            crate::knowledge::dataset::resolve::resolve_recipe(
+                dataset,
+                recipe,
+                &snapshot.normalized_parameters,
+            )
+        })
+        .transpose()?;
     Ok(ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: capability.id.clone(),
         query_id: query.id.clone(),
+        dataset_selection,
         output_mode: capability.output_mode.clone(),
         params: snapshot.normalized_parameters.clone(),
         retrieval_plan: RetrievalPlan::default(),

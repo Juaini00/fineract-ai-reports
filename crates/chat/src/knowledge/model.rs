@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::assistant::intent::RequestShape;
 use crate::assistant::{ClarificationFieldType, ClarificationValidation};
-use crate::knowledge::dataset::model::DatasetKnowledge;
+use crate::knowledge::dataset::model::{DatasetKnowledge, DatasetRecipe};
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeCatalog {
@@ -240,6 +240,9 @@ pub struct CapabilityKnowledge {
 
     #[serde(default)]
     pub guards: CapabilityGuards,
+
+    #[serde(default)]
+    pub dataset_recipe: Option<DatasetRecipe>,
 
     /// Per-parameter policy replacing the legacy `required_parameters` /
     /// `optional_parameters` / `clarification.missing_parameters` triad.

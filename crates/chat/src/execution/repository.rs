@@ -10,7 +10,9 @@ use sqlx::{
 };
 
 use crate::assistant::execution::plan::{ExecutionPlan, PolicyDecision, PolicyDecisionStatus};
-use crate::knowledge::model::{KnowledgeCatalog, QueryParameter};
+use crate::knowledge::dataset::compose::compose;
+use crate::knowledge::dataset::model::FilterOperator;
+use crate::knowledge::model::{KnowledgeCatalog, QueryOutputField, QueryParameter};
 
 /// Execution ceilings resolved from config and carried into the SQL layer.
 #[derive(Debug, Clone, Copy)]
@@ -106,15 +108,14 @@ pub async fn execute_plan(
         .iter()
         .find(|query| query.id == plan.query_id)
         .with_context(|| format!("query {} not found in catalog", plan.query_id))?;
-    let sql = read_approved_sql(catalog, query.sql_file.as_str())?;
+    let (sql, parameters, output_fields, timeout_ms, applied_filters) =
+        resolve_statement(catalog, plan, query, limits.default_timeout_ms)?;
     tracing::info!(
         query_id = %plan.query_id,
         capability = %plan.capability,
-        sql_file = %query.sql_file,
-        params = %plan.params,
-        office_ids = ?policy.office_ids,
-        sql = %sql,
-        "executing approved SQL",
+        dataset_id = plan.dataset_selection.as_ref().map(|selection| selection.dataset_id.as_str()),
+        bind_count = parameters.len(),
+        "executing approved statement",
     );
     let declared_hard_cap = catalog
         .capabilities
@@ -128,8 +129,7 @@ pub async fn execute_plan(
                 .and_then(|policy| policy.hard_cap)
         });
     let row_cap = effective_row_cap(declared_hard_cap, limits.global_max_rows);
-    let limit_param = query
-        .parameters
+    let limit_param = parameters
         .iter()
         .find(|parameter| matches!(parameter.name.as_str(), "limit" | "top_n"))
         .map(|parameter| parameter.name.as_str());
@@ -140,7 +140,7 @@ pub async fn execute_plan(
         .and_then(|name| truncation_limit(plan.params.get(name).and_then(Value::as_i64), row_cap));
 
     let mut sql_query = sqlx::query(AssertSqlSafe(sql).into_sql_str());
-    for parameter in &query.parameters {
+    for parameter in &parameters {
         match parameter.kind.as_str() {
             "date" => sql_query = sql_query.bind(date_param(plan, parameter)?),
             "integer" => {
@@ -155,6 +155,7 @@ pub async fn execute_plan(
                 sql_query = sql_query.bind(value);
             }
             "string" => sql_query = sql_query.bind(string_param(plan, parameter)?),
+            "decimal" => sql_query = sql_query.bind(decimal_param(plan, parameter)?),
             "array_bigint" => {
                 sql_query = sql_query.bind(array_bigint_param(plan, policy, parameter)?)
             }
@@ -162,7 +163,17 @@ pub async fn execute_plan(
         }
     }
 
-    let timeout_ms = query.timeout_ms.unwrap_or(limits.default_timeout_ms);
+    if let Some(selection) = plan.dataset_selection.as_ref() {
+        let dataset = catalog
+            .datasets
+            .iter()
+            .find(|dataset| dataset.id == selection.dataset_id)
+            .context("dataset selection not found in catalog")?;
+        for bind in compose_dataset_binds(dataset, selection)? {
+            sql_query = bind_dataset_value(sql_query, &bind)?;
+        }
+    }
+
     let mut rows = fetch_all_with_timeout(pool, sql_query, timeout_ms).await?;
     let (truncated, shown) = match fetch_limit {
         Some(limit) if rows.len() as i64 > limit => (true, limit),
@@ -175,7 +186,7 @@ pub async fn execute_plan(
 
     for row in rows {
         let mut result_row = serde_json::Map::new();
-        for field in &query.output_fields {
+        for field in &output_fields {
             if !is_supported_output_field_type(field.kind.as_str()) {
                 bail!("unsupported output field type {}", field.kind);
             }
@@ -213,7 +224,139 @@ pub async fn execute_plan(
         "rows": result_rows,
         "truncated": truncated,
         "shown": shown,
+        "applied_filters": applied_filters,
     }))
+}
+
+fn resolve_statement(
+    catalog: &KnowledgeCatalog,
+    plan: &ExecutionPlan,
+    query: &crate::knowledge::model::QueryKnowledge,
+    default_timeout_ms: u64,
+) -> Result<(
+    String,
+    Vec<QueryParameter>,
+    Vec<QueryOutputField>,
+    u64,
+    Vec<String>,
+)> {
+    let Some(selection) = plan.dataset_selection.as_ref() else {
+        return Ok((
+            read_approved_sql(catalog, query.sql_file.as_str())?,
+            query.parameters.clone(),
+            query.output_fields.clone(),
+            query.timeout_ms.unwrap_or(default_timeout_ms),
+            Vec::new(),
+        ));
+    };
+    let dataset = catalog
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == selection.dataset_id)
+        .context("dataset selection not found in catalog")?;
+    let shape = dataset
+        .shape(&selection.shape_id)
+        .context("dataset shape not found in catalog")?;
+    let source = read_approved_sql(catalog, &dataset.source_sql)?;
+    let fragment = shape
+        .fragment
+        .as_deref()
+        .map(|path| read_approved_sql(catalog, path))
+        .transpose()?;
+    let composed = compose(
+        dataset,
+        &selection.shape_id,
+        selection.order_by_id.as_deref(),
+        &source,
+        fragment.as_deref(),
+    )?;
+    let output_fields = shape
+        .output_fields(dataset)
+        .iter()
+        .map(|field| QueryOutputField {
+            name: field.name.clone(),
+            kind: field.kind.clone(),
+            sensitivity: field.sensitivity,
+        })
+        .collect();
+    Ok((
+        composed.sql,
+        shape.parameters(dataset).to_vec(),
+        output_fields,
+        dataset.timeout_ms.unwrap_or(default_timeout_ms),
+        selection
+            .filters
+            .iter()
+            .map(|filter| filter.filter_id.clone())
+            .collect(),
+    ))
+}
+
+#[derive(Debug)]
+struct DatasetBindValue {
+    kind: String,
+    value: Option<Value>,
+}
+
+fn compose_dataset_binds(
+    dataset: &crate::knowledge::dataset::model::DatasetKnowledge,
+    selection: &crate::knowledge::dataset::model::DatasetSelection,
+) -> Result<Vec<DatasetBindValue>> {
+    let mut binds = Vec::new();
+    for slot in &dataset.filters {
+        for operator in &slot.operators {
+            let selected = selection
+                .filters
+                .iter()
+                .find(|filter| filter.filter_id == slot.id && filter.operator == *operator);
+            if *operator == FilterOperator::Between {
+                let values = selected.and_then(|filter| filter.value.as_array());
+                for index in 0..2 {
+                    binds.push(DatasetBindValue {
+                        kind: slot.kind.clone(),
+                        value: values.and_then(|values| values.get(index)).cloned(),
+                    });
+                }
+            } else {
+                binds.push(DatasetBindValue {
+                    kind: slot.kind.clone(),
+                    value: selected.map(|filter| filter.value.clone()),
+                });
+            }
+        }
+    }
+    Ok(binds)
+}
+
+fn bind_dataset_value<'q>(
+    query: sqlx::query::Query<'q, Postgres, PgArguments>,
+    bind: &DatasetBindValue,
+) -> Result<sqlx::query::Query<'q, Postgres, PgArguments>> {
+    match bind.kind.as_str() {
+        "date" => Ok(query.bind(
+            bind.value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d"))
+                .transpose()?,
+        )),
+        "integer" => Ok(query.bind(bind.value.as_ref().and_then(Value::as_i64))),
+        "boolean" => Ok(query.bind(bind.value.as_ref().and_then(Value::as_bool))),
+        "string" => Ok(query.bind(
+            bind.value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        )),
+        "decimal" => Ok(query.bind(
+            bind.value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::parse::<Decimal>)
+                .transpose()?,
+        )),
+        other => bail!("unsupported dataset filter bind type {other}"),
+    }
 }
 
 fn date_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Option<NaiveDate>> {
@@ -230,6 +373,13 @@ fn integer_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Opt
     };
 
     Ok(Some(value))
+}
+
+fn decimal_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Option<Decimal>> {
+    let Some(value) = plan.params.get(&parameter.name).and_then(Value::as_str) else {
+        return required_or_null(parameter);
+    };
+    Ok(Some(value.parse()?))
 }
 
 fn string_param(plan: &ExecutionPlan, parameter: &QueryParameter) -> Result<Option<String>> {
@@ -361,6 +511,7 @@ mod tests {
             domain: "savings".to_string(),
             capability: "savings_activity_list".to_string(),
             query_id: "savings.activity_list".to_string(),
+            dataset_selection: None,
             output_mode: "list".to_string(),
             params: serde_json::json!({}),
             retrieval_plan: RetrievalPlan::default(),

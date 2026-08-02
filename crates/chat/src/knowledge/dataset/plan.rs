@@ -41,6 +41,8 @@ mod tests {
             },
             fragment: fragment.map(str::to_string),
             order_by: order_by.into_iter().map(str::to_string).collect(),
+            output_fields: Vec::new(),
+            parameters: Vec::new(),
         }
     }
 
@@ -104,12 +106,14 @@ mod tests {
                 id: "due_date".into(),
                 expr: "t.due_date".into(),
                 kind: "date".into(),
+                case_insensitive: false,
                 operators: vec![FilterOperator::Eq, FilterOperator::Lt],
             },
             FilterSlot {
                 id: "is_paid".into(),
                 expr: "t.is_paid".into(),
                 kind: "boolean".into(),
+                case_insensitive: false,
                 operators: vec![FilterOperator::Eq],
             },
         ];

@@ -29,6 +29,8 @@ pub fn degenerate_dataset(
             // No fragment: the source SQL already selects, orders and limits.
             fragment: None,
             order_by: Vec::new(),
+            output_fields: Vec::new(),
+            parameters: Vec::new(),
         }],
         // Ordering stays inside the source SQL for the degenerate case.
         order_by: Vec::new(),
@@ -66,6 +68,7 @@ mod tests {
             status: "approved_mvp".into(),
             domain: "savings".into(),
             query_id: "savings.deposit_total".into(),
+            dataset_recipe: None,
             output_mode: "summary".into(),
             request_shape: RequestShape {
                 operation: RequestOperation::Total,

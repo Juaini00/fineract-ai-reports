@@ -43,12 +43,13 @@ impl JobService {
                             "redis publish to job channel failed",
                         );
                     }
-                    if matches!(kind, "final" | "error") {
+                    if matches!(kind, "final" | "error" | "clarification") {
                         let state_key = format!("chat_job:{job_id}:live_state");
-                        let state = if kind == "final" {
-                            "completed"
-                        } else {
-                            "failed"
+                        let state = match kind {
+                            "final" => "completed",
+                            "error" => "failed",
+                            "clarification" => "waiting_for_user_input",
+                            _ => unreachable!("terminal event kind matched above"),
                         };
                         let _: redis::RedisResult<()> = redis::AsyncCommands::set_ex(
                             &mut conn,

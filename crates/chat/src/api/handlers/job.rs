@@ -14,7 +14,7 @@ use axum::{
     },
 };
 use futures::stream::{self, StreamExt};
-use std::convert::Infallible;
+use std::{convert::Infallible, time::Duration};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -27,7 +27,44 @@ use crate::job::service::{RespondToChatJobOutcome, redis_url_log_value};
 /// `chat_job:{id}:live_state` values `JobService::emit_event` writes on
 /// `final`/`error`.
 fn is_terminal_job_status(status: &str) -> bool {
-    matches!(status, "completed" | "failed")
+    matches!(status, "completed" | "failed" | "waiting_for_user_input")
+}
+
+fn durable_poll_stream(
+    state: ChatAppState,
+    client: app_core::auth::model::PrincipalContext,
+    job_id: Uuid,
+) -> impl futures::Stream<Item = Result<Event, Infallible>> {
+    stream::unfold(Some(0usize), move |state_seen| {
+        let state = state.clone();
+        let client = client.clone();
+        async move {
+            let seen = state_seen?;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let events = state
+                .chat
+                .jobs
+                .replay_events(client, job_id)
+                .await
+                .unwrap_or_default()
+                .unwrap_or_default();
+            let next = events.into_iter().nth(seen);
+            let terminal = next.as_ref().is_some_and(|event| {
+                matches!(
+                    event.event_type.as_str(),
+                    "final" | "error" | "clarification"
+                )
+            });
+            let event = next
+                .as_ref()
+                .map(replay_event_to_sse)
+                .unwrap_or_else(|| Event::default().event("keepalive").data("{}"));
+            Some((
+                Ok::<_, Infallible>(event),
+                (!terminal).then_some(seen + usize::from(next.is_some())),
+            ))
+        }
+    })
 }
 
 /// Re-derives the SSE wire shape `JobService::emit_event` publishes live
@@ -176,9 +213,11 @@ pub async fn stream(
     }
 
     let Some(redis_client) = state.core.pools.redis.clone() else {
-        return Ok(Sse::new(status_event())
-            .keep_alive(KeepAlive::default())
-            .into_response());
+        return Ok(
+            Sse::new(status_event().chain(durable_poll_stream(state, client, job_id)))
+                .keep_alive(KeepAlive::default())
+                .into_response(),
+        );
     };
 
     let redis_url = redis_url_log_value(&state.core.config.redis.url);
@@ -186,17 +225,21 @@ pub async fn stream(
     let mut pubsub = match redis_client.get_async_pubsub().await {
         Ok(pubsub) => pubsub,
         Err(error) => {
-            warn!(redis_url = %redis_url, error = %error, "redis pubsub connect failed during SSE, falling back to snapshot");
-            return Ok(Sse::new(status_event())
-                .keep_alive(KeepAlive::default())
-                .into_response());
+            warn!(redis_url = %redis_url, error = %error, "redis pubsub connect failed during SSE, using durable polling");
+            return Ok(
+                Sse::new(status_event().chain(durable_poll_stream(state, client, job_id)))
+                    .keep_alive(KeepAlive::default())
+                    .into_response(),
+            );
         }
     };
     if let Err(error) = pubsub.subscribe(&channel).await {
-        warn!(redis_url = %redis_url, error = %error, channel = %channel, "redis subscribe failed during SSE, falling back to snapshot");
-        return Ok(Sse::new(status_event())
-            .keep_alive(KeepAlive::default())
-            .into_response());
+        warn!(redis_url = %redis_url, error = %error, channel = %channel, "redis subscribe failed during SSE, using durable polling");
+        return Ok(
+            Sse::new(status_event().chain(durable_poll_stream(state, client, job_id)))
+                .keep_alive(KeepAlive::default())
+                .into_response(),
+        );
     }
 
     // Part 2 (C1): the job may have finished between the status snapshot
@@ -230,7 +273,7 @@ pub async fn stream(
             .ok()
             .and_then(|value| value.get("kind")?.as_str().map(str::to_string))
             .unwrap_or_else(|| "update".to_string());
-        let is_terminal = matches!(kind.as_str(), "final" | "error");
+        let is_terminal = matches!(kind.as_str(), "final" | "error" | "clarification");
         let event = Event::default().event(kind).data(payload);
         let next_state = if is_terminal {
             None

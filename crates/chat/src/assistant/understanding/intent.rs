@@ -192,6 +192,10 @@ pub struct AssistantConstraints {
     pub office_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub metric: Option<String>,
+    /// Exact decimal text for an explicitly stated transaction amount. Never a
+    /// floating-point value; dataset filters parse this as `Decimal`.
+    #[serde(default)]
+    pub transaction_amount: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

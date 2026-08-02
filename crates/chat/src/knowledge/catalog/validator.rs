@@ -34,7 +34,7 @@ const OUTPUT_MODES: &[&str] = &[
     "summary",
 ];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];
-const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "array_bigint"];
+const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "decimal", "array_bigint"];
 const UNSAFE_SQL_COMMANDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP", "ALTER", "CREATE", "GRANT", "REVOKE", "COPY",
     "VACUUM", "ANALYZE",
@@ -226,6 +226,7 @@ impl KnowledgeValidator {
                     &catalog.parameter_inputs,
                 )?;
                 validate_clarification_contract(capability, query)?;
+                validate_dataset_recipe(catalog, capability, query)?;
             }
 
             validate_refs(
@@ -300,8 +301,19 @@ impl KnowledgeValidator {
             validate_sql_safety(query, &sql_path)?;
         }
 
+        let mut dataset_ids = HashSet::new();
         for dataset in &catalog.datasets {
+            if !dataset_ids.insert(dataset.id.as_str()) {
+                bail!("dataset {} is declared more than once", dataset.id);
+            }
             crate::knowledge::dataset::validate::validate_dataset(dataset)?;
+            if dataset
+                .tables
+                .iter()
+                .any(|table| table.starts_with("m_loan"))
+            {
+                bail!("dataset {} references deferred loan tables", dataset.id);
+            }
         }
 
         Ok(())
@@ -458,6 +470,98 @@ fn validate_parameter_input_registry(
 /// A capability may never require `from_date`/`to_date` (date_range) without a
 /// covering policy default — that is the shape W-E removed (E2). Rejecting it at
 /// load time makes reintroduction a build failure, not a silent regression.
+fn validate_dataset_recipe(
+    catalog: &KnowledgeCatalog,
+    capability: &CapabilityKnowledge,
+    query: &QueryKnowledge,
+) -> Result<()> {
+    let Some(recipe) = capability.dataset_recipe.as_ref() else {
+        return Ok(());
+    };
+    let dataset = catalog
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == recipe.dataset_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "capability {} references unknown dataset {}",
+                capability.id,
+                recipe.dataset_id
+            )
+        })?;
+    let shape = dataset.shape(&recipe.shape_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "capability {} references unknown dataset shape {}",
+            capability.id,
+            recipe.shape_id
+        )
+    })?;
+    if let Some(order_by_id) = recipe.order_by_id.as_deref()
+        && !shape.order_by.iter().any(|allowed| allowed == order_by_id)
+    {
+        bail!(
+            "capability {} dataset shape {} does not allow order_by {}",
+            capability.id,
+            shape.id,
+            order_by_id
+        );
+    }
+    for mapping in &recipe.filters {
+        let slot = dataset
+            .filters
+            .iter()
+            .find(|slot| slot.id == mapping.filter_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "capability {} references unknown dataset filter {}",
+                    capability.id,
+                    mapping.filter_id
+                )
+            })?;
+        if !slot.operators.contains(&mapping.operator) {
+            bail!(
+                "capability {} uses unsupported operator for dataset filter {}",
+                capability.id,
+                slot.id
+            );
+        }
+        if mapping.parameter.is_some() == mapping.value.is_some() {
+            bail!(
+                "capability {} dataset filter {} must declare exactly one of parameter or value",
+                capability.id,
+                slot.id
+            );
+        }
+        if let Some(parameter_name) = mapping.parameter.as_deref()
+            && !query
+                .parameters
+                .iter()
+                .any(|parameter| parameter.name == parameter_name)
+        {
+            bail!(
+                "capability {} maps dataset filter {} from unknown query parameter {}",
+                capability.id,
+                slot.id,
+                parameter_name
+            );
+        }
+    }
+    for field in &recipe.projection {
+        if !shape
+            .output_fields(dataset)
+            .iter()
+            .any(|output| output.name == *field)
+        {
+            bail!(
+                "capability {} references unknown dataset output field {}",
+                capability.id,
+                field
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_clarification_contract(
     capability: &CapabilityKnowledge,
     query: &QueryKnowledge,
@@ -739,14 +843,14 @@ async fn validate_dataset_runtime(
         if dataset.database != "fineract" {
             continue;
         }
-        let source_path = resolve_catalog_sql_path(catalog, &dataset.source_sql);
+        let source_path = resolve_catalog_sql_path(catalog, &dataset.source_sql)?;
         let source = std::fs::read_to_string(&source_path)
             .with_context(|| format!("read source_sql for dataset {}", dataset.id))?;
 
         for (shape_id, order_by_id) in executable_combinations(dataset) {
             let fragment = match dataset.shape(&shape_id).and_then(|s| s.fragment.clone()) {
                 Some(path) => {
-                    let fragment_path = resolve_catalog_sql_path(catalog, &path);
+                    let fragment_path = resolve_catalog_sql_path(catalog, &path)?;
                     Some(
                         std::fs::read_to_string(&fragment_path)
                             .with_context(|| format!("read fragment {path}"))?,
@@ -762,7 +866,7 @@ async fn validate_dataset_runtime(
                 fragment.as_deref(),
             )?;
             let sql = composed.sql.trim().trim_end_matches(';').to_string();
-            fineract_pool
+            let statement = fineract_pool
                 .prepare(AssertSqlSafe(sql).into_sql_str())
                 .await
                 .map_err(|err| {
@@ -771,23 +875,46 @@ async fn validate_dataset_runtime(
                         dataset.id
                     )
                 })?;
+            let actual: Vec<String> = statement
+                .columns()
+                .iter()
+                .map(|column| column.name().to_string())
+                .collect();
+            let shape = dataset
+                .shape(&shape_id)
+                .expect("executable combination has declared shape");
+            let expected: Vec<String> = shape
+                .output_fields(dataset)
+                .iter()
+                .map(|field| field.name.clone())
+                .collect();
+            if actual != expected {
+                bail!(
+                    "dataset {} shape {shape_id} output columns {:?} do not match declared output_fields {:?}",
+                    dataset.id,
+                    actual,
+                    expected
+                );
+            }
         }
     }
     Ok(())
 }
 
-/// Resolves a repo-relative SQL path declared in a dataset, using the same
-/// convention as `resolve_sql_path` for queries.
-fn resolve_catalog_sql_path(catalog: &KnowledgeCatalog, relative: &str) -> PathBuf {
-    if relative.starts_with("queries/") {
-        catalog
-            .query_path
-            .parent()
-            .unwrap_or(&catalog.query_path)
-            .join(relative)
-    } else {
-        catalog.query_path.join(relative)
+/// Resolves an SQL path declared by an authored dataset. Dataset sources and
+/// fragments use the same traversal-safe query-root rule as legacy queries.
+fn resolve_catalog_sql_path(catalog: &KnowledgeCatalog, relative: &str) -> Result<PathBuf> {
+    let relative = relative.strip_prefix("queries/").unwrap_or(relative);
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("invalid dataset SQL path");
     }
+
+    Ok(catalog.query_path.join(path))
 }
 
 fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
@@ -910,6 +1037,13 @@ fn validate_placeholders(query: &QueryKnowledge, sql: &str) -> Result<()> {
                     parameter.name
                 );
             }
+            "decimal" if cast.as_deref() != Some("numeric") => {
+                bail!(
+                    "query {} parameter {} must use ${placeholder}::numeric",
+                    query.id,
+                    parameter.name
+                );
+            }
             "array_bigint" if cast.as_deref() != Some("bigint[]") => {
                 bail!(
                     "query {} parameter {} must use ${placeholder}::bigint[]",
@@ -1007,6 +1141,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolves_and_rejects_dataset_sql_paths() {
+        let catalog = KnowledgeCatalog {
+            root_path: PathBuf::from("/repo/knowledge"),
+            query_path: PathBuf::from("/repo/queries"),
+            data_areas: vec![],
+            domains: vec![],
+            schemas: vec![],
+            metrics: vec![],
+            capabilities: vec![],
+            queries: vec![],
+            policies: vec![],
+            responses: vec![],
+            parameter_inputs: vec![],
+            classification: Default::default(),
+            datasets: vec![],
+        };
+
+        assert_eq!(
+            resolve_catalog_sql_path(&catalog, "queries/savings/activity.source.sql").unwrap(),
+            PathBuf::from("/repo/queries/savings/activity.source.sql")
+        );
+        assert!(resolve_catalog_sql_path(&catalog, "../secret.sql").is_err());
+        assert!(resolve_catalog_sql_path(&catalog, "/tmp/secret.sql").is_err());
+    }
+
+    #[test]
     fn rejects_invalid_status() {
         let error = validate_status("capability", "bad", "wrong", CAPABILITY_STATUSES)
             .expect_err("invalid status should fail");
@@ -1060,6 +1220,7 @@ mod tests {
             status: "approved_mvp".into(),
             domain: "test".into(),
             query_id: "test.q".into(),
+            dataset_recipe: None,
             output_mode: "table".into(),
             request_shape: Default::default(),
             display_name: None,

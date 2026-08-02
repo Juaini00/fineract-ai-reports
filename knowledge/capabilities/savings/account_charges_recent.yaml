@@ -49,6 +49,9 @@ checks:
   rule: SQL must order by m_savings_account_charge.created_on_utc descending with id descending as a deterministic tie-breaker.
 - id: pii_gated
   rule: client identity fields must be redacted when caller lacks can_view_pii.
+dataset_recipe:
+  dataset_id: savings.account_charges
+  shape_id: recent_list
 parameters:
   office_ids:
     type: integer_array

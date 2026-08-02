@@ -51,6 +51,9 @@ checks:
     output only.
 - id: pii_fields_declared
   rule: client identity fields require can_view_pii.
+dataset_recipe:
+  dataset_id: savings.account_charges
+  shape_id: pending_clients
 parameters:
   office_ids:
     type: integer_array

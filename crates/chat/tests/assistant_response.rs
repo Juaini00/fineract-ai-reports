@@ -105,6 +105,7 @@ fn plan() -> ExecutionPlan {
         domain: "client".into(),
         capability: "client_name_lookup".into(),
         query_id: "client.name_lookup".into(),
+        dataset_selection: None,
         output_mode: "list".into(),
         params: json!({ "search": "Tony" }),
         retrieval_plan: RetrievalPlan::default(),

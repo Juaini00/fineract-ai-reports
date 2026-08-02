@@ -36,6 +36,9 @@ checks:
   rule: query output fields must not expose staff identity.
 - id: office_scope_required
   rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+dataset_recipe:
+  dataset_id: organization.office_summary
+  shape_id: summary
 parameters:
   office_ids:
     type: integer_array

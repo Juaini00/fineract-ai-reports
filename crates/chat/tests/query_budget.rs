@@ -118,6 +118,7 @@ fn plan(limit: i64) -> ExecutionPlan {
         domain: "savings".into(),
         capability: CAPABILITY_ID.into(),
         query_id: QUERY_ID.into(),
+        dataset_selection: None,
         output_mode: "top_n".into(),
         params: serde_json::json!({
             "from_date": "2020-01-01",

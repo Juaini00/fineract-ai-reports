@@ -1,0 +1,60 @@
+id: savings_account_activity_lookup
+status: approved_mvp
+domain: savings
+display_name: Savings Account Activity Lookup
+description: Find savings accounts for an exact client, product, and latest transaction amount, returning account IDs and non-reversed transaction counts.
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_transactions
+required_api_capability: savings_account_activity_lookup
+query_id: savings.account_activity_lookup
+metrics:
+  - savings.deposit_count
+output_mode: list
+request_shape:
+  operation: lookup
+  subject: savings_transaction
+  grouping: none
+  output: lookup
+  pii: client_identity
+examples:
+  - For client Nour Hashem with latest transaction amount 0.130000 on Current Account USD, return the savings account ID and transaction count.
+  - Find the savings account by customer, product, and latest transaction amount.
+guards:
+  require_office_scope: true
+checks:
+  - id: dataset_recipe_valid
+    rule: dataset recipe IDs, filters, and projection must resolve against the approved dataset.
+parameters:
+  search:
+    type: string
+    required: true
+  product_name:
+    type: string
+    required: true
+  latest_transaction_amount:
+    type: string
+    required: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+dataset_recipe:
+  dataset_id: savings.account_activity
+  shape_id: account_match
+  filters:
+    - filter_id: client_name
+      operator: eq
+      parameter: search
+    - filter_id: product_name
+      operator: eq
+      parameter: product_name
+    - filter_id: latest_transaction_amount
+      operator: eq
+      parameter: latest_transaction_amount
+  projection:
+    - savings_account_id
+    - transaction_count

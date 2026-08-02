@@ -77,6 +77,7 @@ mod tests {
             entities: vec![],
             temporal_hint: None,
             quantity_hint: None,
+            dataset_hints: None,
             candidates: vec![GatewayCandidate {
                 capability_id: "cap".into(),
                 confidence: 0.9,

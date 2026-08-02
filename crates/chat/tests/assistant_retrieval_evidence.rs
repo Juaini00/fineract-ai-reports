@@ -136,6 +136,7 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
             status: "approved_mvp".into(),
             domain: "savings".into(),
             query_id: "q".into(),
+            dataset_recipe: None,
             output_mode: "single".into(),
             request_shape: RequestShape::default(),
             display_name: Some("Savings deposit total".into()),

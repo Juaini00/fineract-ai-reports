@@ -1,0 +1,8 @@
+id: product_name
+parameters:
+  - product_name
+type: text
+label: Savings product name
+required: true
+validation:
+  max_length: 200

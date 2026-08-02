@@ -125,6 +125,14 @@ pub fn original_request_observations(
             facts.push((field, string_value(kind, value.clone())));
         }
     }
+    if let Some(amount) = intent.constraints.transaction_amount.as_ref()
+        && amount.parse::<rust_decimal::Decimal>().is_ok()
+    {
+        facts.push((
+            ConstraintField::TransactionAmount,
+            TypedFactValue::Decimal(amount.clone()),
+        ));
+    }
     if intent.domain != AssistantDomain::Unknown {
         facts.push((
             ConstraintField::Domain,

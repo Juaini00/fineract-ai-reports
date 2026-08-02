@@ -189,6 +189,7 @@ mod tests {
             status: "approved_mvp".into(),
             domain: "savings".into(),
             query_id: "cap.q".into(),
+            dataset_recipe: None,
             output_mode: "top_n".into(),
             request_shape: RequestShape::default(),
             display_name: None,
@@ -212,6 +213,7 @@ mod tests {
             entities: vec![],
             temporal_hint: None,
             quantity_hint: None,
+            dataset_hints: None,
             candidates: vec![GatewayCandidate {
                 capability_id: "cap".into(),
                 confidence: 0.9,

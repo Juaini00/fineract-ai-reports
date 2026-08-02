@@ -43,12 +43,36 @@ impl ResponseBuilder {
         tool_result: &ToolResult,
         catalog: &KnowledgeCatalog,
     ) -> AssistantResponse {
-        let fields = catalog
+        let dataset_fields = plan.dataset_selection.as_ref().and_then(|selection| {
+            catalog
+                .datasets
+                .iter()
+                .find(|dataset| dataset.id == selection.dataset_id)
+                .and_then(|dataset| {
+                    dataset.shape(&selection.shape_id).map(|shape| {
+                        shape
+                            .output_fields(dataset)
+                            .iter()
+                            .filter(|field| {
+                                field.core
+                                    || selection.projection.iter().any(|name| name == &field.name)
+                            })
+                            .map(|field| QueryOutputField {
+                                name: field.name.clone(),
+                                kind: field.kind.clone(),
+                                sensitivity: field.sensitivity,
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+        });
+        let query_fields = catalog
             .queries
             .iter()
             .find(|query| query.id == plan.query_id)
             .map(|query| query.output_fields.as_slice())
             .unwrap_or(&[]);
+        let fields = dataset_fields.as_deref().unwrap_or(query_fields);
         let rows = tool_result.rows.clone();
         let columns = fields
             .iter()
@@ -730,6 +754,7 @@ mod tests {
             domain: "client".into(),
             capability: "client_lookup".into(),
             query_id: "client.lookup".into(),
+            dataset_selection: None,
             output_mode: "list".into(),
             params: json!({}),
             retrieval_plan: RetrievalPlan::default(),

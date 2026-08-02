@@ -1,0 +1,50 @@
+id: savings.account_activity
+database: fineract
+source_sql: queries/datasets/savings/account_activity.source.sql
+tables:
+  - m_savings_account_transaction
+  - m_savings_account
+  - m_savings_product
+  - m_client
+filters:
+  - id: client_name
+    expr: client_display_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  - id: product_name
+    expr: product_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  - id: latest_transaction_amount
+    expr: latest_transaction_amount
+    type: decimal
+    operators: [eq]
+shapes:
+  - id: account_match
+    request_shape:
+      operation: lookup
+      subject: savings_transaction
+      grouping: none
+      output: lookup
+      pii: client_identity
+    fragment: queries/datasets/savings/account_activity.account_match.frag.sql
+    output_fields:
+      - name: savings_account_id
+        type: bigint
+        sensitivity: public_business
+        core: true
+      - name: transaction_count
+        type: bigint
+        sensitivity: public_business
+        core: true
+    parameters:
+      - name: office_ids
+        type: array_bigint
+        required: true
+        source: authorized_scope
+order_by: []
+output_fields: []
+parameters: []
+timeout_ms: 3000

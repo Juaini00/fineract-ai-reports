@@ -51,7 +51,7 @@ pub fn compose(
         );
     };
 
-    let mut placeholder = dataset.parameters.len();
+    let mut placeholder = shape.parameters(dataset).len();
     let mut predicates = String::new();
     let mut filter_binds = Vec::new();
     for filter in &dataset.filters {
@@ -64,8 +64,9 @@ pub fn compose(
                 &filter.expr,
                 *operator,
                 &filter.kind,
+                filter.case_insensitive,
                 placeholder,
-            ));
+            )?);
             filter_binds.push(FilterBind {
                 filter_id: filter.id.clone(),
                 operator: *operator,
@@ -91,8 +92,9 @@ pub fn compose(
         None => String::new(),
     };
 
-    let sql =
-        format!("WITH base AS (\n{source_sql}{predicates}\n)\n{fragment_sql}{order_by_clause}");
+    let sql = format!(
+        "WITH source AS (\n{source_sql}\n),\nbase AS (\n  SELECT *\n  FROM source\n  WHERE TRUE{predicates}\n)\n{fragment_sql}{order_by_clause}"
+    );
 
     Ok(ComposedSql { sql, filter_binds })
 }
@@ -101,14 +103,25 @@ pub fn compose(
 /// short-circuits, so the statement text is identical whether or not a filter
 /// is used. That property is what keeps the validator's cross product at
 /// `shapes x order_by` instead of `2^filters x shapes x order_by`.
-fn predicate(expr: &str, operator: FilterOperator, kind: &str, placeholder: usize) -> String {
-    let cast = match kind {
-        "date" => "::date",
-        "integer" => "::bigint",
-        "boolean" => "::bool",
-        _ => "::text",
+fn predicate(
+    expr: &str,
+    operator: FilterOperator,
+    kind: &str,
+    case_insensitive: bool,
+    placeholder: usize,
+) -> Result<String> {
+    let Some(cast) = filter_cast(kind) else {
+        bail!("unsupported dataset filter type {kind}");
     };
-    match operator {
+    if case_insensitive {
+        if kind != "string" || operator != FilterOperator::Eq {
+            bail!("case_insensitive filters require string equality");
+        }
+        return Ok(format!(
+            "\n    AND (${placeholder}{cast} IS NULL OR lower({expr}) = lower(${placeholder}{cast}))"
+        ));
+    }
+    Ok(match operator {
         FilterOperator::Between => format!(
             "\n  AND (${placeholder}{cast} IS NULL OR ${next}{cast} IS NULL OR {expr} BETWEEN ${placeholder} AND ${next})",
             next = placeholder + 1
@@ -117,6 +130,17 @@ fn predicate(expr: &str, operator: FilterOperator, kind: &str, placeholder: usiz
             "\n  AND (${placeholder}{cast} IS NULL OR {expr} {op} ${placeholder})",
             op = operator.as_sql()
         ),
+    })
+}
+
+fn filter_cast(kind: &str) -> Option<&'static str> {
+    match kind {
+        "date" => Some("::date"),
+        "integer" => Some("::bigint"),
+        "boolean" => Some("::bool"),
+        "string" => Some("::text"),
+        "decimal" => Some("::numeric"),
+        _ => None,
     }
 }
 
@@ -143,6 +167,8 @@ mod tests {
             },
             fragment: fragment.map(str::to_string),
             order_by: order_by.into_iter().map(str::to_string).collect(),
+            output_fields: Vec::new(),
+            parameters: Vec::new(),
         }
     }
 
@@ -203,7 +229,41 @@ mod tests {
 
         assert_eq!(
             composed.sql,
-            "WITH base AS (\nSELECT a FROM m_client c WHERE c.office_id = ANY($1::bigint[])\n)\nSELECT * FROM base\nORDER BY sac.created_on_utc DESC, sac.id DESC"
+            "WITH source AS (\nSELECT a FROM m_client c WHERE c.office_id = ANY($1::bigint[])\n),\nbase AS (\n  SELECT *\n  FROM source\n  WHERE TRUE\n)\nSELECT * FROM base\nORDER BY sac.created_on_utc DESC, sac.id DESC"
+        );
+    }
+
+    #[test]
+    fn applies_computed_and_case_insensitive_filters_outside_source() {
+        let filters = vec![FilterSlot {
+            id: "client_name".into(),
+            expr: "client_display_name".into(),
+            kind: "string".into(),
+            case_insensitive: true,
+            operators: vec![FilterOperator::Eq],
+        }];
+        let data = dataset(filters, vec![shape("lookup", Some("f"), Vec::new())]);
+
+        let composed = compose(
+            &data,
+            "lookup",
+            None,
+            "SELECT row_number() OVER () AS latest_rank, c.display_name AS client_display_name FROM m_client c WHERE c.office_id = ANY($1::bigint[])",
+            Some("SELECT * FROM base WHERE latest_rank = 1"),
+        )
+        .unwrap();
+
+        assert!(composed.sql.contains("WITH source AS"));
+        assert!(composed.sql.contains("FROM source"));
+        assert!(
+            composed
+                .sql
+                .contains("lower(client_display_name) = lower($2::text)")
+        );
+        assert!(
+            !composed
+                .sql
+                .contains("WHERE c.office_id = ANY($1::bigint[])\n    AND")
         );
     }
 
@@ -213,6 +273,7 @@ mod tests {
             id: "due_date".into(),
             expr: "sac.charge_due_date".into(),
             kind: "date".into(),
+            case_insensitive: false,
             operators: vec![FilterOperator::Eq, FilterOperator::Lt],
         }];
         let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
@@ -249,6 +310,7 @@ mod tests {
             id: "due_date".into(),
             expr: "sac.charge_due_date".into(),
             kind: "date".into(),
+            case_insensitive: false,
             operators: vec![FilterOperator::Between, FilterOperator::Eq],
         }];
         let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
@@ -275,6 +337,56 @@ mod tests {
         );
         assert_eq!(composed.filter_binds[0].placeholder, 2);
         assert_eq!(composed.filter_binds[1].placeholder, 4);
+    }
+
+    #[test]
+    fn rejects_unknown_filter_type_instead_of_defaulting_to_text() {
+        let filters = vec![FilterSlot {
+            id: "unknown".into(),
+            expr: "sac.charge_due_date".into(),
+            kind: "jsonb".into(),
+            case_insensitive: false,
+            operators: vec![FilterOperator::Eq],
+        }];
+        let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
+
+        let error = compose(
+            &data,
+            "list",
+            None,
+            "SELECT a FROM t WHERE x = $1",
+            Some("SELECT * FROM base"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("unsupported dataset filter type"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn decimal_filter_uses_numeric_cast() {
+        let filters = vec![FilterSlot {
+            id: "amount".into(),
+            expr: "t.amount".into(),
+            kind: "decimal".into(),
+            case_insensitive: false,
+            operators: vec![FilterOperator::Eq],
+        }];
+        let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
+
+        let composed = compose(
+            &data,
+            "list",
+            None,
+            "SELECT a FROM t WHERE x = $1",
+            Some("SELECT * FROM base"),
+        )
+        .unwrap();
+
+        assert!(composed.sql.contains("$2::numeric"));
     }
 
     #[test]
