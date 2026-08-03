@@ -2,6 +2,8 @@ mod guard;
 mod parameters;
 mod planning;
 
+pub(crate) use parameters::request_facts;
+
 use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
 use schemars::JsonSchema;

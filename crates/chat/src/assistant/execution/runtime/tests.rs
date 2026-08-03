@@ -1569,3 +1569,174 @@ async fn router_verdict_cannot_veto_retrieval() {
         );
     }
 }
+
+/// The sufficiency guard.
+///
+/// Production: "berikan saya 5 client yg ada pada <office>" was answered by a
+/// capability that had no user-supplied office parameter, so clients from all
+/// eight authorized offices came back and the job recorded
+/// `terminal_state: "completed"`. `reranker::RERANKER_SYSTEM` was given a rule
+/// against exactly that; a rule in a prompt is an instruction to a model, not a
+/// gate, so this drives the real graph instead.
+///
+/// The fake is permissive where the old one was hostile: its reranker half
+/// always selects `candidates[0]`, i.e. whatever retrieval ranked top. That is
+/// the model behaviour the prompt rule is supposed to prevent and cannot, so if
+/// an office-blind capability is still on the list, this test executes it.
+///
+/// The office is never spoken by the fake router — it carries no entities at
+/// all. It has to come from the deterministic extractor reading the user's own
+/// words, which is the standard `expressed_filters` requires.
+///
+/// Non-vacuity is asserted, not assumed: the same fake, same catalog and same
+/// question *without* an office must surface at least one capability that the
+/// catalog says cannot bind one, and that capability must be gone once the
+/// office is named. A capability id appears nowhere in this test — the parallel
+/// work adding a user-supplied office filter moves capabilities from one side
+/// of `capability_honours` to the other, and the assertion follows it.
+struct TopCandidateFakeLlm;
+
+#[async_trait]
+impl LlmClient for TopCandidateFakeLlm {
+    async fn structured_value(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _system: &str,
+        user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        let parsed = serde_json::from_str::<serde_json::Value>(user).unwrap_or(json!({}));
+        let value = match parsed["candidates"].as_array() {
+            Some(candidates) => json!({
+                "decision": "select",
+                "capability_id": candidates.first().map(|c| c["id"].clone()),
+                "confidence": 0.95,
+                "alternatives": [],
+                "reason": "top candidate"
+            }),
+            None => json!({
+                "intent": "report_request",
+                "domain": "client",
+                "request_shape": {
+                    "operation": "random_sample",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "list",
+                    "pii": "client_identity"
+                },
+                "language": "en",
+                "entities": [],
+                "constraints": {},
+                "context_reference": "none",
+                "confidence": 0.9,
+                "reason": "fake"
+            }),
+        };
+        Ok(LlmResponse {
+            value,
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+
+    async fn embed(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _text: &str,
+    ) -> Result<EmbeddingResponse> {
+        Ok(EmbeddingResponse {
+            vector: vec![1.0, 0.0],
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_named_office_cannot_be_answered_by_an_office_blind_capability() {
+    let catalog = Arc::new(runtime_test_catalog());
+    let llm = Arc::new(TopCandidateFakeLlm) as SharedLlmClient;
+
+    async fn run(
+        catalog: &Arc<KnowledgeCatalog>,
+        llm: &SharedLlmClient,
+        message: &str,
+    ) -> GraphRuntimeResult {
+        let router = SemanticRouter::new(llm.clone());
+        let mut context = empty_context();
+        // Mirrors chat's admin projection, so the auth boundary in
+        // `allowed_ids` is not what the assertion measures.
+        context.client_scope = json!({ "allow_all_capabilities": true });
+        AssistantGraphRuntime::run_with_router(
+            empty_memory(),
+            context,
+            Some(&router),
+            Some(llm),
+            None,
+            None,
+            Some(catalog),
+            None,
+            None,
+            message,
+        )
+        .await
+    }
+
+    fn candidate_ids(result: &GraphRuntimeResult) -> Vec<String> {
+        result
+            .memory
+            .retrieval_evidence
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["capability_id"].as_str().map(ToOwned::to_owned))
+            .collect()
+    }
+
+    let honours = |id: &str| {
+        crate::assistant::retrieval::capability_honours(&catalog, id, &ConstraintField::Office)
+    };
+
+    let control = run(&catalog, &llm, "give me 5 clients").await;
+    let control_ids = candidate_ids(&control);
+    let office_blind: Vec<String> = control_ids
+        .iter()
+        .filter(|id| !honours(id))
+        .cloned()
+        .collect();
+    assert!(
+        !office_blind.is_empty(),
+        "premise gone: retrieval for {control_ids:?} no longer offers any capability \
+         the catalog says cannot bind an office filter, so this test cannot observe a drop"
+    );
+
+    let scoped = run(&catalog, &llm, "give me 5 clients in Head Office").await;
+    let scoped_ids = candidate_ids(&scoped);
+    for id in &scoped_ids {
+        assert!(
+            honours(id),
+            "{id} reached the reranker for a question naming an office, but the \
+             catalog gives it no parameter an office can bind"
+        );
+    }
+    for id in &office_blind {
+        assert!(
+            !scoped_ids.contains(id),
+            "{id} survived the sufficiency gate: {scoped_ids:?}"
+        );
+    }
+    // The permissive fake selects candidates[0] unconditionally, so this is the
+    // capability that would have executed and returned unfiltered rows.
+    if let Some(selected) = scoped.memory.selected_capability.as_deref() {
+        assert!(
+            honours(selected),
+            "executed {selected} for a question naming an office it cannot filter by"
+        );
+    }
+}

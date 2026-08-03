@@ -244,7 +244,7 @@ pub(super) fn params_from_verified(
     ctx: Option<&EvaluationContext>,
 ) -> Result<Value> {
     let mut params = serde_json::Map::new();
-    let facts = request_facts(intent, deterministic_extraction);
+    let facts = request_facts(Some(intent), deterministic_extraction);
 
     for parameter in &query.parameters {
         if matches!(
@@ -275,8 +275,13 @@ pub(super) fn params_from_verified(
 /// A model-claimed date, limit, currency, transaction amount or person name is
 /// still discarded — those are the fields a hallucination silently answers the
 /// wrong question with, or returns another customer's data for.
-fn request_facts(
-    intent: &AssistantIntent,
+///
+/// `retrieval::sufficiency` reads the same map to decide whether a candidate
+/// capability can honour what the user asked for, so "what the user said" has
+/// exactly one definition in this crate; hence `intent` is optional here, since
+/// that caller runs on turns where no intent has been routed yet.
+pub(crate) fn request_facts(
+    intent: Option<&AssistantIntent>,
     extraction: Option<&DeterministicExtraction>,
 ) -> BTreeMap<ConstraintField, TypedFactValue> {
     let mut facts = BTreeMap::new();
@@ -315,6 +320,9 @@ fn request_facts(
     // on the intent and read by three ad-hoc lookups, so anything the router
     // named but the regex missed was simply lost. They fill only gaps: inserted
     // after the extractor, they never overwrite a verified fact.
+    let Some(intent) = intent else {
+        return facts;
+    };
     if let Some(ids) = &intent.constraints.product_ids {
         facts
             .entry(ConstraintField::ProductIds)

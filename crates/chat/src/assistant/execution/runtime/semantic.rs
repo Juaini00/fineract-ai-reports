@@ -342,6 +342,32 @@ pub(super) async fn complete_semantic_route(
                 Ok(evidence) => (evidence, None),
                 Err(error) => (Vec::new(), Some(error.to_string())),
             };
+            // The sufficiency gate. Retrieval ranks on similarity, and the
+            // reranker prompt merely *asks* the model not to pick a candidate
+            // that drops a filter the user named — which is how "5 clients in
+            // <office>" completed with clients from all eight authorized
+            // offices. A candidate that cannot bind a constraint the user
+            // clearly expressed is not a worse answer to this question, it is
+            // an answer to a different one, so it stops being a candidate here
+            // rather than being argued about in a prompt.
+            let evidence = match catalog {
+                Some(catalog) => {
+                    let extraction = memory
+                        .current_user_message_metadata
+                        .get("deterministic_extraction")
+                        .cloned()
+                        .and_then(|value| {
+                            serde_json::from_value::<DeterministicExtraction>(value).ok()
+                        });
+                    let expressed = crate::assistant::retrieval::expressed_filters(
+                        message,
+                        memory.intent.as_ref(),
+                        extraction.as_ref(),
+                    );
+                    crate::assistant::retrieval::drop_insufficient(catalog, &expressed, evidence)
+                }
+                None => evidence,
+            };
             tracing::info!(
                 target: "assistant::mapping",
                 evidence_count = evidence.len(),
