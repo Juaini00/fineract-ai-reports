@@ -271,16 +271,15 @@ fn enum_compatible<T: PartialEq>(request: &T, capability: &T, unknown: &T) -> bo
     request == unknown || request == capability
 }
 
+/// Issue 011: the router says `pii: none` for any question that does not *ask*
+/// for a person, but "list savings charges" inevitably returns client identity,
+/// so equality on this axis excluded every genuine candidate and
+/// `compatible_ids` came back empty on both reported requests. What a
+/// capability returns is gated by `policy::authorization`, not by retrieval —
+/// so only the opposite direction is a real mismatch: a request that needs
+/// identity cannot be served by a capability that returns none.
 fn pii_compatible(request: &RequestPii, capability: &RequestPii) -> bool {
-    matches!(request, RequestPii::Unknown)
-        || request == capability
-        || matches!(
-            (request, capability),
-            (
-                RequestPii::ClientIdentity,
-                RequestPii::ConditionalClientIdentity
-            )
-        )
+    !matches!(request, RequestPii::ClientIdentity) || !matches!(capability, RequestPii::None)
 }
 
 fn metric_compatible(plan: &RetrievalPlan, metrics: &[String]) -> bool {

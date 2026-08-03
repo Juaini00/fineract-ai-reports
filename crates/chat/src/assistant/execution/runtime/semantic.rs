@@ -366,6 +366,18 @@ pub(super) async fn complete_semantic_route(
                 target: "assistant::mapping",
                 evidence_count = evidence.len(),
                 evidence = ?evidence.iter().map(|e| (&e.capability_id, e.score)).collect::<Vec<_>>(),
+                // Issue 011 item 6: measurement before tuning. `score_gap` is
+                // top-1 minus top-2; `tied_at_top` counts candidates sharing
+                // the leader's score. A gap near zero with several tied means
+                // ranking was decided by the reranker alone, with no prior.
+                score_gap = evidence
+                    .first()
+                    .zip(evidence.get(1))
+                    .map(|(first, second)| first.score - second.score),
+                tied_at_top = evidence.first().map(|first| evidence
+                    .iter()
+                    .filter(|item| (item.score - first.score).abs() < f32::EPSILON)
+                    .count()),
                 warning = ?warning,
                 "retrieval evidence"
             );

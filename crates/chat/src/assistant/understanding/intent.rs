@@ -180,6 +180,10 @@ pub enum AssistantEntityType {
     Metric,
     CapabilityHint,
     AccountNumber,
+    /// A charge/fee type name (`m_charge.name`), e.g. "Weekly Charge". Without
+    /// its own slot the router forced these into `Metric`, where nothing binds
+    /// them, and the narrowing was dropped on the way to SQL (issue 011).
+    ChargeType,
     /// An entity kind the model invented (e.g. `transaction_amount`). Without
     /// this arm a single hallucinated entity type fails the whole router call
     /// and the user gets nothing, even though the other entities were fine.

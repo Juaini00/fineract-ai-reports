@@ -12,6 +12,21 @@ filters:
     type: string
     input_policy: exact_identifier
     operators: [eq]
+  - id: office_name
+    expr: office_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  - id: savings_product_name
+    expr: savings_product_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  - id: currency_code
+    expr: currency_code
+    type: string
+    case_insensitive: true
+    operators: [eq]
 shapes:
   - id: identity
     request_shape:

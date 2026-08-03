@@ -168,6 +168,34 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
                 shape.id
             );
         }
+        // Issue 011: a shape that returns a string column the request cannot
+        // narrow by is the silent-wrong-answer shape — the value the user wants
+        // to filter on is in the result and unreachable from the request. Force
+        // the author to either declare the filter or state the omission.
+        // Identity columns are excluded: they are gated by PII policy, not
+        // narrowed by the caller.
+        for field in fields.iter().filter(|field| {
+            field.kind == "string"
+                && !matches!(
+                    field.sensitivity,
+                    Sensitivity::Pii | Sensitivity::MaskedOutput
+                )
+        }) {
+            let filtered = dataset
+                .filters
+                .iter()
+                .any(|filter| filter.id == field.name || filter.expr == field.name);
+            if !filtered && !dataset.filters_exempt.contains(&field.name) {
+                bail!(
+                    "dataset {} shape {} returns narrowable column {} with no filter slot; \
+                     declare a filter or list it under filters_exempt",
+                    dataset.id,
+                    shape.id,
+                    field.name
+                );
+            }
+        }
+
         let mut parameter_names = HashSet::new();
         for parameter in shape.parameters(dataset) {
             if !parameter_names.insert(parameter.name.as_str()) {
@@ -194,6 +222,22 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
                 "dataset {} shape {} exact identifier requires authorized office_ids",
                 dataset.id,
                 shape.id
+            );
+        }
+    }
+
+    // An exemption that no longer names a returned column is stale permission:
+    // it silently keeps covering nothing while the column it excused moved on.
+    for name in &dataset.filters_exempt {
+        if !dataset
+            .shapes
+            .iter()
+            .flat_map(|shape| shape.output_fields(dataset))
+            .any(|field| field.name == *name)
+        {
+            bail!(
+                "dataset {} exempts unknown output field {name} from filtering",
+                dataset.id
             );
         }
     }
@@ -227,6 +271,7 @@ mod tests {
                 input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             }],
+            filters_exempt: Vec::new(),
             shapes: vec![ShapeOption {
                 id: "list".into(),
                 request_shape: RequestShape {
@@ -398,6 +443,62 @@ mod tests {
 
         dataset.output_fields[0].sensitivity = Sensitivity::NeverUse;
         assert!(validate_dataset(&dataset).is_err());
+    }
+
+    /// Issue 011: `savings.account_charges` returned `charge_name` while
+    /// declaring `filters: []`, so "charges of type weekly" was answered with
+    /// every charge. The gap must fail at catalog load, not at a user.
+    #[test]
+    fn rejects_a_narrowable_string_column_with_no_filter_slot() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "charge_name".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+            core: false,
+        });
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("charge_name"), "got: {error}");
+
+        // Either escape hatch closes it: a declared filter …
+        let mut filtered = dataset.clone();
+        filtered.filters.push(FilterSlot {
+            id: "charge_name".into(),
+            expr: "charge_name".into(),
+            kind: "string".into(),
+            case_insensitive: true,
+            input_policy: FilterInputPolicy::Ordinary,
+            operators: vec![FilterOperator::Eq],
+        });
+        assert!(validate_dataset(&filtered).is_ok());
+
+        // … or a stated exemption.
+        let mut exempt = dataset.clone();
+        exempt.filters_exempt = vec!["charge_name".into()];
+        assert!(validate_dataset(&exempt).is_ok());
+    }
+
+    #[test]
+    fn identity_columns_are_gated_by_pii_policy_not_by_filter_slots() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "client_display_name".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::Pii,
+            core: false,
+        });
+
+        assert!(validate_dataset(&dataset).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_exemption_that_names_no_returned_column() {
+        let mut dataset = valid();
+        dataset.filters_exempt = vec!["gone".into()];
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("gone"), "got: {error}");
     }
 
     #[test]

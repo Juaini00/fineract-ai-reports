@@ -53,6 +53,7 @@ mod tests {
             source_sql: "queries/test.sql".into(),
             tables: Vec::new(),
             filters: Vec::new(),
+            filters_exempt: Vec::new(),
             shapes,
             order_by: order_by
                 .into_iter()

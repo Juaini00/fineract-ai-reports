@@ -270,6 +270,7 @@ pub(super) fn params_from_verified(
     });
     let office = entity_value(intent, AssistantEntityType::Office);
     let product = entity_value(intent, AssistantEntityType::Product);
+    let charge_type = entity_value(intent, AssistantEntityType::ChargeType);
     let trusted = deterministic_extraction.map(|extraction| &extraction.constraints);
     let currency = trusted.and_then(|constraints| constraints.currency_code.as_deref());
 
@@ -306,6 +307,7 @@ pub(super) fn params_from_verified(
                 .and_then(|value| value.parse::<i64>().ok())
                 .map(|value| json!(value)),
             "product_name" => product.map(|value| json!(value)),
+            "charge_name" => charge_type.map(|value| json!(value)),
             "search" | "name" => person_name.or(office).or(product).map(|value| json!(value)),
             "office" | "office_name" => office.map(|value| json!(value)),
             "latest_transaction_amount" => trusted

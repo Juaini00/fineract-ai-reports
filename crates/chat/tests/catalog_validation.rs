@@ -11,6 +11,7 @@ use chat::assistant::execution::plan::{
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
+use chat::knowledge::dataset::compose::compose;
 use chat::knowledge::retrieval::RetrievalDocumentBuilder;
 use serde_json::json;
 use uuid::Uuid;
@@ -557,6 +558,77 @@ fn management_knowledge_detail_leaks_no_sql_for_derived_column_capability() {
             "detail leaked SQL substring `{line}`"
         );
     }
+}
+
+/// Issue 011: every filter slot added to a dataset shifts the placeholder
+/// numbering of every shape that dataset composes. A gap or a collision
+/// produces SQL that only fails once a real request binds it, so assert the
+/// composed statement uses exactly $1..$N with nothing missing and nothing
+/// past the end. Also dumps each statement for a manual PREPARE.
+#[test]
+fn every_authored_dataset_shape_composes_contiguous_placeholders() {
+    let workspace_root = workspace_root();
+    let catalog = load_catalog();
+
+    for dataset in &catalog.datasets {
+        let source = std::fs::read_to_string(workspace_root.join(&dataset.source_sql))
+            .unwrap_or_else(|err| panic!("read source {}: {err}", dataset.source_sql));
+        for (shape_id, order_by_id) in
+            chat::knowledge::dataset::plan::executable_combinations(dataset)
+        {
+            let shape = dataset.shape(&shape_id).expect("declared shape");
+            let fragment = shape.fragment.as_ref().map(|path| {
+                std::fs::read_to_string(workspace_root.join(path))
+                    .unwrap_or_else(|err| panic!("read fragment {path}: {err}"))
+            });
+            let composed = compose(
+                dataset,
+                &shape_id,
+                order_by_id.as_deref(),
+                &source,
+                fragment.as_deref(),
+            )
+            .unwrap_or_else(|err| panic!("compose {} {}: {err}", dataset.id, shape_id));
+
+            let mut used: Vec<usize> = composed
+                .sql
+                .match_indices('$')
+                .filter_map(|(at, _)| {
+                    composed.sql[at + 1..]
+                        .chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>()
+                        .parse()
+                        .ok()
+                })
+                .collect();
+            used.sort_unstable();
+            used.dedup();
+
+            let declared = shape.parameters(dataset).len();
+            let expected: Vec<usize> = (1..=declared + filter_placeholders(dataset)).collect();
+            assert_eq!(
+                used, expected,
+                "dataset {} shape {shape_id} placeholders are not contiguous",
+                dataset.id
+            );
+        }
+    }
+}
+
+/// One placeholder per declared filter operator, two for `between` — mirrors
+/// `compose`, so a divergence between them fails the assertion above.
+fn filter_placeholders(dataset: &chat::knowledge::dataset::model::DatasetKnowledge) -> usize {
+    use chat::knowledge::dataset::model::FilterOperator;
+    dataset
+        .filters
+        .iter()
+        .flat_map(|filter| filter.operators.iter())
+        .map(|operator| match operator {
+            FilterOperator::Between => 2,
+            _ => 1,
+        })
+        .sum()
 }
 
 fn load_catalog() -> chat::knowledge::model::KnowledgeCatalog {

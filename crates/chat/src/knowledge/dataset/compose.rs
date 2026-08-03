@@ -179,6 +179,7 @@ mod tests {
             source_sql: "queries/test.sql".into(),
             tables: vec!["m_client".into()],
             filters,
+            filters_exempt: Vec::new(),
             shapes,
             order_by: vec![OrderByOption {
                 id: "created_desc".into(),

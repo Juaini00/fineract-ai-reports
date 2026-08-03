@@ -21,6 +21,13 @@ pub struct DatasetKnowledge {
     #[serde(default)]
     pub filters: Vec<FilterSlot>,
 
+    /// Output field names that deliberately have no filter slot. Every string
+    /// column a shape returns is narrowable by definition, so authoring one
+    /// without a filter must be a stated decision rather than an oversight —
+    /// see `validate::validate_dataset`.
+    #[serde(default)]
+    pub filters_exempt: Vec<String>,
+
     pub shapes: Vec<ShapeOption>,
 
     #[serde(default)]

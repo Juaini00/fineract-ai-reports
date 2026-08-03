@@ -1,10 +1,10 @@
 # 011-dataset-filter-and-shape-coverage-gaps
 
-Status: active
+Status: resolved
 Severity: high
 Area: chat
 Created: 2026-08-03
-Resolved:
+Resolved: 2026-08-03
 
 ## Problem
 
@@ -200,6 +200,85 @@ Ordered by value-to-effort, not by dependency.
 
 Item 5 is the one that prevents recurrence. Items 1–2 fix the reported symptom;
 without 5, the next authored dataset reintroduces it.
+
+## Resolution
+
+All six items landed.
+
+**1. Filter slots declared.** `savings.account_charges` gained `charge_name`
+(string, case-insensitive, `eq`), `is_penalty` (boolean), `due_date` (date;
+`eq`/`lt`/`gte`), `currency_code` and `office_name`. `savings.accounts` gained
+`office_name`, `savings_product_name` and `currency_code`.
+`organization.office_summary` gained `office_name`.
+
+The office filters narrow *within* the caller's authorized offices; office scope
+itself is still bound from `authorized_scope` in the source SQL and stays
+non-overridable, exactly as the scope section required.
+
+**2. Aggregate shape added.** `savings.account_charges` shape `type_count`
+(`operation: summary` / `output: scalar`) returns `charge_count`,
+`savings_account_count` and `amount_outstanding_total`. Request A's question
+now has a capability whose shape actually matches it.
+
+**3. Entity vocabulary extended.** `AssistantEntityType::ChargeType`, plus a
+router rule stating that a named charge or fee is a `charge_type`, not a
+`metric`. `params_from_verified` binds it to the `charge_name` parameter, so an
+extracted charge type reaches SQL instead of dying in `metric`.
+
+**4. `pii` dimension fixed rather than retired.** `pii_compatible` no longer
+requires equality. The router's `pii: none` means "the user did not ask for a
+person", while listing charges unavoidably returns client identity — what a
+capability *returns* is gated by `policy::authorization`, not by retrieval. Only
+the opposite direction is a real mismatch (request needs identity, capability
+returns none). `compatible_ids` is no longer empty, and `shape_score` gains a
+real fifth dimension.
+
+**5. The gap is now a load-time error.** `validate_dataset` rejects any shape
+that returns a `string` output column with no matching filter slot, unless the
+dataset lists it under the new `filters_exempt`. Identity columns (`pii`,
+`masked_output`) are excluded — they are PII-gated, not caller-narrowed. A stale
+`filters_exempt` entry naming no returned column is also rejected. Only
+`currency_display_symbol` is exempt today, as a presentation label for the
+filterable `currency_code`.
+
+**6. Score saturation measured, not tuned.** The `retrieval evidence` span now
+carries `score_gap` (top-1 minus top-2) and `tied_at_top`. The scoring formula
+is unchanged — the dataset-model spec asks for the distribution first.
+
+### Capabilities added
+
+| Capability | Shape | Answers |
+| --- | --- | --- |
+| `savings_charge_count_by_type` | summary / scalar | "ada berapa saving weekly charge" (Request A) |
+| `savings_charges_by_type` | list | "semua charge dengan tipe weekly charge" (Request B) |
+| `organization_office_name_lookup` | summary | "apakah ada office dengan nama X" |
+
+Each has its own query contract, SQL file and `knowledge/parameters/` entry
+(`charge_name`, `office_name`), plus a new `savings.charge_count` metric.
+
+### Incidental correctness fix
+
+Splitting `organization.office_summary` into per-office source rows plus an
+aggregating fragment exposed a fan-out bug in the pre-existing
+`queries/organization/office_summary.sql`: `COUNT(o.id)` over a `LEFT JOIN
+m_staff` counted each office once per staff row. On the local Fineract data it
+reported **16 offices where 8 exist**. The composed dataset now reports 8;
+`active_staff_count` is unchanged at 12. The legacy SQL file is untouched and
+still serves its own query contract.
+
+### Verification
+
+- `validate_dataset` unit tests cover the guard, the identity exclusion and the
+  stale exemption.
+- `every_authored_dataset_shape_composes_contiguous_placeholders`
+  (`crates/chat/tests/catalog_validation.rs`) asserts every authored shape
+  composes to `$1..$N` with no gap — the failure mode every new filter slot
+  invites.
+- All 11 composed and standalone statements `PREPARE` cleanly against the local
+  Fineract database.
+- Executed against real data: `type_count` narrowed to `dormancy fee` returns
+  77 of 279 active charges, and returns all 279 with every filter bound NULL,
+  confirming both the bind and the null-passthrough path.
 
 ## Links
 
