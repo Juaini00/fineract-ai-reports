@@ -83,6 +83,7 @@ mod tests {
             data_areas: Vec::new(),
             metrics: Vec::new(),
             examples: Vec::new(),
+            continuation: false,
             required_parameters: Vec::new(),
             optional_parameters: Vec::new(),
             defaults: CapabilityDefaults::default(),

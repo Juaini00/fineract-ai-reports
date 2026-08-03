@@ -19,7 +19,9 @@ use domain::{extract_domain, extract_metric};
 pub(crate) use identifier::{SensitiveIdentifier, identifier_intake};
 use quantity::{extract_quantity, quantity_parts};
 use temporal::resolve_temporal;
-use token::{extract_currency, extract_person_name, words};
+use token::{
+    NamedEntityKind, extract_currency, extract_named_entities, extract_transaction_amount, words,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DeterministicExtraction {
@@ -287,11 +289,25 @@ pub(crate) fn extract_message_facts_at(
             confidence: Some(1.0),
         });
     }
-    if let Some(name) = extract_person_name(message) {
+    extraction.constraints.transaction_amount = extract_transaction_amount(message);
+    for (kind, value) in extract_named_entities(message) {
+        let entity_type = match kind {
+            NamedEntityKind::Person => AssistantEntityType::PersonName,
+            NamedEntityKind::Office => AssistantEntityType::Office,
+            NamedEntityKind::ChargeType => AssistantEntityType::ChargeType,
+            NamedEntityKind::Product => AssistantEntityType::Product,
+        };
+        if extraction
+            .entities
+            .iter()
+            .any(|existing| existing.entity_type == entity_type)
+        {
+            continue;
+        }
         extraction.entities.push(AssistantEntity {
-            entity_type: AssistantEntityType::PersonName,
-            value: name.clone(),
-            canonical: Some(name),
+            entity_type,
+            value: value.clone(),
+            canonical: Some(value),
             confidence: Some(1.0),
         });
     }

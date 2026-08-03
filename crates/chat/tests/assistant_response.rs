@@ -150,6 +150,7 @@ fn catalog() -> KnowledgeCatalog {
         }],
         policies: Vec::new(),
         responses: Vec::new(),
+        parameter_bindings: Default::default(),
         parameter_inputs: Vec::new(),
         classification: Default::default(),
         datasets: Vec::new(),

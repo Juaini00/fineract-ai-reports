@@ -181,6 +181,7 @@ mod tests {
                 data_areas: vec![],
                 metrics: vec![],
                 examples: vec![],
+                continuation: false,
                 required_parameters: vec![],
                 optional_parameters: vec![],
                 defaults: CapabilityDefaults {
@@ -195,6 +196,7 @@ mod tests {
             queries: vec![],
             policies: vec![],
             responses: vec![],
+            parameter_bindings: Default::default(),
             parameter_inputs: vec![],
             classification: ClassificationPolicy::default(),
             datasets: vec![],

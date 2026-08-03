@@ -78,6 +78,20 @@ fn catalog_rejects_parameter_input_overlap() {
     assert!(error.to_string().contains("covered more than once"));
 }
 
+/// A parameter with no declared binding source never gets filled: the planner
+/// reports `missing parameter <name>` on every turn while the clarification
+/// asks for something it cannot store. That has to be a load failure, not a
+/// mystery at runtime.
+#[test]
+fn catalog_rejects_query_parameter_with_no_declared_binding() {
+    let mut catalog = load_catalog();
+    catalog.parameter_bindings.remove("charge_name");
+
+    let error =
+        KnowledgeValidator::validate(&catalog).expect_err("unbound parameter must fail to load");
+    assert!(error.to_string().contains("parameter-bindings"));
+}
+
 #[test]
 fn catalog_rejects_capability_required_parameter_mismatch() {
     let mut catalog = load_catalog();

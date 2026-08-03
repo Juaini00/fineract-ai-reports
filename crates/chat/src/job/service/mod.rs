@@ -342,6 +342,7 @@ impl JobService {
             }
         };
         let mut submission = match validate_submission(
+            &self.catalog,
             &payload,
             &client,
             input.clarification_id,

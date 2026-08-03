@@ -422,3 +422,101 @@ fn payload_source_unknown_variant_deserialises_safely() {
         PayloadSource::CatalogDefault
     );
 }
+
+/// The named-entity recogniser is a heuristic feeding a trusted slot, so this
+/// pins both halves: what it must catch, and what it must refuse to call a
+/// person. A wrong `search` value silently returns another customer's data.
+#[test]
+fn named_entities_are_classified_by_what_they_name() {
+    let entity = |message: &str, kind: AssistantEntityType| {
+        extract_message_facts(message)
+            .entities
+            .into_iter()
+            .find(|e| e.entity_type == kind)
+            .map(|e| e.value)
+    };
+
+    // Multi-token names, and the Indonesian anchor the catalog's own example uses.
+    assert_eq!(
+        entity(
+            "ada gak nama Tony di client kita?",
+            AssistantEntityType::PersonName
+        ),
+        Some("Tony".into())
+    );
+    assert_eq!(
+        entity(
+            "How many savings accounts does John Doe have?",
+            AssistantEntityType::PersonName
+        ),
+        Some("John Doe".into())
+    );
+    assert_eq!(
+        entity(
+            "find client named Jonathan Doe",
+            AssistantEntityType::PersonName
+        ),
+        Some("Jonathan Doe".into())
+    );
+
+    // A capitalised phrase carrying a domain noun is that thing, never a person.
+    assert_eq!(
+        entity(
+            "Is there an office named Head Office?",
+            AssistantEntityType::Office
+        ),
+        Some("Head Office".into())
+    );
+    assert_eq!(
+        entity(
+            "Is there an office named Head Office?",
+            AssistantEntityType::PersonName
+        ),
+        None
+    );
+    assert_eq!(
+        entity(
+            "Show all charges of type Weekly Charge on savings accounts.",
+            AssistantEntityType::ChargeType
+        ),
+        Some("Weekly Charge".into())
+    );
+    assert_eq!(
+        entity(
+            "Show all charges of type Weekly Charge on savings accounts.",
+            AssistantEntityType::PersonName
+        ),
+        None
+    );
+
+    // A lone stray capital is not evidence of a name.
+    assert_eq!(
+        entity(
+            "return the savings account ID and transaction count",
+            AssistantEntityType::PersonName
+        ),
+        None
+    );
+    // Neither is the first word of the sentence.
+    assert_eq!(
+        entity("Show the top 10 clients", AssistantEntityType::PersonName),
+        None
+    );
+}
+
+#[test]
+fn transaction_amount_is_read_whole_and_only_when_anchored() {
+    assert_eq!(
+        extract_message_facts("with latest transaction amount 0.130000 on Current Account USD")
+            .constraints
+            .transaction_amount,
+        Some("0.130000".into())
+    );
+    // "top 10" is a limit, not an amount.
+    assert_eq!(
+        extract_message_facts("show top 10 clients")
+            .constraints
+            .transaction_amount,
+        None
+    );
+}

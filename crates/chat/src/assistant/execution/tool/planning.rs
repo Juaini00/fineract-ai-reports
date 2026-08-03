@@ -57,6 +57,7 @@ pub(super) fn plan_selected_capability_verified(
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
     let params = params_from_verified(
+        catalog,
         query,
         intent,
         deterministic_extraction,

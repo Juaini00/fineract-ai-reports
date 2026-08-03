@@ -76,7 +76,7 @@ fn extracts_dates_currency_products_and_limit() {
             parameter("from_date", true),
             parameter("to_date", true),
             parameter("currency_code", false),
-            parameter("product_id", false),
+            parameter("product_ids", false),
             parameter("limit", false),
         ],
         output_fields: Vec::new(),
@@ -85,6 +85,7 @@ fn extracts_dates_currency_products_and_limit() {
     let extraction =
         extract_message_facts("show top 5 savings in USD from 2026-01-01 to 2026-01-31");
     let params = params_from_verified(
+        &catalog(),
         &query,
         &AssistantIntent {
             intent: AssistantIntentKind::ReportRequest,
@@ -117,7 +118,7 @@ fn extracts_dates_currency_products_and_limit() {
     assert_eq!(params["from_date"], "2026-01-01");
     assert_eq!(params["to_date"], "2026-01-31");
     assert_eq!(params["currency_code"], "USD");
-    assert_eq!(params["product_id"], 7);
+    assert_eq!(params["product_ids"], serde_json::json!([7]));
     assert_eq!(params["limit"], 5);
 }
 
@@ -136,6 +137,7 @@ fn verified_quantity_overrides_missing_llm_quantity() {
     };
     let extraction = extract_message_facts("show top 10 clients");
     let params = params_from_verified(
+        &catalog(),
         &query,
         &intent_with_quantity(None),
         Some(&extraction),
@@ -161,6 +163,7 @@ fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
         timeout_ms: None,
     };
     let params = params_from_verified(
+        &catalog(),
         &query,
         &intent_with_quantity(Some(Quantity::TopN { value: 20 })),
         None,
@@ -190,7 +193,7 @@ fn hallucinated_optional_currency_is_omitted_without_verified_extraction() {
     let mut intent = intent_with_quantity(None);
     intent.constraints.currency_code = Some("USD".into());
 
-    let params = params_from_verified(&query, &intent, None, &[], None).unwrap();
+    let params = params_from_verified(&catalog(), &query, &intent, None, &[], None).unwrap();
 
     assert!(params.get("currency_code").is_none());
 }
@@ -247,7 +250,7 @@ fn hallucinated_required_search_rejected_without_trusted_entity() {
         canonical: None,
         confidence: None,
     });
-    let error = params_from_verified(&query, &intent, None, &[], None).unwrap_err();
+    let error = params_from_verified(&catalog(), &query, &intent, None, &[], None).unwrap_err();
 
     assert!(error.to_string().contains("missing parameter search"));
 }
@@ -267,6 +270,7 @@ fn trusted_named_tony_fills_search() {
     };
     let extraction = extract_message_facts("find client named Tony");
     let params = params_from_verified(
+        &catalog(),
         &query,
         &intent_with_quantity(None),
         Some(&extraction),
@@ -357,6 +361,7 @@ fn defaults_business_today_when_policy_declares_it() {
     };
 
     let params = params_from_verified(
+        &catalog(),
         &query,
         &intent_with_quantity(None),
         None,
@@ -401,6 +406,7 @@ fn unbounded_limit_is_clamped_to_hard_cap() {
     };
 
     let params = params_from_verified(
+        &catalog(),
         &query,
         &intent_with_quantity(None),
         None,
@@ -487,6 +493,7 @@ fn defaults_authorized_scope_when_policy_declares_it() {
     };
 
     let params = params_from_verified(
+        &catalog(),
         &query,
         &intent_with_quantity(None),
         None,
@@ -511,8 +518,15 @@ fn still_bails_when_no_policy_and_no_default() {
         output_fields: Vec::new(),
         timeout_ms: None,
     };
-    let error =
-        params_from_verified(&query, &intent_with_quantity(None), None, &[], None).unwrap_err();
+    let error = params_from_verified(
+        &catalog(),
+        &query,
+        &intent_with_quantity(None),
+        None,
+        &[],
+        None,
+    )
+    .unwrap_err();
 
     assert!(error.to_string().contains("missing parameter from_date"));
 }
@@ -540,6 +554,11 @@ fn every_approved_capability_can_execute_its_own_example() {
         .capabilities
         .iter()
         .filter(|c| c.status == "approved_mvp")
+        // A continuation is entered from a clarification the assistant itself
+        // raised, never from a first-turn message, so its example is a
+        // continuation phrasing and cannot bind the parameter the selection
+        // supplies. The catalog declares which capabilities those are.
+        .filter(|c| !c.continuation)
     {
         let Some(example) = capability.examples.first() else {
             unreachable.push(format!("{}: no examples declared", capability.id));
@@ -601,7 +620,7 @@ fn every_approved_capability_can_execute_its_own_example() {
         catalog
             .capabilities
             .iter()
-            .filter(|c| c.status == "approved_mvp")
+            .filter(|c| c.status == "approved_mvp" && !c.continuation)
             .count(),
         unreachable.join("\n  ")
     );
