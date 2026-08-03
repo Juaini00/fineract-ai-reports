@@ -110,6 +110,45 @@ capability_hint, account_number`. "weekly charge" is a value of
 The same gap will recur for any domain noun outside that list (charge type,
 transaction type, account status, staff, group/center).
 
+## Scope — what this issue does and does not cover
+
+The gap is the *mechanism*: a dataset that exists but cannot be narrowed or
+counted. It is not "every question the system cannot answer".
+
+**In scope.** Any narrowing or counting question against a dataset that already
+exists:
+
+- "apakah ada office dengan nama X" / "ada berapa office …" —
+  `organization.office_summary` declares `filters: []`, and neither
+  `office_list_basic` nor `organization_office_client_summary` accepts an office
+  name at all. Their only parameters are `office_ids` (sourced from
+  `authorized_scope`, `user_may_override: false`) and `limit`, so the system can
+  only list every office in scope. Note the office-scope parameter is an
+  authorization boundary and must stay non-overridable — narrowing by office
+  *name* therefore requires its own declared filter, not a relaxation of that
+  parameter.
+- "semua charge dengan tipe X", "charge jatuh tempo hari ini" — the reported case.
+- The same shape of question against `savings.accounts` and
+  `savings.account_activity` for any column they return but do not declare a
+  filter for.
+
+**Out of scope — tracked elsewhere or not a chat concern.**
+
+- **Client-domain filtering** (e.g. "client dengan office name X"). There is no
+  client dataset yet — `knowledge/datasets/` holds only `organization/` and
+  `savings/`. Client capabilities still run the legacy query path, so this is a
+  migration gap, not a filter gap. It belongs to the dataset-model rollout in
+  `docs/superpowers/specs/2026-07-31-dataset-model-design.md`, not here. Once a
+  client dataset exists, this issue's rules apply to it.
+- **Loan domain** — no capabilities or datasets exist. Tracked by
+  [008-loan-domain-analyst-capabilities](./008-loan-domain-analyst-capabilities.md).
+- **Audit** — not a chat domain. It is a management/compliance surface with
+  different authentication (`AuthenticatedManagementAdmin`) served by
+  `/management/audit`, and is not reachable through the assistant by design.
+
+The distinction that matters: this issue is about datasets that exist and cannot
+be asked properly. Making a domain exist at all is separate work.
+
 ## Expected behavior
 
 - A question that narrows by a value the dataset returns is either answerable or
