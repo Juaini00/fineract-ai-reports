@@ -119,13 +119,27 @@ pub enum AssistantIntentKind {
     #[default]
     Greeting,
     Help,
-    ReportRequest,
     DataLookup,
     ClarificationReply,
     FollowUp,
+    /// The only intent that terminates before retrieval runs. It is a safety
+    /// boundary, not a claim about what the catalog covers.
     UnsafeRequest,
+    /// The router's "this looks off-topic" hint. **Not** a terminal answer —
+    /// it lowers the catalog-match prior (`retrieval::engine::catalog_fallback`)
+    /// and lets the reranker, which sees real capability rows, decide.
+    ///
+    /// There is deliberately no `UnsupportedInDomain` sibling: "the approved
+    /// catalog does not cover this" is a claim only a stage holding the
+    /// catalog can make, and the router does not hold it. That verdict now
+    /// belongs solely to `RerankerVerdict::Unsupported`.
     OutOfDomain,
-    UnsupportedInDomain,
+    /// Also the landing place for any intent string outside this list
+    /// (`#[serde(other)]`, which serde requires on the last variant): an
+    /// intent the router cannot name must reach retrieval, never fail the job
+    /// and never become a rejection.
+    #[serde(other)]
+    ReportRequest,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

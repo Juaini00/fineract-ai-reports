@@ -28,7 +28,14 @@ Rules:\n\
 candidate clearly matches the query intent.\n\
 - decision=\"clarify\" with 2-4 alternative capability ids when several candidates \
 plausibly fit and the user should choose.\n\
-- decision=\"unsupported\" when no candidate matches the query semantically.\n\
+- decision=\"unsupported\" when no candidate matches the query semantically. You \
+are the only stage permitted to make that call — nothing upstream decides \
+coverage — so make it on the candidate ids, descriptions and examples in front \
+of you, never on a hunch about what the catalog contains.\n\
+- Never select or clarify with a candidate that answers a *different* question \
+than the one asked (a different subject, a different filter, or one that drops \
+a filter the user named). Answering an adjacent question is worse than \
+\"unsupported\".\n\
 - Confidence must reflect actual certainty, not retrieval-score arithmetic.\n\
 - Prefer specificity: \"total\" queries pick totals; \"top N\"/\"highest\"/\"largest\" \
 queries pick top_n variants; \"per month\"/\"monthly\" queries pick monthly variants; \

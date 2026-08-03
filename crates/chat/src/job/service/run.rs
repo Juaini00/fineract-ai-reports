@@ -206,7 +206,7 @@ impl JobService {
         });
         let router = runtime_llm
             .as_ref()
-            .map(|llm| SemanticRouter::new(llm.clone(), &self.catalog));
+            .map(|llm| SemanticRouter::new(llm.clone()));
         let catalog_version = if self.canonical_mode == CanonicalGatewayMode::Authoritative {
             self.knowledge
                 .latest_embedded_catalog()

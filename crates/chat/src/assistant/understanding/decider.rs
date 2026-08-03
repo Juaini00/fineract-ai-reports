@@ -28,19 +28,15 @@ pub fn decide(
     resolved: &ResolvedRequest,
     classification: DecideOutcome,
 ) -> DecisionOutcome {
-    // Sanitized rejection short-circuits everything else (spec §6 third bullet).
-    match extraction.intent_kind {
-        AssistantIntentKind::UnsafeRequest => {
-            return DecisionOutcome::Reject {
-                code: "unsafe_request",
-            };
-        }
-        AssistantIntentKind::UnsupportedInDomain => {
-            return DecisionOutcome::Reject {
-                code: "unsupported_in_domain",
-            };
-        }
-        _ => {}
+    // Sanitized rejection short-circuits everything else (spec §6 third
+    // bullet). `UnsafeRequest` is the only extraction verdict allowed to do
+    // so: it is a safety boundary. A "the catalog does not cover this"
+    // rejection can only come from `classification` below, which is the first
+    // thing here that has actually seen the catalog.
+    if extraction.intent_kind == AssistantIntentKind::UnsafeRequest {
+        return DecisionOutcome::Reject {
+            code: "unsafe_request",
+        };
     }
     if !resolved.unfilled_required.is_empty() {
         return DecisionOutcome::Clarify {
@@ -150,21 +146,21 @@ mod tests {
         ));
     }
 
+    /// Replaces `unsupported_in_domain_rejects`. That test asserted the
+    /// extraction stage could veto on coverage grounds; the variant it used no
+    /// longer exists, because the extractor never sees the catalog. The guard
+    /// is now the inverse: an "off-topic" extraction must NOT veto a
+    /// capability the classifier — which did see the catalog — matched.
     #[test]
-    fn unsupported_in_domain_rejects() {
+    fn out_of_domain_hint_does_not_veto_a_catalog_match() {
         let out = decide(
-            &extraction(AssistantIntentKind::UnsupportedInDomain),
+            &extraction(AssistantIntentKind::OutOfDomain),
             &resolved(vec![]),
             DecideOutcome::Match {
                 capability: "cap".into(),
             },
         );
-        assert!(matches!(
-            out,
-            DecisionOutcome::Reject {
-                code: "unsupported_in_domain"
-            }
-        ));
+        assert!(matches!(out, DecisionOutcome::Execute { .. }), "{out:?}");
     }
 
     #[test]

@@ -314,31 +314,11 @@ pub(super) async fn complete_semantic_route(
                         simple_intent_transitions(TerminalState::BlockedByPolicy, "unsafe_request"),
                     );
                 }
-                Some(AssistantIntentKind::OutOfDomain) => {
-                    return graph_result(
-                        memory,
-                        TerminalState::OutOfDomain,
-                        "out_of_domain",
-                        ResponseBuilder::out_of_domain(),
-                        context.recent_messages.len(),
-                        None,
-                        simple_intent_transitions(TerminalState::OutOfDomain, "out_of_domain"),
-                    );
-                }
-                Some(AssistantIntentKind::UnsupportedInDomain) => {
-                    return graph_result(
-                        memory,
-                        TerminalState::Unsupported,
-                        "unsupported_in_domain",
-                        ResponseBuilder::unsupported(),
-                        context.recent_messages.len(),
-                        None,
-                        simple_intent_transitions(
-                            TerminalState::Unsupported,
-                            "unsupported_in_domain",
-                        ),
-                    );
-                }
+                // Nothing else terminates here. `OutOfDomain` in particular is
+                // a hint that rides into the plan and lowers the prior in
+                // `catalog_fallback`; only the reranker, which sees real
+                // capability ids/descriptions/examples, may answer
+                // "unsupported".
                 _ => {}
             }
             tracing::info!(

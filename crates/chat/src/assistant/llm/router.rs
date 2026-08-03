@@ -1,17 +1,19 @@
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
-use crate::{
-    assistant::{AssistantIntent, ContextWindow, llm},
-    knowledge::model::KnowledgeCatalog,
-};
+use crate::assistant::{AssistantIntent, ContextWindow, llm};
 
 pub struct SemanticRouter {
     llm: llm::SharedLlmClient,
 }
 
 impl SemanticRouter {
-    pub fn new(llm: llm::SharedLlmClient, _catalog: &KnowledgeCatalog) -> Self {
+    /// Deliberately takes no `KnowledgeCatalog`. The router classifies the
+    /// message; it never decides coverage, so holding the catalog would only
+    /// tempt a stage that runs before retrieval into answering "no". The
+    /// parameter used to be accepted and discarded, which advertised a
+    /// capability this type does not have.
+    pub fn new(llm: llm::SharedLlmClient) -> Self {
         Self { llm }
     }
 
@@ -25,9 +27,9 @@ impl SemanticRouter {
             "rules": [
                 "Requests naming a metric to rank clients by (e.g. 'top N clients by savings accounts', '3 clients with most deposits', 'clients with highest balance') MUST use subject=client, operation=rank, output=ranking, grouping=none, pii=client_identity.",
                 "domain MUST match the primary subject of the request, not a noun that merely appears in the sentence. Example: 'top 3 clients by savings account count' → subject=client, domain=client (NOT savings).",
-                "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients') without a ranking metric are unsupported by the approved catalog — return intent=unsupported_in_domain instead of inventing a shape.",
+                "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients', 'give me 10 clients') are a real request shape: operation=random_sample (or list when the user asks for the newest/latest), subject=client, output=list. Never answer that the catalog does not cover something — you cannot see the catalog. Classify the request; retrieval and reranking decide coverage.",
                 "When a request_shape dimension is genuinely ambiguous set it to unknown rather than guessing.",
-                "request_shape.subject MUST be exactly one of: savings_transaction, savings_account, savings_account_charge, client, office, organization_hierarchy, product, unknown. Never invent a value outside this list. Use savings_account_charge for charges or fees applied to a savings account; use savings_account for a request framed around the account itself. The same rule applies to every other request_shape/domain/intent enum field: only emit values defined by the schema, defaulting to unknown/unsupported_in_domain rather than fabricating a new enum member.",
+                "request_shape.subject MUST be exactly one of: savings_transaction, savings_account, savings_account_charge, client, office, organization_hierarchy, product, unknown. Never invent a value outside this list. Use savings_account_charge for charges or fees applied to a savings account; use savings_account for a request framed around the account itself. The same rule applies to every other request_shape/domain/intent enum field: only emit values defined by the schema, defaulting to unknown rather than fabricating a new enum member.",
                 "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support.",
                 "When the user explicitly gives a transaction amount used to identify a transaction/account, copy it exactly as decimal text into constraints.transaction_amount; never round or convert it to floating point. Do NOT also emit it as an entity — an amount is a constraint, not an entity.",
                 "entities[].entity_type MUST be exactly one of: person_name, client_id, office, date_period, currency, product, metric, capability_hint, account_number, charge_type. Never invent a new entity kind. If a detail does not fit any of these, express it in constraints or omit it rather than inventing a type.",
@@ -131,25 +133,6 @@ mod tests {
         ]
     }
 
-    fn empty_catalog() -> KnowledgeCatalog {
-        KnowledgeCatalog {
-            root_path: Default::default(),
-            query_path: Default::default(),
-            data_areas: Vec::new(),
-            domains: Vec::new(),
-            schemas: Vec::new(),
-            metrics: Vec::new(),
-            capabilities: Vec::new(),
-            queries: Vec::new(),
-            policies: Vec::new(),
-            responses: Vec::new(),
-            parameter_bindings: Default::default(),
-            parameter_inputs: Vec::new(),
-            classification: Default::default(),
-            datasets: Vec::new(),
-        }
-    }
-
     fn empty_context() -> ContextWindow {
         ContextWindow {
             summary: None,
@@ -167,8 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_returns_structured_intent_without_keyword_fallback() {
-        let catalog = empty_catalog();
-        let router = SemanticRouter::new(Arc::new(FakeLlm), &catalog);
+        let router = SemanticRouter::new(Arc::new(FakeLlm));
         let intent = router.route("client list", &empty_context()).await.unwrap();
         assert_eq!(intent.intent, AssistantIntentKind::DataLookup);
         assert_eq!(intent.domain, AssistantDomain::Client);

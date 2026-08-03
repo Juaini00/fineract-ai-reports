@@ -9,7 +9,6 @@ use chat::assistant::{
     ContextWindow, ResponseBuilder, SemanticRouter,
     llm::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage},
 };
-use chat::knowledge::catalog::loader::KnowledgeLoader;
 use serde_json::json;
 
 #[derive(Debug, Deserialize)]
@@ -231,11 +230,7 @@ async fn offline_fake_resolver_selects_semantic_balance_option() {
 
 #[tokio::test]
 async fn offline_fake_router_meets_seed_accuracy_floor() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let catalog = KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
-        .load()
-        .expect("load catalog");
-    let router = SemanticRouter::new(Arc::new(GoldenFakeLlm), &catalog);
+    let router = SemanticRouter::new(Arc::new(GoldenFakeLlm));
     let rows = load_seed();
     let mut matches = 0usize;
     for row in &rows {

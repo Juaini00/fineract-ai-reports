@@ -40,20 +40,21 @@ impl RetrievalPlan {
             request_shape: intent.request_shape.clone(),
             entities: intent.entities.clone(),
             constraints: serde_json::to_value(&intent.constraints).unwrap_or_default(),
-            metadata_filters: domain_filter(&intent.domain),
+            // Deliberately empty. The router's one-word domain guess used to
+            // land here and `knowledge::index::repository` turned it into
+            // `AND metadata_json->>'domain' = $n`, so the whole vector arm was
+            // restricted to a domain nobody authorised — "which office has the
+            // highest savings balance?" guessed `savings` and thereby excluded
+            // `organization_office_savings_summary`, which declares
+            // `domain: organization`. Domain is now a score term
+            // (`retrieval::engine::domain_score`), not a WHERE clause.
+            // Callers with a genuine hard filter may still populate this map.
+            metadata_filters: Default::default(),
             allow_all_capabilities,
             allowed_capabilities,
             source_snippets: Vec::new(),
         }
     }
-}
-
-fn domain_filter(domain: &AssistantDomain) -> std::collections::BTreeMap<String, String> {
-    let mut filters = std::collections::BTreeMap::new();
-    if !matches!(domain, AssistantDomain::Unknown) {
-        filters.insert("domain".into(), format!("{:?}", domain).to_lowercase());
-    }
-    filters
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
