@@ -214,6 +214,21 @@ impl KnowledgeValidator {
                 );
             }
 
+            // A metric id with no definition file cannot be resolved, so the
+            // runtime metric guard compares against a name that means nothing
+            // and rejects the capability. Four such ids shipped undetected
+            // because nothing tied `metrics:` back to `knowledge/metrics/`.
+            for metric in &capability.metrics {
+                if catalog.resolve_metric_id(metric).is_none() {
+                    bail!(
+                        "capability {} references metric {} with no definition in knowledge/metrics \
+                         (declare it, or add it to an existing metric's aliases)",
+                        capability.id,
+                        metric
+                    );
+                }
+            }
+
             if capability.status == "approved_mvp" {
                 let query = catalog
                     .queries

@@ -1,0 +1,34 @@
+id: savings.account_count
+domain: savings
+status: approved_mvp
+description: Count of savings accounts, typically grouped per client or per office. Counts accounts, not transactions.
+aliases:
+  - savings.account.count
+  - savings_account_count
+  - most savings account
+  - number of savings account
+data_areas:
+  - savings_core
+source_table: m_savings_account
+source_columns:
+  - id
+  - client_id
+  - office_id
+  - product_id
+expression: COUNT(m_savings_account.id)
+filters:
+  - account owner office must be inside authorized office scope
+grouping_compatible:
+  - client_id
+  - office_id
+  - product_id
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_core data scope.
+  - id: counts_accounts_not_transactions
+    rule: this metric must never be used to answer a transaction-count question; use savings.transaction_count.
+  - id: owner_office_scope_required
+    rule: aggregation must enforce owner office scope.
+  - id: public_output_only
+    rule: metric sensitivity must remain public_business.

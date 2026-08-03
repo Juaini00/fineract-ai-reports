@@ -2,6 +2,16 @@ id: savings.deposit_amount
 domain: savings
 status: approved_mvp
 description: Sum of non-reversed savings deposit transaction amounts.
+# savings.deposit_total was a second id for this same measure; it is an alias,
+# not a distinct metric. The remaining entries are the surface forms the
+# deterministic extractor guesses from free text.
+aliases:
+  - savings.deposit_total
+  - deposit.volume
+  - savings.deposit.volume
+  - deposit_volume
+  - deposit volume
+  - deposited the most
 data_areas:
   - savings_transactions
 source_table: m_savings_account_transaction

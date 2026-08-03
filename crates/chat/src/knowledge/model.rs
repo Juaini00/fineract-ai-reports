@@ -23,6 +23,54 @@ pub struct KnowledgeCatalog {
     pub datasets: Vec<DatasetKnowledge>,
 }
 
+impl KnowledgeCatalog {
+    /// Resolve any spelling of a metric — canonical id, legacy id, or a
+    /// natural-language surface form — to the canonical id of the metric that
+    /// declares it.
+    ///
+    /// The alias list lives in `knowledge/metrics/*.yaml` beside the metric it
+    /// describes, so adding a spelling is a catalog edit. This replaces a
+    /// hand-written Rust match that had drifted far enough to normalize three
+    /// phrases onto metric ids no definition file declared, which made
+    /// `verify_capability_metric` reject the very capabilities those phrases
+    /// name.
+    pub fn resolve_metric_id(&self, raw: &str) -> Option<&str> {
+        let needle = normalize_metric_key(raw);
+        self.metrics
+            .iter()
+            .find(|metric| {
+                normalize_metric_key(&metric.id) == needle
+                    || metric_aliases(metric).any(|alias| normalize_metric_key(alias) == needle)
+            })
+            .map(|metric| metric.id.as_str())
+    }
+}
+
+/// Aliases ride in `GenericKnowledge::content` via `#[serde(flatten)]`, so no
+/// model change is needed to declare them.
+pub fn metric_aliases(metric: &GenericKnowledge) -> impl Iterator<Item = &str> {
+    metric
+        .content
+        .get("aliases")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+}
+
+/// Compare metric spellings without caring about `.` vs `_` vs spaces or case,
+/// so `savings.deposit_total`, `savings_deposit_total` and `deposit volume`
+/// all reduce to a comparable key.
+fn normalize_metric_key(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|character| match character {
+            '.' | '_' | '-' | ' ' => None,
+            other => Some(other.to_ascii_lowercase()),
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClassificationPolicy {
     pub min_gap: f32,

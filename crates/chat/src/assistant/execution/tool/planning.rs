@@ -46,7 +46,11 @@ pub(super) fn plan_selected_capability_verified(
         .iter()
         .find(|item| item.id == capability_id && item.status == "approved_mvp")
         .ok_or_else(|| anyhow::anyhow!("selected capability is not executable"))?;
-    verify_capability_metric(capability.metrics.as_slice(), deterministic_extraction)?;
+    verify_capability_metric(
+        catalog,
+        capability.metrics.as_slice(),
+        deterministic_extraction,
+    )?;
     let query = catalog
         .queries
         .iter()

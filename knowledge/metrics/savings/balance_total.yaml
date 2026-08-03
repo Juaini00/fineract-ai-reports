@@ -1,0 +1,38 @@
+id: savings.balance_total
+domain: savings
+status: approved_mvp
+description: Sum of current derived savings account balances across accounts. Snapshot aggregate, not date-bounded movement — distinct from savings.account_balance, which is the per-account value.
+# `aliases` is the catalog's own answer to "what else does a caller call this?".
+# It carries both legacy metric ids and the natural-language surface forms the
+# deterministic extractor guesses, so metric resolution reads one declaration
+# instead of a hand-written Rust table that silently drifts from this file.
+aliases:
+  - savings.balance
+  - savings_balance
+  - highest balance
+  - savings balance
+data_areas:
+  - savings_core
+source_table: m_savings_account
+source_columns:
+  - account_balance_derived
+  - currency_code
+  - office_id
+  - product_id
+expression: COALESCE(SUM(m_savings_account.account_balance_derived), 0)
+filters:
+  - account owner office must be inside authorized office scope
+grouping_compatible:
+  - currency_code
+  - office_id
+  - product_id
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_core data scope.
+  - id: snapshot_semantics_declared
+    rule: balance total must be treated as a current snapshot, not date-bounded transaction movement.
+  - id: owner_office_scope_required
+    rule: aggregation must enforce owner office scope.
+  - id: public_output_only
+    rule: metric sensitivity must remain public_business.

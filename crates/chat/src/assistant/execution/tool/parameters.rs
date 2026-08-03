@@ -67,15 +67,14 @@ pub(super) fn normalize_effective_parameters(
         .iter()
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
-    if let Some(TypedFactValue::Metric(metric)) = effective.values.get(&ConstraintField::Metric) {
-        let trusted = normalize_metric(metric);
-        if !capability
+    if let Some(TypedFactValue::Metric(metric)) = effective.values.get(&ConstraintField::Metric)
+        && let Some(requested) = catalog.resolve_metric_id(metric)
+        && !capability
             .metrics
             .iter()
-            .any(|item| normalize_metric(item) == trusted)
-        {
-            bail!("selected capability does not match requested metric {metric}");
-        }
+            .any(|item| catalog.resolve_metric_id(item) == Some(requested))
+    {
+        bail!("selected capability does not match requested metric {metric}");
     }
     validate_effective_date_range(effective)?;
     let mut params = serde_json::Map::new();
@@ -361,7 +360,18 @@ fn resolved_to_value(resolved: ResolvedValue) -> Value {
     }
 }
 
+/// Guard against executing a capability that measures something other than what
+/// the caller asked for — the failure mode where a weekly-charge count question
+/// was answered with a list of clients holding unpaid charges.
+///
+/// Resolution goes through the catalog's metric aliases rather than a local
+/// table. An extractor guess the catalog does not recognise at all is treated as
+/// no signal, not as a mismatch: the extractor is a substring heuristic, and
+/// letting it veto a capability the reranker chose on real evidence is how
+/// `savings_balance_summary` came to reject "what is the total savings balance
+/// right now?".
 pub(super) fn verify_capability_metric(
+    catalog: &KnowledgeCatalog,
     capability_metrics: &[String],
     deterministic_extraction: Option<&DeterministicExtraction>,
 ) -> Result<()> {
@@ -370,23 +380,16 @@ pub(super) fn verify_capability_metric(
     else {
         return Ok(());
     };
-    let trusted = normalize_metric(metric);
+    let Some(requested) = catalog.resolve_metric_id(metric) else {
+        return Ok(());
+    };
     if capability_metrics
         .iter()
-        .any(|metric| normalize_metric(metric) == trusted)
+        .any(|declared| catalog.resolve_metric_id(declared) == Some(requested))
     {
         Ok(())
     } else {
         bail!("selected capability does not match requested metric {metric}")
-    }
-}
-
-fn normalize_metric(metric: &str) -> String {
-    match metric.replace('_', ".").as_str() {
-        "savings.account.count" => "savings.account_count".into(),
-        "savings.balance" => "savings.balance_total".into(),
-        "deposit.volume" | "savings.deposit.volume" => "savings.deposit_total".into(),
-        other => other.into(),
     }
 }
 

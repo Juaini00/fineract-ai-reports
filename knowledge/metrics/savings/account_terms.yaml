@@ -1,0 +1,29 @@
+id: savings.account_terms
+domain: savings
+status: approved_mvp
+description: Savings account terms read from an exact account number — account-level and product-level interest settings and overdraft configuration, each reported from its own source without inference.
+data_areas:
+  - savings_core
+source_table: m_savings_account
+source_columns:
+  - id
+  - account_no
+  - nominal_annual_interest_rate
+  - allow_overdraft
+  - overdraft_limit
+  - product_id
+expression: m_savings_account terms resolved by exact account_no, with product defaults reported separately
+filters:
+  - account owner office must be inside authorized office scope
+  - account_no is matched by equality only and is never projected
+grouping_compatible: []
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_core data scope.
+  - id: filter_only_identifier
+    rule: account_no is filter-only — equality match, never returned in output.
+  - id: no_inferred_terms
+    rule: account-level and product-level interest must be reported from their own sources, never inferred from one another.
+  - id: owner_office_scope_required
+    rule: resolution must enforce owner office scope.
