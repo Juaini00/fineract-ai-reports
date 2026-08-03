@@ -80,7 +80,10 @@ pub(super) fn normalize_effective_parameters(
     validate_effective_date_range(effective)?;
     let mut params = serde_json::Map::new();
     for parameter in &query.parameters {
-        if parameter.source.as_deref() == Some("authorized_scope") {
+        if matches!(
+            parameter.source.as_deref(),
+            Some("authorized_scope" | "transient_sensitive_input")
+        ) {
             continue;
         }
         let value = effective_parameter(effective, &parameter.name)
@@ -160,6 +163,10 @@ fn effective_parameter(effective: &EffectiveConstraints, name: &str) -> Option<V
                     .and_then(|v| v.parse().ok())
                     .map(|id: i64| json!(id))
             }),
+        "client_id" => match value(ConstraintField::ClientId) {
+            Some(TypedFactValue::ClientId(id)) => Some(json!(id)),
+            _ => None,
+        },
         "product_name" => typed_string(value(ConstraintField::Product)).map(Value::String),
         "search" | "name" => [
             ConstraintField::PersonName,
@@ -213,13 +220,20 @@ pub(super) fn validate_snapshot_parameters(query: &QueryKnowledge, params: &Valu
         .ok_or_else(|| anyhow::anyhow!("snapshot parameters must be an object"))?;
     for name in params.keys() {
         if !query.parameters.iter().any(|parameter| {
-            parameter.name == *name && parameter.source.as_deref() != Some("authorized_scope")
+            parameter.name == *name
+                && !matches!(
+                    parameter.source.as_deref(),
+                    Some("authorized_scope" | "transient_sensitive_input")
+                )
         }) {
             bail!("snapshot contains unexpected parameter {name}");
         }
     }
     for parameter in &query.parameters {
-        if parameter.source.as_deref() == Some("authorized_scope") {
+        if matches!(
+            parameter.source.as_deref(),
+            Some("authorized_scope" | "transient_sensitive_input")
+        ) {
             continue;
         }
         let Some(value) = params.get(&parameter.name) else {
@@ -260,7 +274,10 @@ pub(super) fn params_from_verified(
     let currency = trusted.and_then(|constraints| constraints.currency_code.as_deref());
 
     for parameter in &query.parameters {
-        if parameter.source.as_deref() == Some("authorized_scope") {
+        if matches!(
+            parameter.source.as_deref(),
+            Some("authorized_scope" | "transient_sensitive_input")
+        ) {
             continue;
         }
         let value = match parameter.name.as_str() {
@@ -285,6 +302,9 @@ pub(super) fn params_from_verified(
                         .and_then(|value| value.parse::<i64>().ok())
                         .map(|value| json!(value))
                 }),
+            "client_id" => entity_value(intent, AssistantEntityType::ClientId)
+                .and_then(|value| value.parse::<i64>().ok())
+                .map(|value| json!(value)),
             "product_name" => product.map(|value| json!(value)),
             "search" | "name" => person_name.or(office).or(product).map(|value| json!(value)),
             "office" | "office_name" => office.map(|value| json!(value)),

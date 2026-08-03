@@ -468,11 +468,13 @@ fn every_fully_defaulted_capability_plans_without_asking() {
             .iter()
             .find(|q| q.id == capability.query_id)
             .unwrap();
-        for parameter in query
-            .parameters
-            .iter()
-            .filter(|p| p.required && p.source.as_deref() != Some("authorized_scope"))
-        {
+        for parameter in query.parameters.iter().filter(|p| {
+            p.required
+                && !matches!(
+                    p.source.as_deref(),
+                    Some("authorized_scope" | "transient_sensitive_input")
+                )
+        }) {
             assert!(
                 plan.params.get(&parameter.name).is_some(),
                 "capability {} left required parameter {} unfilled — it would ask",

@@ -297,6 +297,9 @@ pub struct QueryParameter {
 pub enum Sensitivity {
     PublicBusiness,
     Pii,
+    FilterOnly,
+    MaskedOutput,
+    NeverUse,
 }
 
 impl Sensitivity {
@@ -304,6 +307,9 @@ impl Sensitivity {
         match self {
             Self::PublicBusiness => "public_business",
             Self::Pii => "pii",
+            Self::FilterOnly => "filter_only",
+            Self::MaskedOutput => "masked_output",
+            Self::NeverUse => "never_use",
         }
     }
 }

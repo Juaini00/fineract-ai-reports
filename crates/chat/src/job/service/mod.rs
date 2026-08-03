@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::assistant::execution::runtime::CanonicalRuntimeContext;
 use crate::assistant::llm::planner_client::LlmPlannerClient;
 use crate::assistant::temporal::BusinessDateProvider;
+use crate::assistant::understanding::extraction::identifier_intake;
 use crate::assistant::{
     AssistantGraphRuntime, AssistantGraphTopology, CanonicalStateRepository, ContextBuilder,
     ContextWindowPolicy, DeterministicExtraction, EffectiveConstraints, ExtractionProvenance,
@@ -82,6 +83,38 @@ pub struct JobService {
 }
 
 impl JobService {
+    const IDENTIFIER_LOOKUP_LIMIT: i64 = 10;
+    const IDENTIFIER_LOOKUP_WINDOW_SECONDS: usize = 60;
+
+    async fn enforce_identifier_lookup_limit(&self, user_id: Uuid) -> Result<()> {
+        let client = self
+            .redis
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identifier_lookup_rate_limit_unavailable"))?;
+        let mut connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|_| anyhow::anyhow!("identifier_lookup_rate_limit_unavailable"))?;
+        let key = format!("chat:identifier_lookup:{user_id}");
+        let attempts: i64 = redis::cmd("INCR")
+            .arg(&key)
+            .query_async(&mut connection)
+            .await
+            .map_err(|_| anyhow::anyhow!("identifier_lookup_rate_limit_unavailable"))?;
+        if attempts == 1 {
+            let _: bool = redis::cmd("EXPIRE")
+                .arg(&key)
+                .arg(Self::IDENTIFIER_LOOKUP_WINDOW_SECONDS)
+                .query_async(&mut connection)
+                .await
+                .map_err(|_| anyhow::anyhow!("identifier_lookup_rate_limit_unavailable"))?;
+        }
+        if attempts > Self::IDENTIFIER_LOOKUP_LIMIT {
+            anyhow::bail!("identifier_lookup_rate_limited");
+        }
+        Ok(())
+    }
+
     pub fn new(
         jobs: JobRepository,
         messages: MessageRepository,
@@ -148,12 +181,16 @@ impl JobService {
     pub async fn create(&self, input: CreateChatJobInput) -> Result<Option<CreatedChatJob>> {
         let mut client = input.client;
         project_admin_principal(&mut client, &self.catalog, &self.fineract_pool).await?;
+        let (message, sensitive_identifier) = identifier_intake(&input.message).into_parts();
+        if sensitive_identifier.is_some() {
+            self.enforce_identifier_lookup_limit(client.user_id).await?;
+        }
         let Some(created) = self
             .jobs
             .create(
                 client.user_id,
                 input.session_id,
-                input.message.clone(),
+                message.clone(),
                 serde_json::to_value(&client)?,
                 json!({ "runtime": "semantic_assistant_graph" }),
                 json!({}),
@@ -185,7 +222,15 @@ impl JobService {
         let service = self.clone();
         let session_id = created.session_id;
         let job_id = created.job_id;
-        let message = input.message;
+        let runtime_input = RuntimeUserInput {
+            message: message.clone(),
+            source_message: message,
+            sensitive_identifier,
+            selected_option_id: None,
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        };
         let canonical_turn = CanonicalTurn {
             message_id: created.user_message_id,
             observed_at: job_created_at,
@@ -198,7 +243,7 @@ impl JobService {
                     session_id,
                     job_id,
                     &client,
-                    message.as_str().into(),
+                    runtime_input,
                     canonical_turn,
                 )
                 .await;
@@ -296,7 +341,7 @@ impl JobService {
                 is_missing_execution_parameters: false,
             }
         };
-        let submission = match validate_submission(
+        let mut submission = match validate_submission(
             &payload,
             &client,
             input.clarification_id,
@@ -308,6 +353,15 @@ impl JobService {
             Ok(submission) => submission,
             Err(error) => return Ok(RespondToChatJobOutcome::Validation(error.fields)),
         };
+        let intake = identifier_intake(&submission.source_message);
+        let sensitive_identifier = intake.sensitive_identifier().cloned();
+        if sensitive_identifier.is_some() {
+            self.enforce_identifier_lookup_limit(client.user_id).await?;
+        }
+        submission.source_message = intake.semantic_message().to_owned();
+        submission.display_message = identifier_intake(&submission.display_message)
+            .semantic_message()
+            .to_owned();
         let outcome = self
             .jobs
             .respond(input.job_id, client.user_id, submission.clone())
@@ -336,6 +390,7 @@ impl JobService {
         let runtime_input = RuntimeUserInput {
             message: submission.display_message,
             source_message: message.content.clone(),
+            sensitive_identifier,
             selected_option_id: submission.selected_option_id,
             clarification_id: submission.clarification_id,
             clarification_revision: submission.clarification_revision,

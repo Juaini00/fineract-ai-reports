@@ -12,6 +12,7 @@ pub const CLARIFICATION_VERSION_1: u8 = 1;
 pub enum ClarificationKind {
     #[default]
     SelectOption,
+    SelectEntity,
     CollectFields,
     FreeText,
 }
@@ -86,7 +87,9 @@ pub struct ClarificationView {
 impl ClarificationView {
     pub fn validate(&self) -> Result<(), &'static str> {
         match self.kind {
-            ClarificationKind::SelectOption if self.options.is_empty() => {
+            ClarificationKind::SelectOption | ClarificationKind::SelectEntity
+                if self.options.is_empty() =>
+            {
                 Err("select_option clarifications require at least one option")
             }
             ClarificationKind::CollectFields if self.fields.is_empty() => {

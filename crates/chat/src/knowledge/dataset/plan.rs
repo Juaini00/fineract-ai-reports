@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn filters_do_not_multiply_the_combination_count() {
-        use crate::knowledge::dataset::model::{FilterOperator, FilterSlot};
+        use crate::knowledge::dataset::model::{FilterInputPolicy, FilterOperator, FilterSlot};
 
         let mut data = dataset(vec![shape("list", Some("f"), vec!["a"])], vec!["a"]);
         data.filters = vec![
@@ -107,6 +107,7 @@ mod tests {
                 expr: "t.due_date".into(),
                 kind: "date".into(),
                 case_insensitive: false,
+                input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq, FilterOperator::Lt],
             },
             FilterSlot {
@@ -114,6 +115,7 @@ mod tests {
                 expr: "t.is_paid".into(),
                 kind: "boolean".into(),
                 case_insensitive: false,
+                input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             },
         ];

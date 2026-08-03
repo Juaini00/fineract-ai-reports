@@ -96,6 +96,17 @@ pub async fn execute_plan(
     policy: &PolicyDecision,
     limits: ExecutionLimits,
 ) -> Result<Value> {
+    execute_plan_with_sensitive(pool, catalog, plan, policy, limits, None).await
+}
+
+pub(crate) async fn execute_plan_with_sensitive(
+    pool: &PgPool,
+    catalog: &KnowledgeCatalog,
+    plan: &ExecutionPlan,
+    policy: &PolicyDecision,
+    limits: ExecutionLimits,
+    sensitive_identifier: Option<&crate::assistant::understanding::extraction::SensitiveIdentifier>,
+) -> Result<Value> {
     if policy.status != PolicyDecisionStatus::Allowed {
         bail!(
             "policy blocked execution: {}",
@@ -141,6 +152,9 @@ pub async fn execute_plan(
 
     let mut sql_query = sqlx::query(AssertSqlSafe(sql).into_sql_str());
     for parameter in &parameters {
+        if parameter.source.as_deref() == Some("transient_sensitive_input") {
+            continue;
+        }
         match parameter.kind.as_str() {
             "date" => sql_query = sql_query.bind(date_param(plan, parameter)?),
             "integer" => {
@@ -169,7 +183,7 @@ pub async fn execute_plan(
             .iter()
             .find(|dataset| dataset.id == selection.dataset_id)
             .context("dataset selection not found in catalog")?;
-        for bind in compose_dataset_binds(dataset, selection)? {
+        for bind in compose_dataset_binds(dataset, selection, sensitive_identifier)? {
             sql_query = bind_dataset_value(sql_query, &bind)?;
         }
     }
@@ -301,6 +315,7 @@ struct DatasetBindValue {
 fn compose_dataset_binds(
     dataset: &crate::knowledge::dataset::model::DatasetKnowledge,
     selection: &crate::knowledge::dataset::model::DatasetSelection,
+    sensitive_identifier: Option<&crate::assistant::understanding::extraction::SensitiveIdentifier>,
 ) -> Result<Vec<DatasetBindValue>> {
     let mut binds = Vec::new();
     for slot in &dataset.filters {
@@ -309,6 +324,19 @@ fn compose_dataset_binds(
                 .filters
                 .iter()
                 .find(|filter| filter.filter_id == slot.id && filter.operator == *operator);
+            let sensitive_value = (slot.input_policy
+                == crate::knowledge::dataset::model::FilterInputPolicy::ExactIdentifier)
+                .then(|| {
+                    sensitive_identifier
+                        .map(|identifier| Value::String(identifier.expose().to_owned()))
+                })
+                .flatten();
+            if slot.input_policy
+                == crate::knowledge::dataset::model::FilterInputPolicy::ExactIdentifier
+                && sensitive_value.is_none()
+            {
+                bail!("missing transient sensitive identifier");
+            }
             if *operator == FilterOperator::Between {
                 let values = selected.and_then(|filter| filter.value.as_array());
                 for index in 0..2 {
@@ -320,7 +348,9 @@ fn compose_dataset_binds(
             } else {
                 binds.push(DatasetBindValue {
                     kind: slot.kind.clone(),
-                    value: selected.map(|filter| filter.value.clone()),
+                    value: sensitive_value
+                        .clone()
+                        .or_else(|| selected.map(|filter| filter.value.clone())),
                 });
             }
         }

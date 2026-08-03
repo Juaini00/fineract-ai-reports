@@ -151,7 +151,7 @@ mod tests {
         RequestGrouping, RequestOperation, RequestOutput, RequestPii, RequestShape, RequestSubject,
     };
     use crate::knowledge::dataset::model::{
-        DatasetKnowledge, FilterOperator, FilterSlot, OrderByOption, ShapeOption,
+        DatasetKnowledge, FilterInputPolicy, FilterOperator, FilterSlot, OrderByOption, ShapeOption,
     };
     use crate::knowledge::model::QueryParameter;
 
@@ -240,6 +240,7 @@ mod tests {
             expr: "client_display_name".into(),
             kind: "string".into(),
             case_insensitive: true,
+            input_policy: FilterInputPolicy::Ordinary,
             operators: vec![FilterOperator::Eq],
         }];
         let data = dataset(filters, vec![shape("lookup", Some("f"), Vec::new())]);
@@ -274,6 +275,7 @@ mod tests {
             expr: "sac.charge_due_date".into(),
             kind: "date".into(),
             case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
             operators: vec![FilterOperator::Eq, FilterOperator::Lt],
         }];
         let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
@@ -311,6 +313,7 @@ mod tests {
             expr: "sac.charge_due_date".into(),
             kind: "date".into(),
             case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
             operators: vec![FilterOperator::Between, FilterOperator::Eq],
         }];
         let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
@@ -346,6 +349,7 @@ mod tests {
             expr: "sac.charge_due_date".into(),
             kind: "jsonb".into(),
             case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
             operators: vec![FilterOperator::Eq],
         }];
         let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
@@ -373,6 +377,7 @@ mod tests {
             expr: "t.amount".into(),
             kind: "decimal".into(),
             case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
             operators: vec![FilterOperator::Eq],
         }];
         let data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
