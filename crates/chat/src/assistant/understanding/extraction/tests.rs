@@ -260,6 +260,62 @@ fn temporal_validates_dates_ranges_and_counts() {
 }
 
 #[test]
+fn month_name_ranges_resolve_inclusively_in_both_languages() {
+    let instant = reference("2026-07-24T12:00:00Z");
+    let business_today = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+    let english = extract_message_facts_at(
+        "Monthly deposit totals from January to September 2026.",
+        instant,
+        business_today,
+        366,
+    );
+    assert_eq!(english.constraints.from_date.as_deref(), Some("2026-01-01"));
+    assert_eq!(english.constraints.to_date.as_deref(), Some("2026-09-30"));
+
+    // No year stated: falls back to the business year, not to a default range.
+    let indonesian = extract_message_facts_at(
+        "Berapa setoran tabungan per bulan dari Januari sampai September.",
+        instant,
+        business_today,
+        366,
+    );
+    assert_eq!(
+        indonesian.constraints.from_date.as_deref(),
+        Some("2026-01-01")
+    );
+    assert_eq!(
+        indonesian.constraints.to_date.as_deref(),
+        Some("2026-09-30")
+    );
+
+    // Leap February ends on the 29th.
+    let leap = extract_message_facts_at(
+        "from February 2024 to February 2024",
+        instant,
+        business_today,
+        366,
+    );
+    assert_eq!(leap.constraints.to_date.as_deref(), Some("2024-02-29"));
+
+    // Beyond the capability guard: refused, never truncated or defaulted.
+    let too_long = extract_message_facts_at(
+        "from January 2025 to December 2026",
+        instant,
+        business_today,
+        366,
+    );
+    assert_eq!(
+        too_long.temporal_error.map(|error| error.code).as_deref(),
+        Some("temporal_range_too_large")
+    );
+    assert!(
+        extract_message_facts_at("from November to February", instant, business_today, 366)
+            .temporal_error
+            .is_some()
+    );
+}
+
+#[test]
 fn relative_expressions_derive_from_business_date_both_languages() {
     let wall = reference("2026-07-25T02:00:00Z");
     let business_today = NaiveDate::from_ymd_opt(2026, 7, 23).unwrap();
