@@ -1,0 +1,9 @@
+id: account_number
+parameters:
+  - account_number
+type: text
+label: Savings account number
+help_text: Enter the exact savings account number.
+required: true
+validation:
+  max_length: 100

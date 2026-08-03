@@ -191,11 +191,13 @@ fn required_inputs<'a>(
     inputs: &'a [ParameterInputKnowledge],
 ) -> Vec<&'a ParameterInputKnowledge> {
     let mut result = Vec::new();
-    for parameter in query
-        .parameters
-        .iter()
-        .filter(|p| p.required && p.source.as_deref() != Some("authorized_scope"))
-    {
+    for parameter in query.parameters.iter().filter(|p| {
+        p.required
+            && !matches!(
+                p.source.as_deref(),
+                Some("authorized_scope" | "transient_sensitive_input")
+            )
+    }) {
         if let Some(input) = inputs
             .iter()
             .find(|input| input.parameters.iter().any(|name| name == &parameter.name))

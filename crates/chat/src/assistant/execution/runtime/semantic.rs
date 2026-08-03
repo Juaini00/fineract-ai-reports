@@ -51,6 +51,7 @@ async fn clarify_retrieval_candidates(
                     canonical,
                     None,
                     None,
+                    input.sensitive_identifier.as_ref(),
                 )
                 .await;
             }
@@ -144,6 +145,52 @@ pub(super) async fn complete_semantic_route(
                             ),
                         );
                     }
+                    Ok(ClarificationOutcome::SelectedOption { option_id, .. })
+                        if payload.kind == crate::assistant::ClarificationKind::SelectEntity =>
+                    {
+                        let Some(client_id) = option_id
+                            .strip_prefix("client:")
+                            .and_then(|value| value.parse::<i64>().ok())
+                        else {
+                            return graph_result(
+                                memory,
+                                TerminalState::FailedOperational,
+                                "invalid_client_selection",
+                                ResponseBuilder::error(),
+                                context.recent_messages.len(),
+                                None,
+                                simple_intent_transitions(
+                                    TerminalState::FailedOperational,
+                                    "invalid_client_selection",
+                                ),
+                            );
+                        };
+                        let mut selected_intent = intent_from_source(payload, &context, canonical);
+                        selected_intent
+                            .entities
+                            .push(crate::assistant::AssistantEntity {
+                                entity_type: AssistantEntityType::ClientId,
+                                value: client_id.to_string(),
+                                canonical: Some(client_id.to_string()),
+                                confidence: Some(1.0),
+                            });
+                        memory.intent = Some(selected_intent);
+                        memory.selected_capability = Some("client_relationship_by_id".into());
+                        pending_clarification = Some(None);
+                        return execute_selected_capability(
+                            memory,
+                            context.recent_messages.len(),
+                            "client_relationship_by_id".into(),
+                            catalog,
+                            client,
+                            fineract_pool,
+                            canonical,
+                            Some(payload),
+                            pending_clarification,
+                            None,
+                        )
+                        .await;
+                    }
                     Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
                         memory.intent = Some(intent_from_source(payload, &context, canonical));
                         record_source_extraction_metadata(
@@ -173,6 +220,7 @@ pub(super) async fn complete_semantic_route(
                             canonical,
                             Some(payload),
                             pending_clarification,
+                            input.sensitive_identifier.as_ref(),
                         )
                         .await;
                     }
@@ -369,6 +417,7 @@ pub(super) async fn complete_semantic_route(
                                 canonical,
                                 None,
                                 None,
+                                input.sensitive_identifier.as_ref(),
                             )
                             .await;
                             result.retrieval_trace = retrieval_trace.clone();

@@ -25,6 +25,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::assistant::temporal::BusinessDateSource;
+use crate::assistant::understanding::extraction::SensitiveIdentifier;
 
 use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
@@ -46,7 +47,7 @@ use crate::assistant::{
     retrieval::RetrievalEngine,
     stable_uuid,
 };
-use crate::execution::repository::execute_plan;
+use crate::execution::repository::execute_plan_with_sensitive;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
 
@@ -62,10 +63,11 @@ pub struct GraphRuntimeResult {
     pub retrieval_trace: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Default)]
 pub struct RuntimeUserInput {
     pub message: String,
     pub source_message: String,
+    pub(crate) sensitive_identifier: Option<SensitiveIdentifier>,
     pub selected_option_id: Option<String>,
     pub clarification_id: Option<Uuid>,
     pub clarification_revision: Option<u32>,
@@ -93,6 +95,7 @@ impl From<&str> for RuntimeUserInput {
         Self {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: None,
             clarification_id: None,
             clarification_revision: None,
@@ -106,6 +109,7 @@ impl From<String> for RuntimeUserInput {
         Self {
             source_message: message.clone(),
             message,
+            sensitive_identifier: None,
             selected_option_id: None,
             clarification_id: None,
             clarification_revision: None,
@@ -451,6 +455,7 @@ impl AssistantGraphRuntime {
                 canonical,
                 Some(payload),
                 Some(None),
+                input.sensitive_identifier.as_ref(),
             )
             .await;
         }
@@ -502,6 +507,7 @@ impl AssistantGraphRuntime {
                         canonical,
                         Some(payload),
                         Some(None),
+                        input.sensitive_identifier.as_ref(),
                     )
                     .await;
                 }

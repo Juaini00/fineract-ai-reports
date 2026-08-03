@@ -10,6 +10,7 @@ pub(super) async fn execute_selected_capability(
     canonical: Option<&CanonicalRuntimeContext>,
     active_payload: Option<&ClarificationPayload>,
     pending_clarification: Option<Option<ClarificationPayload>>,
+    sensitive_identifier: Option<&crate::assistant::understanding::extraction::SensitiveIdentifier>,
 ) -> GraphRuntimeResult {
     let (Some(catalog), Some(client)) = (catalog, client) else {
         return graph_result(
@@ -278,7 +279,9 @@ pub(super) async fn execute_selected_capability(
         .unwrap_or_default();
     crate::job::progress::started(crate::job::progress::Stage::Execution);
     let execution_started_at = std::time::Instant::now();
-    let execution_result = execute_plan(pool, catalog, &plan, &policy, limits).await;
+    let execution_result =
+        execute_plan_with_sensitive(pool, catalog, &plan, &policy, limits, sensitive_identifier)
+            .await;
     crate::job::progress::finished(
         crate::job::progress::Stage::Execution,
         execution_started_at.elapsed().as_millis() as u64,
@@ -287,6 +290,42 @@ pub(super) async fn execute_selected_capability(
         Ok(result) => {
             let tool_result =
                 super::super::tool::tool_result_from_execution(&tool_request, result.clone());
+            let entity_options = matches!(
+                capability_id.as_str(),
+                "client_name_lookup" | "client_relationship_lookup"
+            )
+            .then(|| client_entity_options(&tool_result.rows, policy.can_view_pii))
+            .unwrap_or_default();
+            if entity_options.len() > 1 {
+                let options = entity_options;
+                let payload = ClarificationPayload {
+                    version: crate::assistant::CLARIFICATION_VERSION_1,
+                    id: uuid::Uuid::new_v4(),
+                    revision: 1,
+                    kind: crate::assistant::ClarificationKind::SelectEntity,
+                    question: "Which client did you mean?".into(),
+                    options,
+                    fields: Vec::new(),
+                    attempt: 1,
+                    source_intent: intent
+                        .as_ref()
+                        .map(|intent| source_intent_snapshot(intent, &intent.reason)),
+                    allow_free_text: false,
+                    is_missing_execution_parameters: false,
+                };
+                return graph_result(
+                    memory,
+                    TerminalState::WaitingForUserInput,
+                    "ambiguous_client_identity",
+                    ResponseBuilder::clarification(payload.clone()),
+                    recent_message_count,
+                    Some(Some(payload)),
+                    execution_transitions(
+                        TerminalState::WaitingForUserInput,
+                        "ambiguous_client_identity",
+                    ),
+                );
+            }
             let mut response = ResponseBuilder::from_tool_result(
                 intent.as_ref().expect("successful execution has intent"),
                 &plan,
@@ -355,6 +394,40 @@ pub(super) async fn execute_selected_capability(
         }
     }
 }
+fn client_entity_options(
+    rows: &[serde_json::Value],
+    can_view_pii: bool,
+) -> Vec<crate::assistant::ClarificationOption> {
+    let mut seen = std::collections::HashSet::new();
+    rows.iter()
+        .filter_map(|row| {
+            let client_id = row.get("client_id")?.as_i64()?;
+            if !seen.insert(client_id) {
+                return None;
+            }
+            let label = if can_view_pii {
+                row.get("display_name")?.as_str()?.to_owned()
+            } else {
+                format!("Client {client_id}")
+            };
+            let office = row.get("office_name").and_then(serde_json::Value::as_str);
+            let status = row.get("status_label").and_then(serde_json::Value::as_str);
+            Some(crate::assistant::ClarificationOption {
+                id: format!("client:{client_id}"),
+                label,
+                description: Some(
+                    [office, status]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                ),
+                fields: Vec::new(),
+            })
+        })
+        .collect()
+}
+
 pub(super) fn evidence_refs(evidence: &serde_json::Value) -> Vec<String> {
     evidence
         .as_array()
@@ -367,4 +440,44 @@ pub(super) fn evidence_refs(evidence: &serde_json::Value) -> Vec<String> {
                 .map(ToOwned::to_owned)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod entity_clarification_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_client_rows_build_safe_entity_choices() {
+        let rows = vec![
+            json!({"client_id": 7, "display_name": "Alex Doe", "office_name": "North", "status_label": "active", "external_id": "SECRET"}),
+            json!({"client_id": 8, "display_name": "Alex Doe", "office_name": "South", "status_label": "pending", "mobile_no": "SECRET"}),
+        ];
+
+        let options = client_entity_options(&rows, true);
+
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].id, "client:7");
+        assert_eq!(options[0].label, "Alex Doe");
+        assert_eq!(options[0].description.as_deref(), Some("North · active"));
+        assert!(!serde_json::to_string(&options).unwrap().contains("SECRET"));
+    }
+
+    #[test]
+    fn entity_choices_hide_names_when_pii_is_disallowed() {
+        let rows = vec![json!({
+            "client_id": 7,
+            "display_name": "Alex Doe",
+            "office_name": "North",
+            "status_label": "active"
+        })];
+
+        let options = client_entity_options(&rows, false);
+
+        assert_eq!(options[0].label, "Client 7");
+        assert!(
+            !serde_json::to_string(&options)
+                .unwrap()
+                .contains("Alex Doe")
+        );
+    }
 }

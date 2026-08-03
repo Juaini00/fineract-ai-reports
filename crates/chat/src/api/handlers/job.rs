@@ -23,6 +23,19 @@ use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
 use crate::job::model::{ChatJobEvent, CreateChatJobInput, RespondToChatJobInput};
 use crate::job::service::{RespondToChatJobOutcome, redis_url_log_value};
 
+fn map_create_error(error: anyhow::Error) -> ApiError {
+    match error.to_string().as_str() {
+        "identifier_lookup_rate_limited" => ApiError::too_many_requests_with_code(
+            "identifier_lookup_rate_limited",
+            "Too many identifier lookup attempts. Try again later.",
+        ),
+        "identifier_lookup_rate_limit_unavailable" => ApiError::internal(anyhow::anyhow!(
+            "identifier lookup is temporarily unavailable"
+        )),
+        _ => ApiError::internal(error),
+    }
+}
+
 /// Statuses `chat_jobs.status` reaches at the end of a run — mirrors the
 /// `chat_job:{id}:live_state` values `JobService::emit_event` writes on
 /// `final`/`error`.
@@ -109,7 +122,7 @@ pub async fn create(
             message: request.message,
         })
         .await
-        .map_err(ApiError::internal)?
+        .map_err(map_create_error)?
     else {
         return Err(ApiError::not_found("chat session not found"));
     };

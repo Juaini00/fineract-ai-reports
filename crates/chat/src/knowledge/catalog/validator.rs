@@ -532,6 +532,26 @@ fn validate_dataset_recipe(
                 slot.id
             );
         }
+        if slot.input_policy == crate::knowledge::dataset::model::FilterInputPolicy::ExactIdentifier
+        {
+            let Some(parameter_name) = mapping.parameter.as_deref() else {
+                bail!(
+                    "capability {} exact identifier filter {} cannot use a literal value",
+                    capability.id,
+                    slot.id
+                );
+            };
+            if !query.parameters.iter().any(|parameter| {
+                parameter.name == parameter_name
+                    && parameter.source.as_deref() == Some("transient_sensitive_input")
+            }) {
+                bail!(
+                    "capability {} exact identifier filter {} requires transient sensitive input",
+                    capability.id,
+                    slot.id
+                );
+            }
+        }
         if let Some(parameter_name) = mapping.parameter.as_deref()
             && !query
                 .parameters
@@ -547,14 +567,26 @@ fn validate_dataset_recipe(
         }
     }
     for field in &recipe.projection {
-        if !shape
+        let output = shape
             .output_fields(dataset)
             .iter()
-            .any(|output| output.name == *field)
-        {
+            .find(|output| output.name == *field)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "capability {} references unknown dataset output field {}",
+                    capability.id,
+                    field
+                )
+            })?;
+        if matches!(
+            output.sensitivity,
+            crate::knowledge::model::Sensitivity::FilterOnly
+                | crate::knowledge::model::Sensitivity::NeverUse
+        ) {
             bail!(
-                "capability {} references unknown dataset output field {}",
+                "capability {} cannot project {} dataset output field {}",
                 capability.id,
+                output.sensitivity.as_str(),
                 field
             );
         }

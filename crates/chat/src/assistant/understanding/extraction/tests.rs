@@ -91,6 +91,106 @@ fn adjacency_to_client_does_not_scavenge_a_filler_word() {
     );
 }
 
+#[test]
+fn identifier_intake_redacts_savings_account_and_preserves_leading_zeroes() {
+    let intake = identifier_intake("Who owns savings account number 0012-3456?");
+
+    assert_eq!(
+        intake.semantic_message(),
+        "Who owns savings account number [SAVINGS_ACCOUNT_NUMBER]?"
+    );
+    assert_eq!(
+        intake.sensitive_identifier().map(|value| value.expose()),
+        Some("00123456")
+    );
+    assert_eq!(
+        intake.sensitive_identifier().map(|value| value.kind()),
+        Some(identifier::SensitiveIdentifierKind::SavingsAccountNumber)
+    );
+}
+
+#[test]
+fn identifier_intake_redacts_supported_indonesian_identifier_phrases() {
+    for (message, placeholder, value) in [
+        (
+            "Siapa pemilik nomor rekening tabungan 0012-3456?",
+            "[SAVINGS_ACCOUNT_NUMBER]",
+            "00123456",
+        ),
+        (
+            "Siapa pemilik nomor pinjaman 0000 7788?",
+            "[LOAN_NUMBER]",
+            "00007788",
+        ),
+    ] {
+        let intake = identifier_intake(message);
+        assert!(intake.semantic_message().contains(placeholder));
+        assert_eq!(
+            intake.sensitive_identifier().map(|item| item.expose()),
+            Some(value)
+        );
+        assert!(!intake.semantic_message().contains(value));
+    }
+}
+
+#[test]
+fn identifier_intake_redacts_loan_number_without_activating_loan_domain() {
+    let intake = identifier_intake("What are the terms for loan number 0000 7788?");
+
+    assert_eq!(
+        intake.semantic_message(),
+        "What are the terms for loan number [LOAN_NUMBER]?"
+    );
+    assert_eq!(
+        intake.sensitive_identifier().map(|value| value.expose()),
+        Some("00007788")
+    );
+    assert_eq!(
+        intake.sensitive_identifier().map(|value| value.kind()),
+        Some(identifier::SensitiveIdentifierKind::LoanNumber)
+    );
+}
+
+#[test]
+fn identifier_intake_ignores_unlabelled_numbers_dates_and_amounts() {
+    for message in [
+        "Show the latest 10 transactions",
+        "Show activity from 2026-01-01",
+        "Find transactions for amount 00123456",
+        "Find client id 00123456",
+        "The savings account numbering policy changed to 00123456",
+    ] {
+        let intake = identifier_intake(message);
+        assert_eq!(intake.semantic_message(), message);
+        assert!(intake.sensitive_identifier().is_none());
+    }
+}
+
+#[test]
+fn deferred_loan_identifier_is_redacted_without_exposing_the_value() {
+    let raw = "00007788";
+    let intake = identifier_intake(&format!("Who owns loan number {raw}?"));
+    let serialized_public_input = serde_json::json!({
+        "message": intake.semantic_message(),
+        "state": { "input": { "message": intake.semantic_message() } }
+    })
+    .to_string();
+
+    assert_eq!(
+        intake.sensitive_identifier().map(|value| value.kind()),
+        Some(identifier::SensitiveIdentifierKind::LoanNumber)
+    );
+    assert!(!serialized_public_input.contains(raw));
+    assert!(serialized_public_input.contains("[LOAN_NUMBER]"));
+}
+
+#[test]
+fn identifier_intake_does_not_expose_secret_through_debug() {
+    let intake = identifier_intake("Who owns account number 00123456?");
+
+    assert!(!format!("{intake:?}").contains("00123456"));
+}
+
 fn reference(value: &str) -> DateTime<Utc> {
     value.parse().unwrap()
 }

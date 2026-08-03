@@ -111,7 +111,17 @@ pub struct FilterSlot {
     pub kind: String,
     #[serde(default)]
     pub case_insensitive: bool,
+    #[serde(default)]
+    pub input_policy: FilterInputPolicy,
     pub operators: Vec<FilterOperator>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterInputPolicy {
+    #[default]
+    Ordinary,
+    ExactIdentifier,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

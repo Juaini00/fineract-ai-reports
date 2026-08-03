@@ -1,0 +1,20 @@
+id: client_relationship_lookup
+status: approved_mvp
+domain: client
+display_name: Client Savings Relationships
+description: Resolve a selected client to their owning office, active savings-account count, masked savings accounts, and savings products within authorized office scope.
+data_areas: [client_foundation, organization_foundation, savings_core]
+required_api_capability: client_relationship_lookup
+query_id: client.relationship_lookup
+metrics: [client.relationship_lookup]
+output_mode: list
+request_shape: { operation: lookup, subject: client, grouping: none, output: list, pii: client_identity }
+examples:
+  - Which office, savings accounts, and products belong to this client?
+  - Show the selected client's savings relationships.
+guards:
+  require_office_scope: true
+  pii: { returns_pii: true, never_return: [account_no, external_id, mobile_no, email] }
+parameters:
+  office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }
+  search: { type: string, required: true }

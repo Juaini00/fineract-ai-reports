@@ -237,6 +237,11 @@ pub(super) fn clarification_candidate_allowed(
     if !is_candidate {
         return false;
     }
+    if payload.kind == crate::assistant::ClarificationKind::SelectEntity {
+        return id
+            .strip_prefix("client:")
+            .is_some_and(|value| value.parse::<i64>().is_ok());
+    }
     let has_scope = context.client_scope.get("allow_all_capabilities").is_some()
         || context.client_scope.get("capabilities").is_some();
     if !has_scope {

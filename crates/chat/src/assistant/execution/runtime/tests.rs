@@ -607,6 +607,7 @@ async fn exact_pending_option_id_resolves_before_router() {
         RuntimeUserInput {
             message: "client_top_n_by_savings_balance".into(),
             source_message: "please use the balance option".into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_top_n_by_savings_balance".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -712,6 +713,7 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         RuntimeUserInput {
             message: "client_summary".into(),
             source_message: "client summary".into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_summary".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -755,6 +757,7 @@ async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
         RuntimeUserInput {
             message: "stale option".into(),
             source_message: "stale option".into(),
+            sensitive_identifier: None,
             selected_option_id: Some("unavailable_report".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -806,6 +809,7 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_top_n_by_deposit_volume".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -865,6 +869,7 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("organization_office_activity_ranking".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -926,6 +931,7 @@ async fn defaultless_required_search_asks_and_runs_nothing() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_name_lookup".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -989,6 +995,7 @@ async fn fully_defaulted_capability_completes_without_asking() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("organization_office_activity_ranking".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -1235,6 +1242,7 @@ fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
         &RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("others".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -1270,6 +1278,7 @@ async fn others_continues_missing_parameters_with_message_facts() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("others".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -1311,6 +1320,7 @@ async fn long_message_continues_missing_parameters() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: None,
             clarification_id: None,
             clarification_revision: None,
@@ -1360,6 +1370,7 @@ async fn gateway_pipeline_runtime_entry_maps_execute_to_completed() {
         RuntimeUserInput {
             message: "How much did we deposit?".into(),
             source_message: "How much did we deposit?".into(),
+            sensitive_identifier: None,
             selected_option_id: None,
             clarification_id: None,
             clarification_revision: None,
@@ -1408,6 +1419,7 @@ async fn gateway_pipeline_runtime_entry_maps_clarify_to_waiting() {
         RuntimeUserInput {
             message: "look up a client".into(),
             source_message: "look up a client".into(),
+            sensitive_identifier: None,
             selected_option_id: None,
             clarification_id: None,
             clarification_revision: None,

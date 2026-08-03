@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use anyhow::{Result, bail};
 
 use crate::knowledge::dataset::grammar::validate_sql_expr;
-use crate::knowledge::dataset::model::DatasetKnowledge;
+use crate::knowledge::dataset::model::{DatasetKnowledge, FilterInputPolicy, FilterOperator};
+use crate::knowledge::model::Sensitivity;
 
 const FILTER_TYPES: &[&str] = &["date", "integer", "boolean", "string", "decimal"];
 const OUTPUT_TYPES: &[&str] = &["bigint", "integer", "string", "date", "decimal", "boolean"];
@@ -30,6 +31,29 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
                 dataset.id,
                 filter.id
             );
+        }
+        if filter.input_policy == FilterInputPolicy::ExactIdentifier {
+            if filter.kind != "string" {
+                bail!(
+                    "dataset {} exact identifier filter {} must be a string",
+                    dataset.id,
+                    filter.id
+                );
+            }
+            if filter.operators.as_slice() != [FilterOperator::Eq] {
+                bail!(
+                    "dataset {} exact identifier filter {} may use only eq",
+                    dataset.id,
+                    filter.id
+                );
+            }
+            if filter.case_insensitive {
+                bail!(
+                    "dataset {} exact identifier filter {} must be case-sensitive",
+                    dataset.id,
+                    filter.id
+                );
+            }
         }
         validate_sql_expr(&filter.expr).map_err(|reason| {
             anyhow::anyhow!("dataset {} filter {}: {reason}", dataset.id, filter.id)
@@ -110,6 +134,32 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
                     field.kind
                 );
             }
+            if matches!(
+                field.sensitivity,
+                Sensitivity::FilterOnly | Sensitivity::NeverUse
+            ) {
+                bail!(
+                    "dataset {} shape {} cannot project {} output field {}",
+                    dataset.id,
+                    shape.id,
+                    field.sensitivity.as_str(),
+                    field.name
+                );
+            }
+        }
+        if dataset
+            .filters
+            .iter()
+            .any(|filter| filter.input_policy == FilterInputPolicy::ExactIdentifier)
+            && !fields
+                .iter()
+                .any(|field| field.sensitivity == Sensitivity::MaskedOutput)
+        {
+            bail!(
+                "dataset {} shape {} exact identifier requires masked_output",
+                dataset.id,
+                shape.id
+            );
         }
         if !fields.iter().any(|field| field.core) {
             bail!(
@@ -129,6 +179,23 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
                 );
             }
         }
+        if dataset
+            .filters
+            .iter()
+            .any(|filter| filter.input_policy == FilterInputPolicy::ExactIdentifier)
+            && !shape.parameters(dataset).iter().any(|parameter| {
+                parameter.name == "office_ids"
+                    && parameter.kind == "array_bigint"
+                    && parameter.required
+                    && parameter.source.as_deref() == Some("authorized_scope")
+            })
+        {
+            bail!(
+                "dataset {} shape {} exact identifier requires authorized office_ids",
+                dataset.id,
+                shape.id
+            );
+        }
     }
 
     Ok(())
@@ -141,9 +208,10 @@ mod tests {
         RequestGrouping, RequestOperation, RequestOutput, RequestPii, RequestShape, RequestSubject,
     };
     use crate::knowledge::dataset::model::{
-        DatasetOutputField, FilterOperator, FilterSlot, OrderByOption, ShapeOption,
+        DatasetOutputField, FilterInputPolicy, FilterOperator, FilterSlot, OrderByOption,
+        ShapeOption,
     };
-    use crate::knowledge::model::Sensitivity;
+    use crate::knowledge::model::{QueryParameter, Sensitivity};
 
     fn valid() -> DatasetKnowledge {
         DatasetKnowledge {
@@ -156,6 +224,7 @@ mod tests {
                 expr: "sac.charge_due_date".into(),
                 kind: "date".into(),
                 case_insensitive: false,
+                input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             }],
             shapes: vec![ShapeOption {
@@ -258,6 +327,77 @@ mod tests {
 
         let error = validate_dataset(&dataset).unwrap_err().to_string();
         assert!(error.contains("unsupported type"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_invalid_exact_identifier_contracts() {
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "integer".into();
+        assert!(
+            validate_dataset(&dataset)
+                .unwrap_err()
+                .to_string()
+                .contains("string")
+        );
+
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "string".into();
+        dataset.filters[0].operators.push(FilterOperator::Lt);
+        assert!(
+            validate_dataset(&dataset)
+                .unwrap_err()
+                .to_string()
+                .contains("only eq")
+        );
+
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "string".into();
+        dataset.filters[0].case_insensitive = true;
+        assert!(
+            validate_dataset(&dataset)
+                .unwrap_err()
+                .to_string()
+                .contains("case-sensitive")
+        );
+    }
+
+    #[test]
+    fn exact_identifier_requires_masked_output_and_authorized_scope() {
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "string".into();
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(
+            error.contains("masked_output") || error.contains("office_ids"),
+            "got: {error}"
+        );
+
+        dataset.output_fields.push(DatasetOutputField {
+            name: "masked_account_number".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::MaskedOutput,
+            core: true,
+        });
+        dataset.parameters.push(QueryParameter {
+            name: "office_ids".into(),
+            kind: "array_bigint".into(),
+            required: true,
+            source: Some("authorized_scope".into()),
+        });
+        assert!(validate_dataset(&dataset).is_ok());
+    }
+
+    #[test]
+    fn rejects_forbidden_output_sensitivity() {
+        let mut dataset = valid();
+        dataset.output_fields[0].sensitivity = Sensitivity::FilterOnly;
+        assert!(validate_dataset(&dataset).is_err());
+
+        dataset.output_fields[0].sensitivity = Sensitivity::NeverUse;
+        assert!(validate_dataset(&dataset).is_err());
     }
 
     #[test]

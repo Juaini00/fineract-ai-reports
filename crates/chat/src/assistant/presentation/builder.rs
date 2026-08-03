@@ -483,7 +483,8 @@ fn table_column(
 fn is_hidden(field: &QueryOutputField, can_view_pii: bool) -> bool {
     match field.sensitivity {
         Sensitivity::Pii => !can_view_pii,
-        Sensitivity::PublicBusiness => false,
+        Sensitivity::PublicBusiness | Sensitivity::MaskedOutput => false,
+        Sensitivity::FilterOnly | Sensitivity::NeverUse => true,
     }
 }
 

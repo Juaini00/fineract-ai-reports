@@ -1,0 +1,59 @@
+id: savings.accounts
+database: fineract
+source_sql: queries/datasets/savings/accounts.source.sql
+tables:
+  - m_savings_account
+  - m_client
+  - m_office
+  - m_savings_product
+filters:
+  - id: account_number
+    expr: account_no
+    type: string
+    input_policy: exact_identifier
+    operators: [eq]
+shapes:
+  - id: identity
+    request_shape:
+      operation: lookup
+      subject: savings_account
+      grouping: none
+      output: lookup
+      pii: client_identity
+    fragment: queries/datasets/savings/accounts.identity.frag.sql
+    output_fields:
+      - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: masked_account_number, type: string, sensitivity: masked_output, core: true }
+      - { name: client_id, type: bigint, sensitivity: pii }
+      - { name: client_display_name, type: string, sensitivity: pii }
+      - { name: office_id, type: bigint, sensitivity: public_business }
+      - { name: office_name, type: string, sensitivity: public_business }
+      - { name: savings_product_id, type: bigint, sensitivity: public_business }
+      - { name: savings_product_name, type: string, sensitivity: public_business }
+      - { name: savings_status_enum, type: bigint, sensitivity: public_business }
+      - { name: currency_code, type: string, sensitivity: public_business }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - id: terms
+    request_shape:
+      operation: lookup
+      subject: savings_account
+      grouping: none
+      output: lookup
+      pii: none
+    fragment: queries/datasets/savings/accounts.terms.frag.sql
+    output_fields:
+      - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: masked_account_number, type: string, sensitivity: masked_output, core: true }
+      - { name: account_nominal_annual_interest_rate, type: decimal, sensitivity: public_business }
+      - { name: product_nominal_annual_interest_rate, type: decimal, sensitivity: public_business }
+      - { name: account_allow_overdraft, type: boolean, sensitivity: public_business }
+      - { name: product_allow_overdraft, type: boolean, sensitivity: public_business }
+      - { name: account_overdraft_limit, type: decimal, sensitivity: public_business }
+      - { name: product_overdraft_limit, type: decimal, sensitivity: public_business }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+order_by: []
+output_fields: []
+parameters: []
+timeout_ms: 3000

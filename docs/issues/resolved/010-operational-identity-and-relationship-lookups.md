@@ -1,10 +1,10 @@
 # 010 — Operational identity and relationship lookups
 
-Status: active — design required before implementation
+Status: resolved
 Severity: high
 Area: knowledge | catalog | datasets | retrieval | SQL | authorization | PII | audit
 Created: 2026-08-03
-Resolved:
+Resolved: 2026-08-03
 
 Related: 008 (loan domain analyst capabilities), 009 (conversational drill-down)
 Depends on: production-safe Dataset Model bridge and approved-SQL execution
@@ -106,6 +106,32 @@ After issue 008 prerequisites are satisfied, an exact loan number can resolve:
 - loan product;
 - status and approved terms;
 - principal/outstanding/rate source only where semantics are explicitly approved.
+
+## Implementation status (2026-08-03)
+
+Delivered:
+
+- contextual savings/loan identifier extraction and pre-LLM/persistence redaction;
+- Redis-backed per-bearer identifier-attempt limiting before job creation;
+- typed exact-identifier and masked-output Dataset Model validation;
+- SQL-bound office scope and SQL-derived masking for `savings.accounts`;
+- savings account `identity` and conservative `terms` shapes/capabilities;
+- separate account/product interest and overdraft fields with no inferred effective value;
+- exact client-name relationship lookup with safe duplicate clarification and same-job stable `client_id` continuation;
+- selected client → office, active account count, masked account identity, and product relationships;
+- existing organization summaries plus exact savings account → owner office traversal;
+- exact loan-number redaction and sanitized deferred routing while executable loan lookup remains owned by issue 008.
+
+Transferred to issue 008 (not a blocker for this issue's resolution):
+
+- executable loan identity/terms lookup after client/group ownership, product, status, terms, PII, and scope semantics are approved.
+
+Verification:
+
+- static catalog validation and strict Rust lint pass;
+- 287 chat unit tests, 16 catalog tests, 2 retrieval tests, and 2 dataset-equivalence tests pass;
+- SQL is authored, parameterized, office-scoped, and runtime-validated at application startup when `CATALOG_VALIDATE_ON_STARTUP=true`;
+- database-backed HTTP authorization tests remain environment-gated by the existing Voyage embedding startup requirement, not by Issue 010 behavior.
 
 ## Proposed fix
 

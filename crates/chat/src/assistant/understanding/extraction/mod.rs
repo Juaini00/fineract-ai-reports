@@ -8,6 +8,7 @@ use crate::assistant::{
 };
 
 mod domain;
+mod identifier;
 mod quantity;
 mod temporal;
 #[cfg(test)]
@@ -15,6 +16,7 @@ mod tests;
 mod token;
 
 use domain::{extract_domain, extract_metric};
+pub(crate) use identifier::{SensitiveIdentifier, identifier_intake};
 use quantity::{extract_quantity, quantity_parts};
 use temporal::resolve_temporal;
 use token::{extract_currency, extract_person_name, words};

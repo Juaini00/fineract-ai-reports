@@ -172,6 +172,7 @@ pub struct AssistantEntity {
 #[serde(rename_all = "snake_case")]
 pub enum AssistantEntityType {
     PersonName,
+    ClientId,
     Office,
     DatePeriod,
     Currency,
@@ -179,6 +180,13 @@ pub enum AssistantEntityType {
     Metric,
     CapabilityHint,
     AccountNumber,
+    /// An entity kind the model invented (e.g. `transaction_amount`). Without
+    /// this arm a single hallucinated entity type fails the whole router call
+    /// and the user gets nothing, even though the other entities were fine.
+    /// Every consumer selects entities by matching a specific variant, so an
+    /// `Unknown` entity is ignored rather than misread as something real.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -246,4 +254,58 @@ pub struct SourceIntentSnapshot {
     pub confidence: f32,
     #[serde(default)]
     pub reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduces a real production failure: the model emitted
+    /// `transaction_amount`, which is not a declared entity kind, and the whole
+    /// router call died with "unknown variant `transaction_amount`" — losing the
+    /// two perfectly valid entities alongside it.
+    #[test]
+    fn an_invented_entity_kind_degrades_to_unknown_instead_of_failing_the_router() {
+        // `AssistantEntity` keys this field `entity_type`; only the gateway's
+        // `GatewayEntity` renames it to `type`.
+        let raw = r#"{
+            "entities": [
+                {"entity_type": "person_name", "value": "Nour Hashem"},
+                {"entity_type": "product", "value": "Current Account USD"},
+                {"entity_type": "transaction_amount", "value": "0.130000"}
+            ]
+        }"#;
+
+        #[derive(Deserialize)]
+        struct Probe {
+            entities: Vec<AssistantEntity>,
+        }
+
+        let probe: Probe = serde_json::from_str(raw).expect("must not fail on an invented kind");
+        assert_eq!(
+            probe.entities[0].entity_type,
+            AssistantEntityType::PersonName
+        );
+        assert_eq!(probe.entities[1].entity_type, AssistantEntityType::Product);
+        assert_eq!(probe.entities[2].entity_type, AssistantEntityType::Unknown);
+    }
+
+    /// An Unknown entity must never be mistaken for a real one, because every
+    /// consumer selects entities by matching a specific variant.
+    #[test]
+    fn unknown_matches_no_real_entity_kind() {
+        for real in [
+            AssistantEntityType::PersonName,
+            AssistantEntityType::ClientId,
+            AssistantEntityType::Office,
+            AssistantEntityType::DatePeriod,
+            AssistantEntityType::Currency,
+            AssistantEntityType::Product,
+            AssistantEntityType::Metric,
+            AssistantEntityType::CapabilityHint,
+            AssistantEntityType::AccountNumber,
+        ] {
+            assert_ne!(AssistantEntityType::Unknown, real);
+        }
+    }
 }

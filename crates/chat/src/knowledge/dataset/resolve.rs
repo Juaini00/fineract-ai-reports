@@ -5,8 +5,6 @@ use crate::knowledge::dataset::model::{
     DatasetFilterSelection, DatasetKnowledge, DatasetRecipe, DatasetSelection, FilterOperator,
 };
 
-/// Resolves a catalog-owned recipe against normalized parameters. The result
-/// contains only declared IDs and typed values; SQL remains catalog-owned.
 pub fn resolve_recipe(
     dataset: &DatasetKnowledge,
     recipe: &DatasetRecipe,
@@ -57,6 +55,16 @@ pub fn resolve_recipe(
                 "dataset filter {} must declare exactly one of parameter or value",
                 slot.id
             );
+        }
+        if slot.input_policy == crate::knowledge::dataset::model::FilterInputPolicy::ExactIdentifier
+        {
+            if mapping.parameter.is_none() || mapping.value.is_some() {
+                bail!(
+                    "dataset filter {} requires transient sensitive input parameter",
+                    slot.id
+                );
+            }
+            continue;
         }
         let value = match (&mapping.parameter, &mapping.value) {
             (Some(parameter), None) => params
@@ -122,7 +130,7 @@ mod tests {
         RequestGrouping, RequestOperation, RequestOutput, RequestPii, RequestShape, RequestSubject,
     };
     use crate::knowledge::dataset::model::{
-        DatasetOutputField, DatasetRecipeFilter, FilterSlot, ShapeOption,
+        DatasetOutputField, DatasetRecipeFilter, FilterInputPolicy, FilterSlot, ShapeOption,
     };
     use crate::knowledge::model::Sensitivity;
 
@@ -137,6 +145,7 @@ mod tests {
                 expr: "latest_transaction_amount".into(),
                 kind: "decimal".into(),
                 case_insensitive: false,
+                input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             }],
             shapes: vec![ShapeOption {

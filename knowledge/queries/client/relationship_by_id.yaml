@@ -1,0 +1,23 @@
+id: client.relationship_by_id
+database: fineract
+sql_file: queries/client/relationship_by_id.sql
+data_areas: [client_foundation, organization_foundation, savings_core]
+tables: [m_client, m_office, m_savings_account, m_savings_product]
+metrics: [client.relationship_lookup]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - { name: client_id, type: integer, required: true }
+output_fields:
+  - { name: client_id, type: bigint, sensitivity: pii }
+  - { name: display_name, type: string, sensitivity: pii }
+  - { name: office_id, type: bigint, sensitivity: public_business }
+  - { name: office_name, type: string, sensitivity: public_business }
+  - { name: active_savings_account_count, type: bigint, sensitivity: public_business }
+  - { name: savings_account_id, type: bigint, sensitivity: public_business }
+  - { name: masked_account_number, type: string, sensitivity: masked_output }
+  - { name: savings_status_enum, type: bigint, sensitivity: public_business }
+  - { name: currency_code, type: string, sensitivity: public_business }
+  - { name: savings_product_id, type: bigint, sensitivity: public_business }
+  - { name: savings_product_name, type: string, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000
