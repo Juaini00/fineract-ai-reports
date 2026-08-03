@@ -1,0 +1,74 @@
+id: client_savings_overview
+status: approved_mvp
+domain: client
+display_name: Client Savings Overview
+# One capability, three answers. The reporting questions users actually ask
+# about a named client arrive together — "how many accounts, any charges still
+# to pay, how many transactions" — and the assistant executes one capability
+# per request, so splitting them meant every phrasing was refused as
+# unsupported even though each number was individually reachable.
+description: Full savings picture for a named client in one answer — total and active savings account count, the number and amount of active unpaid charges still to be paid, and the non-reversed transaction count.
+data_areas:
+  - client_foundation
+  - organization_foundation
+  - savings_core
+  - savings_charges_fees
+  - savings_transactions
+required_api_capability: client_savings_overview
+query_id: client.savings_overview
+metrics:
+  - savings.transaction_count
+  - savings.charge_amount_outstanding
+  - savings.account_balance
+output_mode: summary
+request_shape:
+  operation: summary
+  subject: client
+  grouping: none
+  output: summary
+  pii: client_identity
+examples:
+  - How many savings accounts does John Doe have, are there active charges to pay, and how many transactions?
+  - Give me a savings overview for client John Doe.
+  - Ada berapa saving account pada client John Doe, apakah ada charge yang masih aktif yang perlu dibayar, dan ada berapa transaksi yang dimiliki?
+  - Berapa jumlah rekening tabungan, biaya belum terbayar, dan transaksi milik nasabah ini?
+  - Show unpaid charges and transaction count for a named client.
+supported_intents:
+  - savings account count, unpaid charges and transaction count for one named client
+  - combined savings profile for a client by name
+defaults:
+  authorized_scope_only: true
+  default_limit: 10
+guards:
+  require_office_scope: true
+  max_limit: 50
+  pii:
+    returns_pii: true
+    never_return:
+      - account_no
+      - external_id
+      - mobile_no
+      - email_address
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+  - id: client_search_bound
+    rule: the searched client name must reach SQL as a bound parameter.
+  - id: pii_gated
+    rule: client identity fields must be redacted when caller lacks can_view_pii.
+parameters:
+  search:
+    type: string
+    required: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    default: "10"
+    hard_cap: 50

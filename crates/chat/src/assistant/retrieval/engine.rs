@@ -106,7 +106,12 @@ pub fn shape_score(
     if request.output != RequestOutput::Unknown && request.output == cap.output {
         hits += 1;
     }
-    if request.pii != RequestPii::Unknown && pii_compatible(&request.pii, &cap.pii) {
+    // Scoring keeps the strict reading that `compatible_ids` had to give up:
+    // a request that did not ask for a person earns no bonus from a capability
+    // that returns one. Relaxing the gate without keeping the score strict
+    // would hand every identity-returning capability a free point and let it
+    // tie with the population-level capability the question was actually about.
+    if request.pii != RequestPii::Unknown && pii_matches(&request.pii, &cap.pii) {
         hits += 1;
     }
     (hits as f32) / 5.0
@@ -280,6 +285,20 @@ fn enum_compatible<T: PartialEq>(request: &T, capability: &T, unknown: &T) -> bo
 /// identity cannot be served by a capability that returns none.
 fn pii_compatible(request: &RequestPii, capability: &RequestPii) -> bool {
     !matches!(request, RequestPii::ClientIdentity) || !matches!(capability, RequestPii::None)
+}
+
+/// The strict reading, used only for ranking. `ClientIdentity` still satisfies
+/// `ConditionalClientIdentity` — that relaxation was always about how a
+/// capability declares itself, not about what the request wanted.
+fn pii_matches(request: &RequestPii, capability: &RequestPii) -> bool {
+    request == capability
+        || matches!(
+            (request, capability),
+            (
+                RequestPii::ClientIdentity,
+                RequestPii::ConditionalClientIdentity
+            )
+        )
 }
 
 fn metric_compatible(plan: &RetrievalPlan, metrics: &[String]) -> bool {

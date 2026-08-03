@@ -230,8 +230,14 @@ requires equality. The router's `pii: none` means "the user did not ask for a
 person", while listing charges unavoidably returns client identity — what a
 capability *returns* is gated by `policy::authorization`, not by retrieval. Only
 the opposite direction is a real mismatch (request needs identity, capability
-returns none). `compatible_ids` is no longer empty, and `shape_score` gains a
-real fifth dimension.
+returns none). `compatible_ids` is no longer empty.
+
+Ranking keeps the strict reading: `shape_score` now calls `pii_matches`, not
+`pii_compatible`. Loosening the gate without keeping the score strict hands
+every identity-returning capability a free shape point, which is enough to tie
+it with the population-level capability a question was actually about — observed
+immediately, as `client_savings_overview` tying with `client_lifecycle_summary`
+on "Ringkasan lifecycle nasabah".
 
 **5. The gap is now a load-time error.** `validate_dataset` rejects any shape
 that returns a `string` output column with no matching filter slot, unless the
@@ -256,6 +262,35 @@ is unchanged — the dataset-model spec asks for the distribution first.
 Each has its own query contract, SQL file and `knowledge/parameters/` entry
 (`charge_name`, `office_name`), plus a new `savings.charge_count` metric.
 
+### Follow-on: the compound named-client question
+
+Reported after the six items landed:
+
+> ada berapa saving account pada client John Doe terebut, kemudian apakah ada
+> charge yg masih aktif yang perlu dibayar dan juga ada berapa transaksi yang
+> dimiliki oleh John Doe terebut
+
+The reranker refused it, and its stated reason was correct: *"no candidate
+capability covers charges or transactions for a named client."* This is not the
+filter gap this issue describes — every declared filter did its job. It is a
+different shape of the same disease: the assistant executes **one** capability
+per request, and a user asking about one client asks about everything at once.
+Three separate capabilities would still have produced one refusal.
+
+`client_savings_overview` answers all three in a single row: total and active
+savings account count, active unpaid charge count and outstanding amount, and
+non-reversed transaction count. Its `request_shape` is exactly what the router
+emits for this phrasing (`summary` / `client` / `none` / `summary` /
+`client_identity`), so it is the first capability this path finds shape-
+compatible at all.
+
+Each aggregate is computed in its own `LATERAL` subquery. Counting accounts,
+charges and transactions across parallel `LEFT JOIN`s would have every count
+multiplied by the cardinality of the others — the same fan-out class as the
+office bug below. Verified against live data: client 549 reports 5 accounts,
+4 active, 6 unpaid charges totalling 258.00, 155 transactions, each matching an
+independent single-purpose query.
+
 ### Incidental correctness fix
 
 Splitting `organization.office_summary` into per-office source rows plus an
@@ -279,6 +314,17 @@ still serves its own query contract.
 - Executed against real data: `type_count` narrowed to `dormancy fee` returns
   77 of 279 active charges, and returns all 279 with every filter bound NULL,
   confirming both the bind and the null-passthrough path.
+- `client_savings_overview_answers_the_compound_named_client_question`
+  (`crates/chat/tests/retrieval_scoring.rs`) replays the reported request and
+  asserts both that shape compatibility no longer excludes everything and that
+  the overview capability ranks first.
+
+### Operational note
+
+The three charge/office capabilities and `client_savings_overview` are new
+retrieval documents. A running instance needs `POST /vector-index/rebuild`
+before embedding search can surface them; until then only `catalog_fallback`
+keyword scoring sees them.
 
 ## Links
 

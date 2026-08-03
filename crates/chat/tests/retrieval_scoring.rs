@@ -784,6 +784,60 @@ async fn inventory_evidence(
         .expect("catalog fallback retrieval")
 }
 
+/// A user asking about one named client asks about everything at once: "how
+/// many savings accounts, are there charges still to pay, how many
+/// transactions". The assistant executes one capability per request, so before
+/// `client_savings_overview` existed the reranker correctly refused — no single
+/// candidate covered charges or transactions for a named client — and the whole
+/// compound question came back unsupported.
+///
+/// This also pins the `pii` fix: the router emits `pii: client_identity` here,
+/// and `compatible_ids` used to return an empty list on this path.
+#[test]
+fn client_savings_overview_answers_the_compound_named_client_question() {
+    use chat::assistant::retrieval::RetrievalEngine;
+    use chat::assistant::{AssistantEntity, AssistantEntityType};
+
+    let mut intent = make_intent(AssistantDomain::Client, RequestSubject::Client);
+    intent.request_shape.operation = RequestOperation::Summary;
+    intent.request_shape.output = RequestOutput::Summary;
+    intent.request_shape.pii = RequestPii::ClientIdentity;
+    intent.entities = vec![AssistantEntity {
+        entity_type: AssistantEntityType::PersonName,
+        value: "John Doe".into(),
+        canonical: None,
+        confidence: Some(0.95),
+    }];
+
+    let catalog = load_real_catalog();
+    let allowed: Vec<String> = catalog
+        .capabilities
+        .iter()
+        .map(|capability| capability.id.clone())
+        .collect();
+    let plan = RetrievalPlan::new(
+        "how many savings accounts does the client John Doe have, then are there \
+         any active charges that need to be paid and also how many transactions \
+         does John Doe have",
+        &intent,
+        false,
+        allowed,
+    );
+
+    let compatible = compatible_ids(&plan, &catalog);
+    assert!(
+        compatible.contains(&"client_savings_overview".to_string()),
+        "shape compatibility excluded the one capability that fits: {compatible:?}"
+    );
+
+    let evidence = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        RetrievalEngine::retrieve(&plan, None, None, Some(&catalog))
+            .await
+            .unwrap()
+    });
+    assert_eq!(evidence[0].capability_id, "client_savings_overview");
+}
+
 fn load_real_catalog() -> std::sync::Arc<KnowledgeCatalog> {
     let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
