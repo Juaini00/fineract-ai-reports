@@ -242,9 +242,10 @@ pub(super) fn params_from_verified(
     deterministic_extraction: Option<&DeterministicExtraction>,
     policies: &[ParameterPolicy],
     ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<Value> {
     let mut params = serde_json::Map::new();
-    let facts = request_facts(Some(intent), deterministic_extraction);
+    let facts = request_facts(message, Some(intent), deterministic_extraction);
 
     for parameter in &query.parameters {
         if matches!(
@@ -272,15 +273,19 @@ pub(super) fn params_from_verified(
 /// against the user's own words, so it wins, and the model may only contribute
 /// fields it cannot fabricate a plausible-looking wrong answer for.
 ///
-/// A model-claimed date, limit, currency, transaction amount or person name is
-/// still discarded — those are the fields a hallucination silently answers the
-/// wrong question with, or returns another customer's data for.
+/// A model-claimed date, limit, currency or transaction amount is still
+/// discarded outright — those are the fields a hallucination silently answers
+/// the wrong question with. A person name is admitted only under the verbatim
+/// guard described on `MODEL_VERBATIM_ENTITIES`.
 ///
 /// `retrieval::sufficiency` reads the same map to decide whether a candidate
 /// capability can honour what the user asked for, so "what the user said" has
 /// exactly one definition in this crate; hence `intent` is optional here, since
-/// that caller runs on turns where no intent has been routed yet.
+/// that caller runs on turns where no intent has been routed yet. `message` is
+/// optional for the same reason and defaults to the safe answer: a caller that
+/// cannot show the user's own words gets no verbatim-gated entity at all.
 pub(crate) fn request_facts(
+    message: Option<&str>,
     intent: Option<&AssistantIntent>,
     extraction: Option<&DeterministicExtraction>,
 ) -> BTreeMap<ConstraintField, TypedFactValue> {
@@ -329,7 +334,10 @@ pub(crate) fn request_facts(
             .or_insert_with(|| TypedFactValue::IdList(ListPatch::Replace(ids.clone())));
     }
     for entity in &intent.entities {
-        if !MODEL_TRUSTED_ENTITIES.contains(&entity.entity_type) {
+        let admissible = MODEL_TRUSTED_ENTITIES.contains(&entity.entity_type)
+            || (MODEL_VERBATIM_ENTITIES.contains(&entity.entity_type)
+                && message.is_some_and(|message| occurs_verbatim(message, &entity.value)));
+        if !admissible {
             continue;
         }
         if let Some((field, value)) = crate::assistant::entity_fact(entity) {
@@ -339,16 +347,38 @@ pub(crate) fn request_facts(
     facts
 }
 
-/// Entity kinds the model may supply directly. Each names a thing the SQL
-/// matches by equality against a catalog-approved column, so a wrong guess
-/// returns no rows rather than the wrong rows — unlike a person name, where a
-/// wrong guess quietly returns a different customer.
+/// Entity kinds the model may supply unconditionally. Each names a thing the SQL
+/// matches against a catalog-approved column by equality, so a wrong guess
+/// returns no rows rather than the wrong rows.
 const MODEL_TRUSTED_ENTITIES: &[AssistantEntityType] = &[
     AssistantEntityType::ClientId,
     AssistantEntityType::Office,
     AssistantEntityType::Product,
     AssistantEntityType::ChargeType,
 ];
+
+/// Entity kinds the model may supply only when the value occurs in the user's
+/// own message. A person name reaches SQL as a substring match, so a wrong guess
+/// does not return no rows — it quietly returns a *different customer's* rows.
+/// Excluding the kind entirely was the previous answer, and it cost every
+/// lowercase name the deterministic extractor could not see.
+///
+/// The verbatim check is what makes this admissible, so it is not separable from
+/// the list: the model may only point at words the user typed, never invent
+/// them. Moving a kind here without the guard reinstates exactly the risk the
+/// exclusion was protecting against.
+const MODEL_VERBATIM_ENTITIES: &[AssistantEntityType] = &[AssistantEntityType::PersonName];
+
+/// Did the user type this value? Case-insensitive substring, which is the same
+/// bar the deterministic extractor meets by construction — it is a reader over
+/// the message — and the same one `retrieval::sufficiency` applies before it
+/// lets a fact refuse a capability.
+pub(crate) fn occurs_verbatim(message: &str, value: &str) -> bool {
+    !value.trim().is_empty()
+        && message
+            .to_lowercase()
+            .contains(&value.trim().to_lowercase())
+}
 
 /// Look up a per-parameter policy default and evaluate it against `ctx`.
 /// Returns `None` when the parameter has no policy, no default, is still

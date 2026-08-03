@@ -470,14 +470,20 @@ fn every_fully_defaulted_capability_plans_without_asking() {
             confidence: 0.9,
             reason: capability.id.clone(),
         };
-        let plan =
-            plan_selected_capability_verified(&catalog, &capability.id, &intent, None, Some(&ctx))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "fully-defaulted capability {} must plan without asking: {e}",
-                        capability.id
-                    )
-                });
+        let plan = plan_selected_capability_verified(
+            &catalog,
+            &capability.id,
+            &intent,
+            None,
+            Some(&ctx),
+            None,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "fully-defaulted capability {} must plan without asking: {e}",
+                capability.id
+            )
+        });
         let query = catalog
             .queries
             .iter()

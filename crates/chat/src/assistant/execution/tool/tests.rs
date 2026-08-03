@@ -112,6 +112,7 @@ fn extracts_dates_currency_products_and_limit() {
         Some(&extraction),
         &[],
         None,
+        None,
     )
     .unwrap();
 
@@ -143,6 +144,7 @@ fn verified_quantity_overrides_missing_llm_quantity() {
         Some(&extraction),
         &[],
         None,
+        None,
     )
     .unwrap();
 
@@ -169,6 +171,7 @@ fn hallucinated_required_quantity_is_rejected_without_verified_extraction() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
 
@@ -193,7 +196,7 @@ fn hallucinated_optional_currency_is_omitted_without_verified_extraction() {
     let mut intent = intent_with_quantity(None);
     intent.constraints.currency_code = Some("USD".into());
 
-    let params = params_from_verified(&catalog(), &query, &intent, None, &[], None).unwrap();
+    let params = params_from_verified(&catalog(), &query, &intent, None, &[], None, None).unwrap();
 
     assert!(params.get("currency_code").is_none());
 }
@@ -207,6 +210,7 @@ fn metric_mismatch_rejected() {
         "client_top_n_by_deposit_volume",
         &intent_with_quantity(None),
         Some(&extraction),
+        None,
         None,
     )
     .unwrap_err();
@@ -224,12 +228,15 @@ fn metric_match_accepted() {
         &intent_with_quantity(None),
         Some(&extraction),
         None,
+        None,
     )
     .unwrap();
 
     assert_eq!(plan.params["limit"], 10);
 }
 
+/// No message means no way to check the model's claim against the user's own
+/// words, so the claim is refused. `None` is the safe default, not a bypass.
 #[test]
 fn hallucinated_required_search_rejected_without_trusted_entity() {
     let query = QueryKnowledge {
@@ -250,8 +257,65 @@ fn hallucinated_required_search_rejected_without_trusted_entity() {
         canonical: None,
         confidence: None,
     });
-    let error = params_from_verified(&catalog(), &query, &intent, None, &[], None).unwrap_err();
+    let error =
+        params_from_verified(&catalog(), &query, &intent, None, &[], None, None).unwrap_err();
 
+    assert!(error.to_string().contains("missing parameter search"));
+}
+
+/// The model may point at a name the user typed; it may not invent one.
+///
+/// Both directions matter and they are not symmetric. Accepting a name the user
+/// typed rescues every lowercase spelling the extractor cannot anchor on;
+/// accepting one the user did *not* type binds a substring match that silently
+/// returns a different customer's rows. The surface check is the whole licence,
+/// so it is asserted here rather than assumed.
+#[test]
+fn a_model_person_name_binds_only_when_the_user_typed_it() {
+    let query = QueryKnowledge {
+        id: "test.query".into(),
+        database: "fineract".into(),
+        sql_file: "test.sql".into(),
+        data_areas: Vec::new(),
+        tables: Vec::new(),
+        metrics: Vec::new(),
+        parameters: vec![parameter("search", true)],
+        output_fields: Vec::new(),
+        timeout_ms: None,
+    };
+    let mut intent = intent_with_quantity(None);
+    intent.entities.push(AssistantEntity {
+        entity_type: AssistantEntityType::PersonName,
+        value: "Tony".into(),
+        canonical: None,
+        confidence: None,
+    });
+
+    // Case-insensitively present in the message: admissible.
+    let params = params_from_verified(
+        &catalog(),
+        &query,
+        &intent,
+        None,
+        &[],
+        None,
+        Some("berapa tabungan tony?"),
+    )
+    .unwrap();
+    assert_eq!(params["search"], "Tony");
+
+    // Absent from the message: refused, and the run asks rather than answering
+    // with somebody else's rows.
+    let error = params_from_verified(
+        &catalog(),
+        &query,
+        &intent,
+        None,
+        &[],
+        None,
+        Some("how many clients do we have?"),
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("missing parameter search"));
 }
 
@@ -275,6 +339,7 @@ fn trusted_named_tony_fills_search() {
         &intent_with_quantity(None),
         Some(&extraction),
         &[],
+        None,
         None,
     )
     .unwrap();
@@ -367,6 +432,7 @@ fn defaults_business_today_when_policy_declares_it() {
         None,
         &policies,
         Some(&ctx),
+        None,
     )
     .unwrap();
 
@@ -412,6 +478,7 @@ fn unbounded_limit_is_clamped_to_hard_cap() {
         None,
         &policies,
         Some(&ctx),
+        None,
     )
     .unwrap();
 
@@ -499,6 +566,7 @@ fn defaults_authorized_scope_when_policy_declares_it() {
         None,
         &policies,
         Some(&ctx),
+        None,
     )
     .unwrap();
 
@@ -524,6 +592,7 @@ fn still_bails_when_no_policy_and_no_default() {
         &intent_with_quantity(None),
         None,
         &[],
+        None,
         None,
     )
     .unwrap_err();
@@ -585,6 +654,7 @@ fn every_approved_capability_can_execute_its_own_example() {
             &intent,
             Some(&extraction),
             Some(&ctx),
+            Some(example),
         ) {
             Err(error) => {
                 unreachable.push(format!("{}: {error} — example: {example:?}", capability.id));

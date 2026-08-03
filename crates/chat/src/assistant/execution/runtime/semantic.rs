@@ -52,6 +52,7 @@ async fn clarify_retrieval_candidates(
                     None,
                     None,
                     input.sensitive_identifier.as_ref(),
+                    &input.source_message,
                 )
                 .await;
             }
@@ -188,6 +189,7 @@ pub(super) async fn complete_semantic_route(
                             Some(payload),
                             pending_clarification,
                             None,
+                            &input.source_message,
                         )
                         .await;
                     }
@@ -221,6 +223,7 @@ pub(super) async fn complete_semantic_route(
                             Some(payload),
                             pending_clarification,
                             input.sensitive_identifier.as_ref(),
+                            &input.source_message,
                         )
                         .await;
                     }
@@ -436,6 +439,7 @@ pub(super) async fn complete_semantic_route(
                                 None,
                                 None,
                                 input.sensitive_identifier.as_ref(),
+                                &input.source_message,
                             )
                             .await;
                             result.retrieval_trace = retrieval_trace.clone();

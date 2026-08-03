@@ -28,6 +28,7 @@ pub(super) fn plan_selected_capability(
         intent,
         Some(&legacy_extraction),
         None,
+        None,
     )
 }
 
@@ -37,6 +38,7 @@ pub(super) fn plan_selected_capability_verified(
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
     ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<ExecutionPlan> {
     if let Some(error) = deterministic_extraction.and_then(|value| value.temporal_error.as_ref()) {
         bail!("{}: {}", error.code, error.message);
@@ -63,6 +65,7 @@ pub(super) fn plan_selected_capability_verified(
         deterministic_extraction,
         &capability.parameter_policies,
         ctx,
+        message,
     )?;
     let dataset_selection = capability
         .dataset_recipe

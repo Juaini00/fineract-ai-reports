@@ -56,12 +56,13 @@ const GATED_FILTERS: &[ConstraintField] = &[
 /// The bar is: the value the fact carries occurs in the user's own message.
 /// That is the same standard the deterministic extractor already meets (it is a
 /// substring reader over the message), and it is what makes a model-supplied
-/// entity admissible here even though `MODEL_TRUSTED_ENTITIES` would not let it
-/// *bind* to SQL — the two decisions carry opposite risks. Binding a
+/// entity admissible here even when `MODEL_TRUSTED_ENTITIES` would not let it
+/// *bind* to SQL — the two decisions carry different risks. Binding a
 /// hallucinated office name returns the wrong rows, so binding demands a
 /// verified fact; refusing on a hallucinated office name blocks a question the
 /// user never asked to be narrowed, so refusing demands evidence the words were
-/// typed. A surface match is that evidence, and it costs one `contains`.
+/// typed. A surface match is that evidence, and it costs one `contains` —
+/// literally the same `occurs_verbatim` binding now uses for a person name.
 ///
 /// Consequence worth stating: an office the user meant but never spelled — one
 /// only an LLM inferred from context — does not gate. That is the conservative
@@ -71,13 +72,14 @@ pub fn expressed_filters(
     intent: Option<&AssistantIntent>,
     extraction: Option<&DeterministicExtraction>,
 ) -> BTreeSet<ConstraintField> {
-    let haystack = message.to_lowercase();
-    let facts = crate::assistant::execution::tool::request_facts(intent, extraction);
+    let facts = crate::assistant::execution::tool::request_facts(Some(message), intent, extraction);
     facts
         .into_iter()
         .filter(|(field, _)| GATED_FILTERS.contains(field))
         .filter(|(_, value)| {
-            surface_text(value).is_some_and(|text| haystack.contains(&text.to_lowercase()))
+            surface_text(value).is_some_and(|text| {
+                crate::assistant::execution::tool::occurs_verbatim(message, &text)
+            })
         })
         .map(|(field, _)| field)
         .collect()

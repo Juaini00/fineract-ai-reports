@@ -504,6 +504,52 @@ fn named_entities_are_classified_by_what_they_name() {
     );
 }
 
+/// A name typed in lower case is still a name. `search` reaches SQL as
+/// `c.display_name ILIKE '%' || $2 || '%'`, so "john doe" would have matched
+/// "John Doe" — it just never got bound, and the user saw
+/// `missing parameter search`.
+///
+/// The other half is what the anchor is *not* allowed to swallow. Without a
+/// capital there is no self-terminating edge, so the run stops at a stop word or
+/// at two tokens, and a run carrying a banking noun is dropped rather than
+/// promoted to an office or a product.
+#[test]
+fn a_lowercase_name_after_an_anchor_is_read_without_swallowing_the_sentence() {
+    let person = |message: &str| {
+        extract_message_facts(message)
+            .entities
+            .into_iter()
+            .find(|e| e.entity_type == AssistantEntityType::PersonName)
+            .map(|e| e.value)
+    };
+
+    for (message, expected) in [
+        ("nama john doe", Some("john doe")),
+        ("nama JOHN DOE", Some("JOHN DOE")),
+        ("nama john Doe", Some("john Doe")),
+        ("nama john", Some("john")),
+        // Only the anchors that announce a name. "client" is followed by an
+        // ordinary noun far more often, and a wrong `search` is a wrong answer.
+        ("look up a client please", None),
+        ("find client tony", None),
+        // The tail must not come along: "di" ends the run well before the cap.
+        ("nama john doe di office foo", Some("john doe")),
+        // Two tokens is the ceiling even with nothing to stop on.
+        ("nama john doe smith", Some("john doe")),
+        // The user talking about names, not typing one.
+        ("what is the client name?", None),
+        // Lower case never invents a place or a product.
+        ("client head office", None),
+        ("show me client accounts", None),
+        // `for` is not a lowercase anchor: too many non-names follow it.
+        ("savings report for january", None),
+        // A sentence boundary breaks the anchor's reach.
+        ("give me the client name. john said so", None),
+    ] {
+        assert_eq!(person(message).as_deref(), expected, "message: {message:?}");
+    }
+}
+
 #[test]
 fn transaction_amount_is_read_whole_and_only_when_anchored() {
     assert_eq!(

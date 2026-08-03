@@ -2,7 +2,7 @@ mod guard;
 mod parameters;
 mod planning;
 
-pub(crate) use parameters::request_facts;
+pub(crate) use parameters::{occurs_verbatim, request_facts};
 
 use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
@@ -110,6 +110,7 @@ pub fn plan_selected_capability_verified(
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
     ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<ExecutionPlan> {
     planning::plan_selected_capability_verified(
         catalog,
@@ -117,6 +118,7 @@ pub fn plan_selected_capability_verified(
         intent,
         deterministic_extraction,
         ctx,
+        message,
     )
 }
 

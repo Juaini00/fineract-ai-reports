@@ -21,9 +21,14 @@ bindings:
   as_of_date: []
   currency_code: [currency_code]
   limit: [limit_value]
-  # A client search accepts whichever identifying name we managed to resolve.
-  # Person name first: it is the only one the query actually means.
-  search: [person_name, office, product]
+  # A client-name search. Only a person name fills it. The `office` / `product`
+  # fallback that used to sit here was inherited from an old Rust
+  # `person_name.or(office).or(product)` precedence and had become a
+  # wrong-answer path: "clients in office Foo" with nobody named bound `Foo` as
+  # a *client name* and reported the empty result as an answer. Since
+  # `office_name` exists as a real narrowing parameter there is nothing left for
+  # the fallback to rescue.
+  search: [person_name]
   # Fills two different jobs, both from the same canonical fact. In
   # organization.office_name_lookup it is the subject ("does an office named X
   # exist?"); everywhere else it is an optional *narrowing* filter ANDed after
