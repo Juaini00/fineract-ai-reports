@@ -36,5 +36,9 @@ Resolved: YYYY-MM-DD or blank
 - [Analyst-grade knowledge and request mapping](./active/007-analyst-grade-knowledge-and-request-mapping.md)
 - [Loan domain analyst capabilities](./active/008-loan-domain-analyst-capabilities.md)
 - [Conversational drill-down](./active/009-conversational-drill-down.md)
-- [Operational identity and relationship lookups](./active/010-operational-identity-and-relationship-lookups.md)
+- [Dataset filter and shape coverage gaps](./active/011-dataset-filter-and-shape-coverage-gaps.md)
 - [Hardcode cleanup issues](./active/hardcode-cleanup-issues.md)
+
+## Resolved issues
+
+- [Operational identity and relationship lookups](./resolved/010-operational-identity-and-relationship-lookups.md)
