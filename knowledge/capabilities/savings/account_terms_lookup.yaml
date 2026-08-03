@@ -1,0 +1,32 @@
+id: savings_account_terms_lookup
+status: approved_mvp
+domain: savings
+display_name: Savings Account Terms Lookup
+description: Return separately labeled account-level and product-level interest and overdraft terms for an exact savings account within authorized office scope.
+data_areas: [client_foundation, savings_core]
+required_api_capability: savings_account_terms_lookup
+query_id: savings.account_terms_lookup
+metrics: [savings.account_terms]
+output_mode: list
+request_shape:
+  operation: lookup
+  subject: savings_account
+  grouping: none
+  output: lookup
+  pii: none
+examples:
+  - What interest rate applies to savings account [SAVINGS_ACCOUNT_NUMBER]?
+  - Show account and product overdraft terms for savings account [SAVINGS_ACCOUNT_NUMBER].
+guards:
+  require_office_scope: true
+checks:
+  - { id: no_inferred_terms, rule: Account and product terms remain separate and nulls are preserved. }
+parameters:
+  account_number: { type: string, required: true }
+  office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }
+dataset_recipe:
+  dataset_id: savings.accounts
+  shape_id: terms
+  filters:
+    - { filter_id: account_number, operator: eq, parameter: account_number }
+  projection: [savings_account_id, masked_account_number, account_nominal_annual_interest_rate, product_nominal_annual_interest_rate, account_allow_overdraft, product_allow_overdraft, account_overdraft_limit, product_overdraft_limit]

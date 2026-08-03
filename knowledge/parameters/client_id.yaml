@@ -1,0 +1,7 @@
+id: client_id
+parameters: [client_id]
+type: integer
+label: Client
+help_text: Select a client from the safe disambiguation choices.
+required: true
+validation: { min_integer: 1 }

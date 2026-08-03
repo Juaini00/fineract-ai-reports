@@ -1,0 +1,21 @@
+id: savings.account_identity_lookup
+database: fineract
+sql_file: queries/savings/account_identity_lookup.sql
+data_areas: [organization_foundation, client_foundation, savings_core]
+tables: [m_savings_account, m_client, m_office, m_savings_product]
+metrics: [savings.account_identity]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - { name: account_number, type: string, required: true, source: transient_sensitive_input }
+output_fields:
+  - { name: savings_account_id, type: bigint, sensitivity: public_business }
+  - { name: masked_account_number, type: string, sensitivity: masked_output }
+  - { name: client_id, type: bigint, sensitivity: pii }
+  - { name: client_display_name, type: string, sensitivity: pii }
+  - { name: office_id, type: bigint, sensitivity: public_business }
+  - { name: office_name, type: string, sensitivity: public_business }
+  - { name: savings_product_id, type: bigint, sensitivity: public_business }
+  - { name: savings_product_name, type: string, sensitivity: public_business }
+  - { name: savings_status_enum, type: bigint, sensitivity: public_business }
+  - { name: currency_code, type: string, sensitivity: public_business }
+timeout_ms: 3000
