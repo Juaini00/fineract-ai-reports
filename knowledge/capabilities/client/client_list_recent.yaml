@@ -23,6 +23,8 @@ examples:
 - List new clients this year.
 - Recently onboarded clients in my offices.
 - Nasabah baru yang baru diaktivasi.
+- Recently activated clients in Head Office.
+- List the newest clients from office Head Office.
 supported_intents:
 - plain browse/list of recently activated clients with no ranking metric
 unsupported_intents:
@@ -50,6 +52,17 @@ checks:
   rule: pii output fields must be redacted when caller lacks can_view_pii.
 - id: office_scope_required
   rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: office_name_narrows_only
+  rule: >-
+    A user-named office may only narrow within authorized_scope. It is bound
+    into the approved SQL and ANDed after the authorized office_ids predicate,
+    never post-filtered in Rust, so naming an office outside the caller's scope
+    returns no rows rather than data or an existence signal.
+- id: office_name_is_exact_not_hierarchical
+  rule: >-
+    office_name matches the office's own name exactly (case-insensitive). Child
+    offices are NOT included; every returned row carries office_name so the
+    scope actually applied is visible in the output.
 parameters:
   office_ids:
     type: integer_array
@@ -61,3 +74,7 @@ parameters:
     required: false
     default: unbounded
     hard_cap: 200
+  office_name:
+    type: string
+    required: false
+    user_may_override: true

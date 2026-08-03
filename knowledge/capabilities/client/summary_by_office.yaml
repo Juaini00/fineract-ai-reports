@@ -24,6 +24,7 @@ examples:
 - Client lifecycle counts across my offices (top 20).
 - Lifecycle status distribution of active, pending, and closed clients by office.
 - Status lifecycle nasabah aktif, pending, dan closed per kantor.
+- Client lifecycle breakdown for Head Office.
 supported_intents:
 - client lifecycle counts grouped by office
 unsupported_intents:
@@ -42,6 +43,17 @@ checks:
   rule: query output fields must not expose client identity.
 - id: office_scope_required
   rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: office_name_narrows_only
+  rule: >-
+    A user-named office may only narrow within authorized_scope. It is bound
+    into the approved SQL and ANDed after the authorized office_ids predicate,
+    never post-filtered in Rust, so naming an office outside the caller's scope
+    returns no rows rather than data or an existence signal.
+- id: office_name_is_exact_not_hierarchical
+  rule: >-
+    office_name matches the office's own name exactly (case-insensitive). Child
+    offices are NOT included; every returned row carries office_name so the
+    scope actually applied is visible in the output.
 parameters:
   office_ids:
     type: integer_array
@@ -53,3 +65,7 @@ parameters:
     required: false
     default: unbounded
     hard_cap: 10000
+  office_name:
+    type: string
+    required: false
+    user_may_override: true

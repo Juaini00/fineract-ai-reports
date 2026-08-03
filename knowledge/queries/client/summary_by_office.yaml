@@ -17,6 +17,13 @@ parameters:
   - name: limit
     type: integer
     required: true
+  # User-supplied narrowing, not authorization. It is ANDed after the
+  # unconditional `c.office_id = ANY($1::bigint[])` scope predicate, so it can
+  # only ever shrink the authorized set. Unbound it binds NULL and the
+  # predicate short-circuits, leaving the statement text identical.
+  - name: office_name
+    type: string
+    required: false
 output_fields:
   - name: office_id
     type: bigint
@@ -53,3 +60,9 @@ checks:
     rule: Prepared SQL output columns must equal output_fields order.
   - id: no_identity_fields
     rule: Query must not output client names, account numbers, emails, mobile numbers, or external ids.
+  - id: office_name_narrows_only
+    rule: >-
+      office_name is ANDed after the authorized office_ids predicate and binds
+      NULL when absent, so it can only narrow within authorized_scope, never
+      widen it. Match is exact and case-insensitive on the office's own name;
+      child offices are not included.

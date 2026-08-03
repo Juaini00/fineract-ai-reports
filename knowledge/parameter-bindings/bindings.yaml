@@ -24,6 +24,11 @@ bindings:
   # A client search accepts whichever identifying name we managed to resolve.
   # Person name first: it is the only one the query actually means.
   search: [person_name, office, product]
+  # Fills two different jobs, both from the same canonical fact. In
+  # organization.office_name_lookup it is the subject ("does an office named X
+  # exist?"); everywhere else it is an optional *narrowing* filter ANDed after
+  # the authorized office_ids predicate. It is never the authorization
+  # boundary — that stays `office_ids`, source: authorized_scope.
   office_name: [office]
   product_name: [product]
   charge_name: [charge_type]

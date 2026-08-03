@@ -22,6 +22,8 @@ examples:
 - coba berikan saya 5 client sembarang pada tahun ini
 - Give me a random sample of 5 clients.
 - Show a few arbitrary clients from my offices.
+- Show 5 random clients from Head Office.
+- Give me a random sample of clients in office Head Office.
 supported_intents:
 - random/arbitrary sample of clients with no ranking metric
 unsupported_intents:
@@ -51,6 +53,17 @@ checks:
   rule: query must declare office_ids from authorized_scope and require_office_filter=true.
 - id: bounded_sample_size
   rule: limit must never exceed 50.
+- id: office_name_narrows_only
+  rule: >-
+    A user-named office may only narrow within authorized_scope. It is bound
+    into the approved SQL and ANDed after the authorized office_ids predicate,
+    never post-filtered in Rust, so naming an office outside the caller's scope
+    returns no rows rather than data or an existence signal.
+- id: office_name_is_exact_not_hierarchical
+  rule: >-
+    office_name matches the office's own name exactly (case-insensitive). Child
+    offices are NOT included; every returned row carries office_name so the
+    scope actually applied is visible in the output.
 parameters:
   office_ids:
     type: integer_array
@@ -62,3 +75,7 @@ parameters:
     required: false
     default: unbounded
     hard_cap: 50
+  office_name:
+    type: string
+    required: false
+    user_may_override: true
