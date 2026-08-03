@@ -517,6 +517,96 @@ fn still_bails_when_no_policy_and_no_default() {
     assert!(error.to_string().contains("missing parameter from_date"));
 }
 
+/// Phase 0 measurement. Every other test in this file hands the planner a value
+/// it built itself; this one hands it the capability's *own* documented example
+/// sentence and the real deterministic extractor, which is what production runs
+/// (`runtime/execution.rs` calls `plan_selected_capability_verified` with the
+/// extraction, never the `plan_selected_capability` shim).
+///
+/// A capability whose own example cannot reach a bound plan cannot be reached by
+/// any user phrasing either — it is catalog-only. `catalog_validation.rs` skips
+/// exactly these with a `continue`, so its coverage is the complement of the bug.
+#[test]
+fn every_approved_capability_can_execute_its_own_example() {
+    let catalog = catalog();
+    let ctx = crate::knowledge::catalog::parameter_policy::EvaluationContext {
+        business_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        wall_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        authorized_office_ids: vec![1],
+    };
+
+    let mut unreachable: Vec<String> = Vec::new();
+    for capability in catalog
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "approved_mvp")
+    {
+        let Some(example) = capability.examples.first() else {
+            unreachable.push(format!("{}: no examples declared", capability.id));
+            continue;
+        };
+        let extraction = extract_message_facts(example);
+        let intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain: AssistantDomain::Unknown,
+            request_shape: capability.request_shape.clone(),
+            language: AssistantLanguage::En,
+            canonical_query_en: example.clone(),
+            entities: Vec::new(),
+            constraints: AssistantConstraints::default(),
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 0.9,
+            reason: example.clone(),
+        };
+
+        match plan_selected_capability_verified(
+            &catalog,
+            &capability.id,
+            &intent,
+            Some(&extraction),
+            Some(&ctx),
+        ) {
+            Err(error) => {
+                unreachable.push(format!("{}: {error} — example: {example:?}", capability.id));
+            }
+            Ok(plan) => {
+                let query = catalog
+                    .queries
+                    .iter()
+                    .find(|q| q.id == capability.query_id)
+                    .expect("validated catalog resolves query_id");
+                for parameter in query.parameters.iter().filter(|p| {
+                    p.required
+                        && !matches!(
+                            p.source.as_deref(),
+                            Some("authorized_scope" | "transient_sensitive_input")
+                        )
+                }) {
+                    if plan.params.get(&parameter.name).is_none() {
+                        unreachable.push(format!(
+                            "{}: required parameter {} unfilled — example: {example:?}",
+                            capability.id, parameter.name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        unreachable.is_empty(),
+        "{} of {} approved capabilities cannot execute their own documented example:\n  {}",
+        unreachable.len(),
+        catalog
+            .capabilities
+            .iter()
+            .filter(|c| c.status == "approved_mvp")
+            .count(),
+        unreachable.join("\n  ")
+    );
+}
+
 fn parameter(name: &str, required: bool) -> crate::knowledge::model::QueryParameter {
     crate::knowledge::model::QueryParameter {
         name: name.into(),
