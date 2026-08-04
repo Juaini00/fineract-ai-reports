@@ -151,20 +151,22 @@ where
                                 .map(str::to_owned)
                         })
                         .flatten();
+                    let persisted = persisted_output(&node.inputs, output);
                     self.state
-                        .complete_node(
-                            &run,
-                            persisted_output(&node.inputs, output),
-                            rows_returned,
-                            elapsed,
-                        )
+                        .complete_node(&run, persisted.clone(), rows_returned, elapsed)
                         .await?;
                     if let Some(cardinality) = branch_decision {
                         self.state
                             .record_branch_decision(job_id, workflow.id, &node.id, &cardinality)
                             .await?;
                     }
-                    runs.push(completed_run(run, elapsed));
+                    // `complete_node` above only updates the durable row; the
+                    // in-memory `run` predates completion (from `begin_node`)
+                    // and must be refreshed with the real output/row count too
+                    // — later nodes in this same run (branch decisions,
+                    // `PriorStep`/`AuthorizedDataProbe` bindings) read `runs`,
+                    // not the database, to resolve a prior node's output.
+                    runs.push(completed_run(run, elapsed, persisted, rows_returned));
                 }
                 NodeExecution::Waiting { mut clarification } => {
                     clarification.workflow_id = Some(workflow.id);
@@ -210,9 +212,16 @@ where
     }
 }
 
-fn completed_run(mut run: WorkflowNodeRun, duration_ms: i32) -> WorkflowNodeRun {
+fn completed_run(
+    mut run: WorkflowNodeRun,
+    duration_ms: i32,
+    output_json: Value,
+    rows_returned: i32,
+) -> WorkflowNodeRun {
     run.status = NodeRunStatus::Completed;
     run.duration_ms = Some(duration_ms);
+    run.output_json = Some(output_json);
+    run.rows_returned = rows_returned;
     run
 }
 
@@ -251,19 +260,16 @@ fn runnable(
         .iter()
         .filter(|edge| edge.to == node.id)
         .collect::<Vec<_>>();
-    !incoming.is_empty()
-        && incoming.iter().any(|edge| {
+    // A node with no incoming edges is an entry point (mirrors
+    // `WorkflowGraph::entry_nodes`, which `verify()` uses the same way) and is
+    // runnable immediately, regardless of whether it also has outgoing edges
+    // — an entry node driving the rest of the graph is the common case, not
+    // an exception.
+    incoming.is_empty()
+        || incoming.iter().any(|edge| {
             completed.contains(&edge.from)
                 && edge_condition_matches(&edge.condition, &edge.from, runs)
         })
-        || (incoming.is_empty()
-            && !workflow.nodes.iter().any(|other| {
-                other.id != node.id
-                    && workflow
-                        .edges
-                        .iter()
-                        .any(|edge| edge.to == other.id && edge.from == node.id)
-            }))
 }
 
 fn edge_condition_matches(

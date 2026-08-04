@@ -110,6 +110,52 @@ fn workflow(nodes: Vec<WorkflowNode>, edges: Vec<WorkflowEdge>) -> ExecutionWork
     }
 }
 
+/// SI-7 style scan: none of the twelve `VerifyError` client-facing messages
+/// may leak raw SQL, a prompt string, a stack-trace marker, or an account
+/// number — the whole error surface is enumerated so a future variant can't
+/// silently skip the check.
+#[test]
+fn verify_error_client_messages_never_leak_sensitive_payloads() {
+    let variants = [
+        VerifyError::Cycle,
+        VerifyError::UnknownResource,
+        VerifyError::TypeIncompatibleBinding,
+        VerifyError::DataDependentSqlIdentifier,
+        VerifyError::MissingOfficeScope,
+        VerifyError::BudgetExceeded,
+        VerifyError::PartialResultsNotPermitted,
+        VerifyError::SensitivityWidening,
+        VerifyError::UnreachableOrOrphanNode,
+        VerifyError::DanglingResume,
+        VerifyError::UnboundRequiredInput,
+        VerifyError::CapabilityNotPermitted,
+    ];
+    let forbidden = [
+        "select ",
+        "insert ",
+        "update ",
+        "delete ",
+        " from ",
+        "1234567890",
+        "account_number",
+        "panicked at",
+        "backtrace",
+        "you are a",
+        "system prompt",
+    ];
+    for variant in variants {
+        let message = variant.client_message().to_ascii_lowercase();
+        for needle in forbidden {
+            assert!(
+                !message.contains(needle),
+                "{variant:?} client_message leaked {needle:?}: {message}"
+            );
+        }
+        // client_message and Display must agree — no second, richer error path.
+        assert_eq!(variant.to_string(), variant.client_message());
+    }
+}
+
 #[test]
 fn node_id_is_validated_on_construction_and_deserialization() {
     assert!(NodeId::new("valid_node_1").is_ok());

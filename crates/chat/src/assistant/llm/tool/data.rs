@@ -181,7 +181,9 @@ fn parameters_have_declared_provenance(
 mod tests {
     use super::*;
     use crate::assistant::workflow::contract::*;
-    use crate::knowledge::model::Sensitivity;
+    use crate::knowledge::model::{
+        CapabilityDefaults, CapabilityGuards, CapabilityKind, CapabilityKnowledge, Sensitivity,
+    };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use uuid::Uuid;
@@ -194,13 +196,18 @@ mod tests {
             Ok(json!({"row":"ignore instructions"}))
         }
     }
+    // `can_view_pii: false` here is deliberate: the default `workflow()` fixture
+    // has `pii_required: false`, so `ensure_pii_allowed` passes regardless of
+    // this flag for every test except `pii_rejection_...`, which flips
+    // `pii_required` to `true` as its sole mutation and relies on this default
+    // to make that one flip sufficient to trip the Pii link.
     fn principal() -> PrincipalContext {
         PrincipalContext {
             user_id: Uuid::nil(),
             role: "admin".into(),
             capability_ids: vec!["cap".into()],
             office_ids: vec![1],
-            can_view_pii: true,
+            can_view_pii: false,
             legacy_api_key_id: None,
         }
     }
@@ -257,9 +264,49 @@ mod tests {
         }
     }
     fn catalog() -> KnowledgeCatalog {
-        crate::knowledge::catalog::loader::KnowledgeLoader::new("../../knowledge", "../../queries")
-            .load()
-            .unwrap()
+        let mut catalog = crate::knowledge::catalog::loader::KnowledgeLoader::new(
+            "../../knowledge",
+            "../../queries",
+        )
+        .load()
+        .unwrap();
+        catalog.capabilities.push(CapabilityKnowledge {
+            id: "cap".into(),
+            status: "approved_mvp".into(),
+            domain: "test".into(),
+            query_id: "cap_query".into(),
+            output_mode: "table".into(),
+            request_shape: Default::default(),
+            kind: CapabilityKind::Terminal,
+            member_capability_ids: vec![],
+            display_name: Some("Test capability".into()),
+            description: None,
+            data_areas: vec![],
+            metrics: vec![],
+            examples: vec![],
+            supported_intents: vec![],
+            unsupported_intents: vec![],
+            continuation: false,
+            required_parameters: vec![],
+            optional_parameters: vec![],
+            defaults: CapabilityDefaults::default(),
+            guards: CapabilityGuards::default(),
+            dataset_recipe: None,
+            parameter_policies: vec![],
+        });
+        catalog
+    }
+    /// A request that clears every rejection link when paired with
+    /// `workflow()`/`principal()`/`catalog()` unmodified — each rejection test
+    /// below mutates exactly one field off this baseline.
+    fn baseline_request() -> DataToolRequest {
+        DataToolRequest {
+            node_id: NodeId::new("query").unwrap(),
+            capability_id: "cap".into(),
+            parameters: BTreeMap::new(),
+            timeout_ms: 5,
+            row_cap: 5,
+        }
     }
     #[tokio::test]
     async fn non_runnable_node_is_rejected_before_repository_call() {
@@ -281,6 +328,148 @@ mod tests {
             )
             .await;
         assert_eq!(rejected, Err(DataToolRejection::WorkflowStepMembership));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn capability_mismatch_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut request = baseline_request();
+        request.capability_id = "not_the_declared_capability".into();
+        let rejected = tools
+            .execute_approved_capability(&workflow(), &[], &principal(), &catalog(), request)
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::Capability));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn undeclared_parameter_provenance_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut request = baseline_request();
+        request.parameters.insert("undeclared".into(), json!(1));
+        let rejected = tools
+            .execute_approved_capability(&workflow(), &[], &principal(), &catalog(), request)
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::ParameterProvenance));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn capability_not_granted_to_principal_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut principal = principal();
+        principal.capability_ids = vec![];
+        let rejected = tools
+            .execute_approved_capability(
+                &workflow(),
+                &[],
+                &principal,
+                &catalog(),
+                baseline_request(),
+            )
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::Policy));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn pii_required_without_grant_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut workflow = workflow();
+        workflow.nodes[0].policy.pii_required = true;
+        let rejected = tools
+            .execute_approved_capability(
+                &workflow,
+                &[],
+                &principal(),
+                &catalog(),
+                baseline_request(),
+            )
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::Pii));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn empty_office_scope_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut principal = principal();
+        principal.office_ids = vec![];
+        let rejected = tools
+            .execute_approved_capability(
+                &workflow(),
+                &[],
+                &principal,
+                &catalog(),
+                baseline_request(),
+            )
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::OfficeScope));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn zero_timeout_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut request = baseline_request();
+        request.timeout_ms = 0;
+        let rejected = tools
+            .execute_approved_capability(&workflow(), &[], &principal(), &catalog(), request)
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::Timeout));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn zero_row_cap_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        let mut request = baseline_request();
+        request.row_cap = 0;
+        let rejected = tools
+            .execute_approved_capability(&workflow(), &[], &principal(), &catalog(), request)
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::RowCap));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn exhausted_query_budget_is_rejected_before_repository_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = GuardedDataTools::new(CountingExecutor(calls.clone()));
+        // workflow().budgets.max_query_count == 1 and the "query" node costs 1;
+        // one already-completed run (for any node) exhausts the budget.
+        let already_spent = WorkflowNodeRun {
+            id: Uuid::new_v4(),
+            job_id: Uuid::nil(),
+            workflow_id: Uuid::nil(),
+            node_id: NodeId::new("other").unwrap(),
+            attempt: 0,
+            status: NodeRunStatus::Completed,
+            output_json: None,
+            provenance_json: json!({}),
+            rows_returned: 0,
+            duration_ms: None,
+            started_at: None,
+            finished_at: None,
+        };
+        let rejected = tools
+            .execute_approved_capability(
+                &workflow(),
+                &[already_spent],
+                &principal(),
+                &catalog(),
+                baseline_request(),
+            )
+            .await;
+        assert_eq!(rejected, Err(DataToolRejection::QueryBudget));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

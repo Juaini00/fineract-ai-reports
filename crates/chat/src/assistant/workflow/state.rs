@@ -368,7 +368,7 @@ impl WorkflowStateRepository {
             FROM chat_jobs cj
             LEFT JOIN assistant_job_memory ajm ON ajm.job_id = cj.id
             WHERE cj.id = $1 AND cj.user_id = $2
-            FOR UPDATE OF cj, ajm
+            FOR UPDATE OF cj
             "#,
         )
         .bind(request.job_id)
