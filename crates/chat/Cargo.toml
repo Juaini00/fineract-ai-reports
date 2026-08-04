@@ -30,6 +30,7 @@ rand.workspace = true
 reqwest.workspace = true
 redis.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 petgraph.workspace = true
 rig-core.workspace = true
 schemars.workspace = true

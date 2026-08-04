@@ -452,6 +452,43 @@ impl WorkflowStateRepository {
         Ok(ResumeOutcome::Resumed)
     }
 
+    /// Adds to the job's `state_json.workflow_runtime.budget_consumed` ledger
+    /// (queries/rows/ms) in a single UPDATE, so concurrent node completions
+    /// serialize on Postgres's row lock instead of racing a read-modify-write
+    /// in application code. Only the `budget_consumed` path is touched —
+    /// sibling `workflow_runtime` fields (e.g. `waiting_node_id`) survive.
+    pub async fn add_budget_consumed(
+        &self,
+        job_id: Uuid,
+        delta_queries: i64,
+        delta_rows: i64,
+        delta_ms: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE chat_jobs
+            SET state_json = jsonb_set(
+                    state_json,
+                    '{workflow_runtime,budget_consumed}',
+                    jsonb_build_object(
+                        'queries', COALESCE((state_json #>> '{workflow_runtime,budget_consumed,queries}')::bigint, 0) + $1,
+                        'rows', COALESCE((state_json #>> '{workflow_runtime,budget_consumed,rows}')::bigint, 0) + $2,
+                        'ms', COALESCE((state_json #>> '{workflow_runtime,budget_consumed,ms}')::bigint, 0) + $3
+                    )
+                ),
+                updated_at = now()
+            WHERE id = $4
+            "#,
+        )
+        .bind(delta_queries)
+        .bind(delta_rows)
+        .bind(delta_ms)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn insert_checkpoint(
         &self,
         job_id: Uuid,
