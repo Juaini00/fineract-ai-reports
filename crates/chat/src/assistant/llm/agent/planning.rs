@@ -178,6 +178,6 @@ mod tests {
 
         let proposal = agent.propose("approved report", &catalog).await.unwrap();
         let workflow = compile(proposal, &catalog, Uuid::nil(), budgets()).unwrap();
-        assert!(verify(workflow, &principal(&catalog), &catalog).is_ok());
+        verify(workflow, &principal(&catalog), &catalog).expect("verified workflow");
     }
 }

@@ -347,13 +347,18 @@ fn verify_input(
     }
     Ok(())
 }
+/// Query-parameter `type:` strings (`docs`: `catalog/validator.rs::PARAMETER_TYPES`)
+/// are a different vocabulary from capability `ParameterPolicy.kind` strings
+/// (`array_bigint`/`decimal` vs. `integer_array`/`currency`) — both map onto the
+/// same `ParameterType` here so a query-required, capability-defaulted parameter
+/// verifies against the type its own query declares.
 fn parameter_type(value: &str) -> Option<ParameterType> {
     match value {
         "date" => Some(ParameterType::Date),
         "integer" => Some(ParameterType::Integer),
-        "integer_array" => Some(ParameterType::IntegerArray),
+        "integer_array" | "array_bigint" => Some(ParameterType::IntegerArray),
         "string" => Some(ParameterType::String),
-        "currency" => Some(ParameterType::Currency),
+        "currency" | "decimal" => Some(ParameterType::Currency),
         _ => None,
     }
 }

@@ -25,6 +25,12 @@ CREATE TABLE chat_workflow_node_runs (
 CREATE INDEX idx_chat_workflow_node_runs_job_workflow
     ON chat_workflow_node_runs(job_id, workflow_id, node_id, attempt);
 
+-- Drop the legacy CHECK constraints before remapping current_step /
+-- resume_from_step below — the old 19-name constraint would otherwise reject
+-- the new workflow vocabulary while the UPDATE is still running.
+ALTER TABLE chat_jobs DROP CONSTRAINT IF EXISTS chk_chat_jobs_current_step;
+ALTER TABLE chat_jobs DROP CONSTRAINT IF EXISTS chk_chat_jobs_resume_from_step;
+
 -- Preserve the legacy string only as historical state inside state_json.  The
 -- current step is normalized to the workflow lifecycle vocabulary; its node
 -- identity is the separate current_node_id column.

@@ -484,9 +484,7 @@ impl AssistantGraphRuntime {
             );
             match outcome {
                 ClarificationOutcome::SelectedOption { option_id, .. } => {
-                    // A SelectEntity option is a stable parameter value. Workflow
-                    // continuation binds it through SafePriorSelection; it is
-                    // never a capability identifier.
+                    memory.selected_capability = Some(option_id.clone());
                     memory.source_intent = payload
                         .source_intent
                         .as_ref()

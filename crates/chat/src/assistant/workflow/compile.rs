@@ -286,11 +286,23 @@ fn acquisition_inputs(
         kind: ParameterType::IntegerArray,
         source: BindingSource::AuthorizedScope,
     }];
-    for policy_item in capability
-        .parameter_policies
+    let query_required: std::collections::HashSet<&str> = catalog
+        .queries
         .iter()
-        .filter(|policy| policy.required && policy.name != "office_ids")
-    {
+        .find(|query| query.id == capability.query_id)
+        .map(|query| {
+            query
+                .parameters
+                .iter()
+                .filter(|parameter| parameter.required)
+                .map(|parameter| parameter.name.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    for policy_item in capability.parameter_policies.iter().filter(|policy| {
+        policy.name != "office_ids"
+            && (policy.required || query_required.contains(policy.name.as_str()))
+    }) {
         let source = acquisition_source(policy_item, facts, nodes, edges, execute, catalog)?;
         inputs.push(NodeInput {
             parameter: policy_item.name.clone(),
