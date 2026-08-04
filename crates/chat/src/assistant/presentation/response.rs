@@ -28,6 +28,20 @@ pub struct AssistantResponse {
     pub evidence_refs: Vec<EvidenceReference>,
     #[serde(default)]
     pub rendered_markdown: Option<String>,
+    /// Additive workflow runtime metadata. Absent entirely (not `null`) when
+    /// the request wasn't served by the workflow runtime, so pre-migration
+    /// clients see byte-identical responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowResponseMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowResponseMeta {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub node_id: String,
+    pub steps_executed: u32,
+    pub partial: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -144,6 +158,7 @@ mod tests {
             actions: vec![],
             evidence_refs: vec![],
             rendered_markdown: None,
+            workflow: None,
         }
     }
 

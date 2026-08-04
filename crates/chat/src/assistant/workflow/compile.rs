@@ -116,6 +116,7 @@ pub enum CompileError {
     GroupedQueryPreferred(String),
     BudgetExceeded,
     InvalidProposal,
+    ComparisonFactsDiverge(NodeId),
 }
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -127,6 +128,12 @@ impl std::fmt::Display for CompileError {
             }
             Self::BudgetExceeded => f.write_str("workflow exceeds configured budget"),
             Self::InvalidProposal => f.write_str("workflow proposal is invalid"),
+            Self::ComparisonFactsDiverge(node) => {
+                write!(
+                    f,
+                    "comparison node {node} has sources with differing scope or temporal facts"
+                )
+            }
         }
     }
 }
@@ -169,7 +176,9 @@ pub fn compile_with_facts(
                 max_sensitivity: Sensitivity::Pii,
             },
         };
-        return expand_iteration(workflow, catalog);
+        let workflow = expand_iteration(workflow, catalog)?;
+        check_comparison_facts(&workflow)?;
+        return Ok(workflow);
     }
     for capability_id in &proposal.capability_ids {
         approved_capability(catalog, capability_id)?;
@@ -254,7 +263,7 @@ pub fn compile_with_facts(
         to: complete_id,
         condition: EdgeCondition::Always,
     });
-    expand_iteration(
+    let workflow = expand_iteration(
         ExecutionWorkflow {
             id: Uuid::new_v4(),
             contract_version: WORKFLOW_CONTRACT_VERSION,
@@ -270,6 +279,57 @@ pub fn compile_with_facts(
             },
         },
         catalog,
+    )?;
+    check_comparison_facts(&workflow)?;
+    Ok(workflow)
+}
+
+/// `comparison` composition requires every source to share identical scope and temporal
+/// facts; a differing binding source on a scope/temporal parameter is a compile error,
+/// never a runtime warning, because it would otherwise compare rows drawn from different
+/// authorized populations or time windows.
+fn check_comparison_facts(workflow: &ExecutionWorkflow) -> Result<(), CompileError> {
+    for node in &workflow.nodes {
+        let NodeKind::ComposeResult(compose) = &node.kind else {
+            continue;
+        };
+        if compose.composition != Composition::Comparison {
+            continue;
+        }
+        let mut reference: Option<(&NodeId, BTreeMap<&str, &BindingSource>)> = None;
+        for source_id in &compose.sources {
+            let source_node = workflow
+                .nodes
+                .iter()
+                .find(|candidate| &candidate.id == source_id)
+                .ok_or(CompileError::InvalidProposal)?;
+            let facts: BTreeMap<&str, &BindingSource> = source_node
+                .inputs
+                .iter()
+                .filter(|input| is_scope_or_temporal(&input.parameter))
+                .map(|input| (input.parameter.as_str(), &input.source))
+                .collect();
+            match &reference {
+                None => reference = Some((source_id, facts)),
+                Some((_, reference_facts)) if *reference_facts != facts => {
+                    return Err(CompileError::ComparisonFactsDiverge(node.id.clone()));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+fn is_scope_or_temporal(parameter: &str) -> bool {
+    matches!(
+        constraint_for(parameter),
+        Some(
+            ConstraintField::ClientId
+                | ConstraintField::OfficeIds
+                | ConstraintField::ProductIds
+                | ConstraintField::FromDate
+                | ConstraintField::ToDate
+        )
     )
 }
 
@@ -686,5 +746,143 @@ fn output_mode(value: &str) -> OutputMode {
         "grouped" => OutputMode::Grouped,
         "not_found" => OutputMode::NotFound,
         _ => OutputMode::Table,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::knowledge::catalog::loader::KnowledgeLoader;
+
+    fn catalog() -> KnowledgeCatalog {
+        KnowledgeLoader::new("../../knowledge", "../../queries")
+            .load()
+            .unwrap()
+    }
+    fn budgets() -> WorkflowBudgets {
+        WorkflowBudgets {
+            shared_timeout_ms: 30_000,
+            shared_row_cap: 1_000,
+            max_query_count: 10,
+            max_parallel_queries: 2,
+            max_model_turns: 2,
+            max_node_retries: 0,
+        }
+    }
+    fn budget() -> NodeBudget {
+        NodeBudget {
+            timeout_ms: 1,
+            row_cap: 1,
+            query_cost: 1,
+        }
+    }
+    fn policy() -> NodePolicy {
+        NodePolicy {
+            required_capability: None,
+            office_scope: OfficeScope::AuthorizedIntersection,
+            max_sensitivity: Sensitivity::Pii,
+            pii_required: false,
+        }
+    }
+    fn execute_node(id_value: &str, from_date_source: BindingSource) -> WorkflowNode {
+        WorkflowNode {
+            id: NodeId::new(id_value).unwrap(),
+            kind: NodeKind::ExecuteQuery(ExecuteQueryNode {
+                capability_id: None,
+                dataset_id: None,
+                shape_id: None,
+                query_id: None,
+                iterate_over: None,
+            }),
+            inputs: vec![
+                NodeInput {
+                    parameter: "office_ids".into(),
+                    kind: ParameterType::IntegerArray,
+                    source: BindingSource::AuthorizedScope,
+                },
+                NodeInput {
+                    parameter: "from_date".into(),
+                    kind: ParameterType::Date,
+                    source: from_date_source,
+                },
+            ],
+            outputs: vec![],
+            policy: policy(),
+            budget: budget(),
+            idempotency: Idempotency::ExecuteOnce,
+            retry: RetryPolicy { max_attempts: 0 },
+        }
+    }
+    fn compose_node(sources: &[&str]) -> WorkflowNode {
+        WorkflowNode {
+            id: NodeId::new("compose").unwrap(),
+            kind: NodeKind::ComposeResult(ComposeResultNode {
+                sources: sources
+                    .iter()
+                    .map(|value| NodeId::new(*value).unwrap())
+                    .collect(),
+                composition: Composition::Comparison,
+            }),
+            inputs: vec![],
+            outputs: vec![],
+            policy: policy(),
+            budget: NodeBudget {
+                timeout_ms: 0,
+                row_cap: 0,
+                query_cost: 0,
+            },
+            idempotency: Idempotency::Pure,
+            retry: RetryPolicy { max_attempts: 0 },
+        }
+    }
+
+    #[test]
+    fn comparison_compile_rejects_diverging_temporal_facts() {
+        let proposal = WorkflowProposal {
+            capability_ids: vec![],
+            nodes: vec![
+                execute_node(
+                    "deposits",
+                    BindingSource::DeterministicExtraction {
+                        field: ConstraintField::FromDate,
+                    },
+                ),
+                execute_node(
+                    "withdrawals",
+                    BindingSource::VerifiedUserText {
+                        field: ConstraintField::FromDate,
+                    },
+                ),
+                compose_node(&["deposits", "withdrawals"]),
+            ],
+            edges: vec![],
+        };
+        let error =
+            compile(proposal, &catalog(), Uuid::nil(), budgets()).expect_err("must be rejected");
+        assert!(matches!(error, CompileError::ComparisonFactsDiverge(_)));
+    }
+
+    #[test]
+    fn comparison_compile_accepts_identical_scope_and_temporal_facts() {
+        let proposal = WorkflowProposal {
+            capability_ids: vec![],
+            nodes: vec![
+                execute_node(
+                    "deposits",
+                    BindingSource::DeterministicExtraction {
+                        field: ConstraintField::FromDate,
+                    },
+                ),
+                execute_node(
+                    "withdrawals",
+                    BindingSource::DeterministicExtraction {
+                        field: ConstraintField::FromDate,
+                    },
+                ),
+                compose_node(&["deposits", "withdrawals"]),
+            ],
+            edges: vec![],
+        };
+        compile(proposal, &catalog(), Uuid::nil(), budgets()).expect("must compile");
     }
 }

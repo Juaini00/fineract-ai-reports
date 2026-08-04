@@ -225,7 +225,7 @@ where
                 self.state.fail_node(&run, elapsed_ms(started)).await?;
                 return Ok(NodeBatchOutcome::Cancelled);
             }
-            result = self.resolve_execution(node, &bindings, runs) => result?,
+            result = self.resolve_execution(job_id, workflow, node, &bindings, runs, principal) => result?,
         };
         let elapsed = elapsed_ms(started);
         match execution {
@@ -298,9 +298,12 @@ where
 
     async fn resolve_execution(
         &self,
+        job_id: Uuid,
+        workflow: &ExecutionWorkflow,
         node: &WorkflowNode,
         bindings: &BTreeMap<String, Value>,
         runs: &[WorkflowNodeRun],
+        principal: &PrincipalContext,
     ) -> Result<NodeExecution> {
         Ok(match &node.kind {
             NodeKind::CardinalityBranch(branch) => NodeExecution::Completed {
@@ -315,8 +318,48 @@ where
                 output: json!({}),
                 rows_returned: 0,
             },
+            // Deterministic, no LLM, no injected executor: composition only
+            // merges completed sibling outputs after dropping whatever the
+            // principal isn't permitted to see.
+            NodeKind::ComposeResult(compose) => {
+                let sources = compose
+                    .sources
+                    .iter()
+                    .map(|source_id| {
+                        let source_node = workflow
+                            .nodes
+                            .iter()
+                            .find(|candidate| &candidate.id == source_id)
+                            .ok_or_else(|| anyhow::anyhow!("compose source node is missing"))?;
+                        Ok(node::compose::ComposeSource {
+                            output: node_output(runs, source_id)?,
+                            output_slots: source_node.outputs.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let outcome = node::compose::compose(
+                    compose.composition.clone(),
+                    sources,
+                    max_visible_sensitivity(principal),
+                )?;
+                self.state
+                    .record_sensitivity_drop(job_id, workflow.id, &node.id, &outcome.dropped_fields)
+                    .await?;
+                NodeExecution::Completed {
+                    output: outcome.value,
+                    rows_returned: 0,
+                }
+            }
             _ => self.executor.execute(node, bindings).await?,
         })
+    }
+}
+
+fn max_visible_sensitivity(principal: &PrincipalContext) -> crate::knowledge::model::Sensitivity {
+    if principal.can_view_pii {
+        crate::knowledge::model::Sensitivity::Pii
+    } else {
+        crate::knowledge::model::Sensitivity::FilterOnly
     }
 }
 
@@ -519,6 +562,13 @@ fn bindings_for(
         bindings.insert(input.parameter.clone(), value);
     }
     Ok(bindings)
+}
+fn node_output(runs: &[WorkflowNodeRun], node: &NodeId) -> Result<Value> {
+    runs.iter()
+        .rev()
+        .find(|run| &run.node_id == node && run.status == NodeRunStatus::Completed)
+        .and_then(|run| run.output_json.clone())
+        .ok_or_else(|| anyhow::anyhow!("completed workflow output is missing"))
 }
 fn output_slot(runs: &[WorkflowNodeRun], node: &NodeId, slot: &str) -> Result<Value> {
     runs.iter()

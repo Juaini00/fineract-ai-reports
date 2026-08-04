@@ -143,6 +143,7 @@ impl ResponseBuilder {
                 })
                 .collect(),
             rendered_markdown: None,
+            workflow: None,
         })
     }
 
@@ -172,6 +173,7 @@ impl ResponseBuilder {
             }],
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -191,6 +193,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -209,6 +212,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -226,6 +230,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -247,6 +252,7 @@ impl ResponseBuilder {
             }],
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -306,6 +312,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -323,6 +330,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -340,6 +348,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -360,6 +369,7 @@ impl ResponseBuilder {
             }],
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 }

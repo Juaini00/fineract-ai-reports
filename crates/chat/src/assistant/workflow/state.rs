@@ -272,6 +272,30 @@ impl WorkflowStateRepository {
         .await
     }
 
+    /// Records that composition dropped fields exceeding the principal's
+    /// permitted sensitivity. The event payload carries field names only,
+    /// never values, matching every other audit path in this module.
+    pub async fn record_sensitivity_drop(
+        &self,
+        job_id: Uuid,
+        workflow_id: Uuid,
+        node_id: &NodeId,
+        dropped_fields: &[String],
+    ) -> Result<()> {
+        if dropped_fields.is_empty() {
+            return Ok(());
+        }
+        self.insert_event(
+            job_id,
+            "workflow_field_dropped",
+            Some(node_id.as_str()),
+            json!({
+                "workflow_id": workflow_id, "node_id": node_id, "dropped_fields": dropped_fields,
+            }),
+        )
+        .await
+    }
+
     pub async fn fail_node(&self, run: &WorkflowNodeRun, duration_ms: i32) -> Result<()> {
         sqlx::query(
             "UPDATE chat_workflow_node_runs SET status = 'failed', duration_ms = $1, finished_at = now() WHERE id = $2 AND status = 'running'",

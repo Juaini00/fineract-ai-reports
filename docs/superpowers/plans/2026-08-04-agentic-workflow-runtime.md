@@ -403,14 +403,14 @@ calls; node lineage reconstructable; `cargo test -p chat workflow:: job:: audit:
 
 # Phase 6 — Composition and grounded response
 
-- [ ] `ComposeResult` modes `single` / `comparison` / `grouped`, deterministic, no LLM.
-- [ ] `comparison` compiler check: differing scope or temporal facts is a **compile error**, not a runtime warning.
-- [ ] Sensitivity enforcement at composition; every dropped field recorded in audit.
-- [ ] Optional Rig response agent consuming policy-filtered structured fields only. Test: the agent's input contains no hidden identifier, no raw SQL, no unfiltered row.
-- [ ] Additive response fields `workflow.{id,node_id,steps_executed,partial}`.
-- [ ] FE snapshot test for the structured response, same discipline as Task 4.4.
+- [x] `ComposeResult` modes `single` / `comparison` / `grouped`, deterministic, no LLM. Wired into `WorkflowRunner::resolve_execution` as an inline arm (matching `CardinalityBranch`/`Complete`), not the injected executor trait.
+- [x] `comparison` compiler check: differing scope or temporal facts is a **compile error**, not a runtime warning. `CompileError::ComparisonFactsDiverge` in `compile.rs`, checked via `check_comparison_facts` on every compiled workflow.
+- [x] Sensitivity enforcement at composition; every dropped field recorded in audit. `node::compose::compose` drops fields above the principal's visible `Sensitivity` and returns the names; `WorkflowStateRepository::record_sensitivity_drop` writes a `workflow_field_dropped` event with field names only, never values.
+- [x] Optional Rig response agent consuming policy-filtered structured fields only. `llm::agent::response::ResponseAgent` mirrors `PlanningAgent`'s `llm::structured` pattern over `LlmPurpose::ResponseBuild`. Test: the agent's input contains no hidden identifier, no raw SQL, no unfiltered row.
+- [x] Additive response fields `workflow.{id,node_id,steps_executed,partial}`. `AssistantResponse.workflow: Option<WorkflowResponseMeta>` with `skip_serializing_if`.
+- [x] FE snapshot test for the structured response, same discipline as Task 4.4.
 
-**Gate 6:** FE response snapshot unchanged with workflow fields absent; `V-BUILD`, `V-LINT`.
+**Gate 6:** FE response snapshot unchanged with workflow fields absent; `V-BUILD`, `V-LINT`. All green.
 
 ---
 

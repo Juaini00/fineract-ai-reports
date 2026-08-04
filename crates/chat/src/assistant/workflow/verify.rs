@@ -365,7 +365,7 @@ fn parameter_type(value: &str) -> Option<ParameterType> {
 fn looks_like_sql_identifier(value: &str) -> bool {
     value.contains([' ', ';', '"', '\'', '(', ')', '.']) || value.contains("--")
 }
-fn sensitivity_rank(value: Sensitivity) -> u8 {
+pub(super) fn sensitivity_rank(value: Sensitivity) -> u8 {
     match value {
         Sensitivity::PublicBusiness => 0,
         Sensitivity::MaskedOutput => 1,
