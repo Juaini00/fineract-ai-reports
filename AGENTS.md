@@ -4,6 +4,7 @@ Operating contract for AI agents. Read fully once per session; do not re-scan th
 
 ## Before you scan the code
 
+0. Bind lean-ctx to this checkout before using advanced/session-backed tools: run `ctx_session status`; if its root is not this repository, run `ctx_session reset`. A previous project's global `latest` session must never supply this project's root. Prefer relative paths until the root is verified.
 1. Read `docs/current/status.md` (what's implemented / partial / pending).
 2. Read `docs/current/active-context.md` (rules for edits happening now).
 3. Consult the **Doc trigger table** below — jump to the specific doc for the area you're changing.
