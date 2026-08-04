@@ -1,6 +1,11 @@
+# Reclassified from clarify to select. savings_activity_list is the only
+# capability that lists savings transactions over a date range, and "this week"
+# binds its from_date/to_date. The competing candidate,
+# savings_account_activity_lookup, needs an exact client, product and amount,
+# none of which this sentence supplies.
 id: savings_activity_ambiguous_en
 message: "show customer savings activity this week"
 language: en
 domain: savings
-expected_decision: clarify
-expected_capability: null
+expected_decision: select
+expected_capability: savings_activity_list

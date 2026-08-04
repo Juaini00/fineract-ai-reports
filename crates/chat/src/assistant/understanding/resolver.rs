@@ -202,6 +202,8 @@ mod tests {
             optional_parameters: vec![],
             defaults: CapabilityDefaults::default(),
             guards: CapabilityGuards::default(),
+            supported_intents: Vec::new(),
+            unsupported_intents: Vec::new(),
             parameter_policies: policies,
         }
     }

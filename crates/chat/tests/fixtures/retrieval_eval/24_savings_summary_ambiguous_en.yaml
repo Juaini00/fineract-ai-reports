@@ -1,0 +1,11 @@
+# Genuine ambiguity: three approved capabilities summarize savings by a
+# different measure — savings_balance_summary (balances),
+# savings_deposit_total (deposit volume) and
+# organization_office_savings_summary (per-office counts and balance). The
+# sentence names none of them, so picking one is a guess presented as an answer.
+id: savings_summary_ambiguous_en
+message: "give me a savings summary"
+language: en
+domain: savings
+expected_decision: clarify
+expected_capability: null

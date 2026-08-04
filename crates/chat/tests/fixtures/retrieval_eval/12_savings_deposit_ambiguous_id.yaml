@@ -1,6 +1,12 @@
+# Reclassified from clarify to select. "terbesar" (largest) names the ranking
+# directly, and savings_deposit_top_n is the only capability that ranks
+# individual deposits by amount. Nothing about the sentence is ambiguous
+# between capabilities — "how many rows?" is a parameter default, not a choice
+# the user has to make. Expecting a clarification here trained the eval to
+# reward hesitation over a correct answer.
 id: savings_deposit_ambiguous_id
 message: "setoran tabungan terbesar"
 language: id
 domain: savings
-expected_decision: clarify
-expected_capability: null
+expected_decision: select
+expected_capability: savings_deposit_top_n

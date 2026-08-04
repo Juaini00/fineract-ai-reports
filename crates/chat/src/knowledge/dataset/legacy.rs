@@ -88,6 +88,8 @@ mod tests {
             optional_parameters: Vec::new(),
             defaults: CapabilityDefaults::default(),
             guards: CapabilityGuards::default(),
+            supported_intents: Vec::new(),
+            unsupported_intents: Vec::new(),
             parameter_policies: Vec::new(),
         }
     }

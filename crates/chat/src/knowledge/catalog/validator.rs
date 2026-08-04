@@ -317,6 +317,27 @@ impl KnowledgeValidator {
             validate_sql_safety(query, &sql_path)?;
         }
 
+        // Prose must not promise a narrowing the SQL cannot perform. Checked
+        // here, after every query's SQL file is known to exist, so the guard can
+        // read the statement it is judging the prose against.
+        for capability in &catalog.capabilities {
+            let Some(query) = catalog
+                .queries
+                .iter()
+                .find(|query| query.id == capability.query_id)
+            else {
+                // Dataset-backed capability: its SQL is assembled at request
+                // time from a recipe, so there is no single statement to read.
+                continue;
+            };
+            let sql = std::fs::read_to_string(resolve_sql_path(catalog, query)).unwrap_or_default();
+            crate::knowledge::catalog::prose_claims::validate_prose_claims(
+                capability,
+                Some(query),
+                &sql,
+            )?;
+        }
+
         let mut dataset_ids = HashSet::new();
         for dataset in &catalog.datasets {
             if !dataset_ids.insert(dataset.id.as_str()) {
@@ -1323,6 +1344,8 @@ mod tests {
             optional_parameters: vec![],
             defaults: CapabilityDefaults::default(),
             guards: CapabilityGuards::default(),
+            supported_intents: Vec::new(),
+            unsupported_intents: Vec::new(),
             parameter_policies: vec![ParameterPolicy {
                 name: "from_date".into(),
                 kind: ParameterType::Date,

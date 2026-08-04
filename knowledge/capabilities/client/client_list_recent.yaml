@@ -1,9 +1,16 @@
 id: client_list_recent
 status: approved_mvp
 domain: client
-display_name: Recently Activated Clients
-description: List recently activated clients in the caller's authorized office scope, most recently activated
-  first, with no ranking metric required.
+display_name: Client List by Office, Newest First
+# The SQL restricts nothing by date. It returns every active client in the
+# caller's office scope, optionally narrowed to one named office, and only
+# *orders* by activation date. The former wording ("Recently Activated
+# Clients") described a filter that does not exist, and the reranker — which
+# reads this text, not the SQL — refused "show me all clients from <office>"
+# because of it.
+description: List active clients in the caller's authorized office scope, optionally narrowed to one named
+  office, ordered by activation date newest first. Returns every active client in scope up to the row cap;
+  it does not restrict the rows to a recent period.
 data_areas:
 - client_foundation
 - organization_foundation
@@ -19,17 +26,25 @@ request_shape:
   output: list
   pii: client_identity
 examples:
+- Show me all clients from Head Office.
+- List every client in office Head Office.
+- Tampilkan semua nasabah di kantor Head Office.
+- Daftar seluruh nasabah pada kantor Head Office.
+- Show me the clients in my offices.
 - Show me the most recently activated clients.
 - List new clients this year.
 - Recently onboarded clients in my offices.
 - Nasabah baru yang baru diaktivasi.
-- Recently activated clients in Head Office.
 - List the newest clients from office Head Office.
 supported_intents:
-- plain browse/list of recently activated clients with no ranking metric
+- plain browse/list of active clients with no ranking metric
+- every active client in one named office, unranked
+- every active client across the caller's office scope, unranked
+- newest or most recently activated clients, which this capability serves by sort order
 unsupported_intents:
 - clients ranked by a savings or deposit metric
 - client identity lookup by name
+- clients activated strictly within a named date range, which this capability cannot restrict
 defaults:
   authorized_scope_only: true
   default_limit: 50

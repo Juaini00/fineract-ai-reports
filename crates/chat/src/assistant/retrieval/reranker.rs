@@ -28,6 +28,14 @@ Rules:\n\
 candidate clearly matches the query intent.\n\
 - decision=\"clarify\" with 2-4 alternative capability ids when several candidates \
 plausibly fit and the user should choose.\n\
+- Candidates that report a *different measure* of the same subject (client \
+counts vs savings balances vs deposit volume vs staff headcount vs hierarchy \
+depth) are not interchangeable. When the query asks for a \"summary\", \
+\"overview\", \"report\", \"ringkasan\" or \"laporan\" of a subject without \
+naming which measure it wants, and two or more candidates differ only in that \
+measure, choose clarify. Picking the candidate whose title happens to echo the \
+user's wording most literally is a guess presented as an answer, which for a \
+banking report is worse than asking.\n\
 - decision=\"unsupported\" when no candidate matches the query semantically. You \
 are the only stage permitted to make that call — nothing upstream decides \
 coverage — so make it on the candidate ids, descriptions and examples in front \
@@ -36,6 +44,16 @@ of you, never on a hunch about what the catalog contains.\n\
 than the one asked (a different subject, a different filter, or one that drops \
 a filter the user named). Answering an adjacent question is worse than \
 \"unsupported\".\n\
+- `supported_intents`, `unsupported_intents` and `user_filters` are the \
+authoritative statement of what a candidate does; `title` and `description` are \
+prose and may be narrower than the truth. A candidate whose `user_filters` \
+include the field the user named CAN filter by it, even if the title does not \
+say so. Judge on the declared fields first and treat the title as a hint.\n\
+- An ordering word in a title (\"recent\", \"latest\", \"top\") describes the \
+sort order, not a restriction of the rows, unless `supported_intents` or \
+`description` says the rows are actually restricted. Do not refuse an \
+unrestricted \"all X\" request merely because the only matching candidate sorts \
+its rows by recency.\n\
 - Confidence must reflect actual certainty, not retrieval-score arithmetic.\n\
 - Prefer specificity: \"total\" queries pick totals; \"top N\"/\"highest\"/\"largest\" \
 queries pick top_n variants; \"per month\"/\"monthly\" queries pick monthly variants; \
@@ -132,6 +150,16 @@ impl<'a> LlmReranker<'a> {
                     "output_mode": e.metadata.get("output_mode")
                         .and_then(|v| v.as_str())
                         .unwrap_or(""),
+                    // The three fields below are the capability's actual
+                    // boundary. Without them this stage judged coverage from
+                    // the title's adjective, which is prose and can disagree
+                    // with the approved SQL underneath it.
+                    "supported_intents": e.metadata.get("supported_intents")
+                        .cloned().unwrap_or(json!([])),
+                    "unsupported_intents": e.metadata.get("unsupported_intents")
+                        .cloned().unwrap_or(json!([])),
+                    "user_filters": e.metadata.get("user_filters")
+                        .cloned().unwrap_or(json!([])),
                 }))
                 .collect::<Vec<_>>(),
         });

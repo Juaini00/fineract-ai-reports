@@ -379,7 +379,11 @@ impl BucketStats {
 #[test]
 fn fixtures_cover_required_buckets() {
     let fixtures = load_fixtures();
-    assert_eq!(fixtures.len(), 20, "expected exactly 20 fixtures");
+    assert!(
+        fixtures.len() >= 20,
+        "expected at least 20 fixtures, got {}",
+        fixtures.len()
+    );
 
     let clarify = fixtures
         .iter()
@@ -441,7 +445,11 @@ async fn retrieval_eval_meets_accuracy_floor() {
     );
 
     let fixtures = load_fixtures();
-    assert_eq!(fixtures.len(), 20, "expected exactly 20 fixtures");
+    assert!(
+        fixtures.len() >= 20,
+        "expected at least 20 fixtures, got {}",
+        fixtures.len()
+    );
 
     let mut overall = BucketStats::default();
     let mut by_language: BTreeMap<String, BucketStats> = BTreeMap::new();
