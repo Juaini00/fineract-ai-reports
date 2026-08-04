@@ -6,6 +6,9 @@ pub mod client;
 pub mod prompt;
 pub mod schema;
 
+pub use crate::assistant::llm::agent::understanding::{
+    UnderstandingAgent, UnderstandingAgentError,
+};
 pub use client::{GatewayClient, GatewayError};
 pub use prompt::{CapabilitySummary, build_gateway_prompt, capability_summary};
 pub use schema::{

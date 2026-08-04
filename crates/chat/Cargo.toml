@@ -33,7 +33,6 @@ tokio.workspace = true
 petgraph.workspace = true
 rig-core.workspace = true
 schemars.workspace = true
-swiftide.workspace = true
 
 [dev-dependencies]
 reqwest = { workspace = true }

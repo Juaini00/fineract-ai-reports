@@ -6,7 +6,20 @@ tables:
   - m_client
   - m_office
   - m_savings_product
+entity:
+  kind: savings_account
+  id_field: savings_account_id
+  label_fields: [masked_account_number, savings_product_name]
+  label_fallback: "Savings account {savings_account_id}"
 filters:
+  - id: savings_account_id
+    expr: savings_account_id
+    type: integer
+    operators: [eq, in]
+  - id: client_id
+    expr: client_id
+    type: integer
+    operators: [eq, in]
   - id: account_number
     expr: account_no
     type: string
@@ -35,6 +48,7 @@ shapes:
       grouping: none
       output: lookup
       pii: client_identity
+    row_cap: 25
     fragment: queries/datasets/savings/accounts.identity.frag.sql
     output_fields:
       - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }
@@ -49,6 +63,28 @@ shapes:
       - { name: currency_code, type: string, sensitivity: public_business }
     parameters:
       - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - id: accounts_by_client
+    role: resolver
+    expected_cardinality: many
+    row_cap: 25
+    produces:
+      - { slot: savings_account_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: lookup
+      subject: savings_account
+      grouping: none
+      output: lookup
+      pii: none
+    fragment: queries/datasets/savings/accounts.accounts_by_client.frag.sql
+    output_fields:
+      - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: masked_account_number, type: string, sensitivity: masked_output, core: true }
+      - { name: client_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: savings_product_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: savings_product_name, type: string, sensitivity: public_business, core: true }
+      - { name: savings_status_enum, type: bigint, sensitivity: public_business, core: true }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
   - id: terms
     request_shape:
       operation: lookup
@@ -56,6 +92,7 @@ shapes:
       grouping: none
       output: lookup
       pii: none
+    row_cap: 25
     fragment: queries/datasets/savings/accounts.terms.frag.sql
     output_fields:
       - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }

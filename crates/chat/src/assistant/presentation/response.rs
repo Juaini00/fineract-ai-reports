@@ -222,6 +222,10 @@ mod tests {
                 errors: vec!["Choose a range of 31 days or fewer.".into()],
             }],
             allow_free_text: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         });
 
         let rendered = MarkdownRenderer.render(&response);

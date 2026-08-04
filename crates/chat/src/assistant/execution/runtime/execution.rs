@@ -60,6 +60,10 @@ pub(super) async fn execute_selected_capability(
                 .map(|intent| source_intent_snapshot(intent, &intent.reason)),
             allow_free_text: false,
             is_missing_execution_parameters: true,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         };
         return graph_result(
             memory,
@@ -120,6 +124,10 @@ pub(super) async fn execute_selected_capability(
                     .map(|intent| source_intent_snapshot(intent, &intent.reason)),
                 allow_free_text: true,
                 is_missing_execution_parameters: true,
+                workflow_id: None,
+                node_id: None,
+                resume_node_id: None,
+                entity_kind: None,
             },
         };
         return graph_result(
@@ -314,6 +322,10 @@ pub(super) async fn execute_selected_capability(
                         .map(|intent| source_intent_snapshot(intent, &intent.reason)),
                     allow_free_text: false,
                     is_missing_execution_parameters: false,
+                    workflow_id: None,
+                    node_id: None,
+                    resume_node_id: None,
+                    entity_kind: None,
                 };
                 return graph_result(
                     memory,

@@ -23,10 +23,16 @@ pub fn degenerate_dataset(
         tables: query.tables.clone(),
         // No filter slots: the legacy WHERE clause is baked into the source SQL.
         filters: Vec::new(),
+        entity: None,
         filters_exempt: Vec::new(),
         shapes: vec![ShapeOption {
             id: LEGACY_SHAPE_ID.to_string(),
             request_shape: capability.request_shape.clone(),
+            role: Default::default(),
+            expected_cardinality: None,
+            row_cap: None,
+            grouped_by: None,
+            produces: Vec::new(),
             // No fragment: the source SQL already selects, orders and limits.
             fragment: None,
             order_by: Vec::new(),
@@ -78,6 +84,8 @@ mod tests {
                 output: RequestOutput::Scalar,
                 pii: RequestPii::None,
             },
+            kind: Default::default(),
+            member_capability_ids: vec![],
             display_name: None,
             description: None,
             data_areas: Vec::new(),

@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SwiftideKnowledgeDocument {
+pub struct CatalogDocument {
     pub source_path: PathBuf,
     pub source_type: String,
     pub source_id: String,
@@ -18,12 +18,11 @@ pub struct SwiftideKnowledgeDocument {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct SwiftideIndexPipeline;
+pub struct CatalogIndexPipeline;
 
-impl SwiftideIndexPipeline {
-    pub fn ingest_paths(root: impl AsRef<Path>) -> Result<Vec<SwiftideKnowledgeDocument>> {
+impl CatalogIndexPipeline {
+    pub fn ingest_paths(root: impl AsRef<Path>) -> Result<Vec<CatalogDocument>> {
         let root = root.as_ref();
-        let _swiftide_loader = std::any::type_name::<swiftide::indexing::loaders::FileLoader>();
         let mut documents = Vec::new();
         for path in walk(root)? {
             if !is_indexable(&path) {
@@ -34,7 +33,7 @@ impl SwiftideIndexPipeline {
         Ok(dedup(documents))
     }
 
-    pub fn ingest_catalog(root: impl AsRef<Path>) -> Result<Vec<SwiftideKnowledgeDocument>> {
+    pub fn ingest_catalog(root: impl AsRef<Path>) -> Result<Vec<CatalogDocument>> {
         Self::ingest_paths(root)
     }
 }
@@ -85,7 +84,7 @@ fn source_type(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn document_for(root: &Path, path: &Path) -> Result<Vec<SwiftideKnowledgeDocument>> {
+fn document_for(root: &Path, path: &Path) -> Result<Vec<CatalogDocument>> {
     reject_client_rows(path)?;
     let Some(source_type) = source_type(path) else {
         return Ok(Vec::new());
@@ -104,7 +103,7 @@ fn document_for(root: &Path, path: &Path) -> Result<Vec<SwiftideKnowledgeDocumen
     Ok(chunks(&body)
         .into_iter()
         .enumerate()
-        .map(|(i, body)| SwiftideKnowledgeDocument {
+        .map(|(i, body)| CatalogDocument {
             source_path: rel.to_path_buf(),
             source_type: source_type.into(),
             source_id: if i == 0 {
@@ -126,7 +125,7 @@ fn reject_client_rows(path: &Path) -> Result<()> {
         .any(|needle| s.contains(needle))
     {
         return Err(anyhow!(
-            "Swiftide index rejects Fineract row/client export paths"
+            "catalog index rejects Fineract row/client export paths"
         ));
     }
     Ok(())
@@ -149,7 +148,7 @@ fn chunks(body: &str) -> Vec<String> {
     out
 }
 
-fn dedup(docs: Vec<SwiftideKnowledgeDocument>) -> Vec<SwiftideKnowledgeDocument> {
+fn dedup(docs: Vec<CatalogDocument>) -> Vec<CatalogDocument> {
     let mut seen = HashSet::new();
     docs.into_iter()
         .filter(|doc| seen.insert(format!("{}:{}", doc.source_type, doc.body)))

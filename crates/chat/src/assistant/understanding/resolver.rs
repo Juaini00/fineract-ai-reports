@@ -192,6 +192,8 @@ mod tests {
             dataset_recipe: None,
             output_mode: "top_n".into(),
             request_shape: RequestShape::default(),
+            kind: Default::default(),
+            member_capability_ids: vec![],
             display_name: None,
             description: None,
             data_areas: vec![],
@@ -240,6 +242,9 @@ mod tests {
                 fill_when_missing: true,
                 user_may_override: true,
                 hard_cap: None,
+                user_required: false,
+                resolution: vec![],
+                probe: None,
             },
             ParameterPolicy {
                 name: "limit".into(),
@@ -249,6 +254,9 @@ mod tests {
                 fill_when_missing: true,
                 user_may_override: true,
                 hard_cap: Some(10_000),
+                user_required: false,
+                resolution: vec![],
+                probe: None,
             },
         ]);
         let ext = empty_extraction();
@@ -284,6 +292,9 @@ mod tests {
                 fill_when_missing: true,
                 user_may_override: true,
                 hard_cap: None,
+                user_required: false,
+                resolution: vec![],
+                probe: None,
             },
             ParameterPolicy {
                 name: "to_date".into(),
@@ -293,6 +304,9 @@ mod tests {
                 fill_when_missing: true,
                 user_may_override: true,
                 hard_cap: None,
+                user_required: false,
+                resolution: vec![],
+                probe: None,
             },
         ]);
         let mut ext = empty_extraction();
@@ -334,6 +348,9 @@ mod tests {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }]);
         let mut ext = empty_extraction();
         ext.temporal_hint = Some(TemporalHint {
@@ -366,6 +383,9 @@ mod tests {
             fill_when_missing: false,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }]);
         let resolved = resolve(&ResolverRequest {
             extraction: &empty_extraction(),
@@ -389,6 +409,9 @@ mod tests {
                 fill_when_missing: true,
                 user_may_override: true,
                 hard_cap: None,
+                user_required: false,
+                resolution: vec![],
+                probe: None,
             },
             ParameterPolicy {
                 name: "to_date".into(),
@@ -398,6 +421,9 @@ mod tests {
                 fill_when_missing: true,
                 user_may_override: true,
                 hard_cap: None,
+                user_required: false,
+                resolution: vec![],
+                probe: None,
             },
         ]);
         let cases = [
@@ -478,6 +504,9 @@ mod tests {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }]);
         for inferred in [TemporalInferred::None, TemporalInferred::Range] {
             let mut ext = empty_extraction();

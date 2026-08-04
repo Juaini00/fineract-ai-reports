@@ -6,6 +6,7 @@ pub mod retrieval;
 pub mod state;
 pub mod temporal;
 pub mod understanding;
+pub mod workflow;
 
 pub use context::{
     builder as context_builder, canonical_state,
@@ -17,6 +18,7 @@ pub use presentation::{builder as response_builder, contracts, renderer, respons
 pub use retrieval::{evidence, reranker};
 pub use state::{graph, memory};
 pub use understanding::{clarification_resolver, extraction, intent};
+pub use workflow::{compile as compile_workflow, verify as verify_workflow};
 
 pub use crate::audit::llm_trace_repository as llm_trace_repo;
 pub use crate::audit::llm_trace_repository::{
@@ -26,8 +28,8 @@ pub use crate::conversation::repository::assistant_memory as session_memory_repo
 pub use crate::conversation::repository::assistant_memory::SessionMemoryRepository;
 pub use crate::job::repository::assistant_memory as job_memory_repo;
 pub use crate::job::repository::assistant_memory::{GraphCheckpoint, JobMemoryRepository};
-pub use crate::knowledge::index::swiftide as swiftide_index;
-pub use crate::knowledge::index::swiftide::{SwiftideIndexPipeline, SwiftideKnowledgeDocument};
+pub use crate::knowledge::index::pipeline as catalog_index;
+pub use crate::knowledge::index::pipeline::{CatalogDocument, CatalogIndexPipeline};
 pub use clarification::{
     CLARIFICATION_VERSION_1, ClarificationChoice, ClarificationField, ClarificationFieldType,
     ClarificationKind, ClarificationOption, ClarificationOutcome, ClarificationPayload,

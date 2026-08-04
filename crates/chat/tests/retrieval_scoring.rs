@@ -40,6 +40,8 @@ fn make_capability(id: &str, domain: &str, subject: RequestSubject) -> Capabilit
         query_id: format!("{id}.query"),
         metrics: vec!["savings.account_count".into()],
         output_mode: "top_n".into(),
+        kind: Default::default(),
+        member_capability_ids: vec![],
         request_shape: RequestShape {
             operation: RequestOperation::Rank,
             subject,

@@ -292,6 +292,10 @@ pub async fn run_via_gateway_pipeline(
                 source_intent: None,
                 allow_free_text: false,
                 is_missing_execution_parameters: true,
+                workflow_id: None,
+                node_id: None,
+                resume_node_id: None,
+                entity_kind: None,
             };
             graph_result(
                 memory,
@@ -480,7 +484,9 @@ impl AssistantGraphRuntime {
             );
             match outcome {
                 ClarificationOutcome::SelectedOption { option_id, .. } => {
-                    memory.selected_capability = Some(option_id.clone());
+                    // A SelectEntity option is a stable parameter value. Workflow
+                    // continuation binds it through SafePriorSelection; it is
+                    // never a capability identifier.
                     memory.source_intent = payload
                         .source_intent
                         .as_ref()

@@ -33,6 +33,18 @@ pub struct RespondToChatJobRequest {
     #[serde(default)]
     pub clarification_revision: Option<u32>,
 
+    /// Phase-4 workflow identity fields are additive: older clients continue
+    /// sending only clarification_id/revision.
+    #[serde(default)]
+    pub workflow_id: Option<Uuid>,
+
+    #[serde(default)]
+    #[validate(length(max = 48, message = "Node id must be at most 48 characters long"))]
+    pub node_id: Option<String>,
+
+    #[serde(default)]
+    pub workflow_revision: Option<i64>,
+
     #[serde(default)]
     pub answers: BTreeMap<String, Value>,
 }

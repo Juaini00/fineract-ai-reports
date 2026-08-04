@@ -233,6 +233,10 @@ fn pending_clarification(id: Uuid) -> ClarificationPayload {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
@@ -343,6 +347,10 @@ async fn session_memory_update_pending_source_and_revision_conflict() {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     });
     memory.pending_clarification_source_intent = Some(json!({ "domain": "savings" }));
     memory.entities = json!([{ "type": "office", "id": 1 }]);

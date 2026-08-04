@@ -344,6 +344,8 @@ mod tests {
             dataset_recipe: None,
             output_mode: "table".to_string(),
             request_shape: Default::default(),
+            kind: Default::default(),
+            member_capability_ids: vec![],
             display_name: display_name.map(str::to_string),
             description: None,
             data_areas: Vec::new(),

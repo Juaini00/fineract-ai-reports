@@ -1,0 +1,36 @@
+---
+id: organization.offices
+database: fineract
+source_sql: queries/datasets/organization/offices.source.sql
+tables:
+  - m_office
+entity:
+  kind: office
+  id_field: office_id
+  label_fields: [office_name]
+  label_fallback: "Office {office_id}"
+filters:
+  - { id: office_id, expr: office_id, type: integer, operators: [eq, in] }
+  - { id: office_name, expr: office_name, type: string, case_insensitive: true, operators: [eq] }
+shapes:
+  - id: office_candidates
+    role: resolver
+    expected_cardinality: many
+    row_cap: 25
+    produces:
+      - { slot: office_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: lookup
+      subject: office
+      grouping: none
+      output: lookup
+      pii: none
+    fragment: queries/datasets/organization/offices.office_candidates.frag.sql
+    output_fields:
+      - { name: office_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: office_name, type: string, sensitivity: public_business, core: true }
+      - { name: parent_office_id, type: bigint, sensitivity: public_business }
+      - { name: opening_date, type: date, sensitivity: public_business }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

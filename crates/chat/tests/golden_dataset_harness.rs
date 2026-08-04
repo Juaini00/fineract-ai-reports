@@ -137,6 +137,10 @@ fn fake_response_type(intent: &AssistantIntent) -> String {
                 source_intent: None,
                 allow_free_text: true,
                 is_missing_execution_parameters: false,
+                workflow_id: None,
+                node_id: None,
+                resume_node_id: None,
+                entity_kind: None,
             })
             .response_type
         }
@@ -210,6 +214,10 @@ async fn offline_fake_resolver_selects_semantic_balance_option() {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
     let outcome = ClarificationResolver::resolve(
         "yang balance aja",

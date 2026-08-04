@@ -277,6 +277,7 @@ pub fn build_retrieval_trace(
         RerankerVerdict::Select => "select",
         RerankerVerdict::Clarify => "clarify",
         RerankerVerdict::Unsupported => "unsupported",
+        RerankerVerdict::FailedOperational => "failed_operational",
     };
     let decision_json = json!({
         "kind": kind,

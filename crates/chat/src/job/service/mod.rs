@@ -19,6 +19,9 @@ use crate::assistant::execution::runtime::CanonicalRuntimeContext;
 use crate::assistant::llm::planner_client::LlmPlannerClient;
 use crate::assistant::temporal::BusinessDateProvider;
 use crate::assistant::understanding::extraction::identifier_intake;
+use crate::assistant::workflow::{
+    NodeId, ResumeOutcome, WorkflowResumeRequest, WorkflowStateRepository,
+};
 use crate::assistant::{
     AssistantGraphRuntime, AssistantGraphTopology, CanonicalStateRepository, ContextBuilder,
     ContextWindowPolicy, DeterministicExtraction, EffectiveConstraints, ExtractionProvenance,
@@ -27,7 +30,7 @@ use crate::assistant::{
     deterministic_observations, executable_constraint_contracts,
     llm::{
         SharedLlmClient,
-        rig_client::RigLlmClient,
+        provider::LlmProvider,
         traced_client::{LlmTraceContext, TracedLlmClient},
     },
     merge_observations, original_request_observations, stable_uuid,
@@ -63,6 +66,7 @@ use test_llm::TestLlmClient;
 #[derive(Clone)]
 pub struct JobService {
     jobs: JobRepository,
+    workflow_state: WorkflowStateRepository,
     messages: MessageRepository,
     job_memory: JobMemoryRepository,
     canonical_state: CanonicalStateRepository,
@@ -139,7 +143,7 @@ impl JobService {
         } else if llm_config.api_key.trim().is_empty() {
             None
         } else {
-            RigLlmClient::new(&llm_config, Some(&embedding_config))
+            LlmProvider::new(&llm_config, Some(&embedding_config))
                 .map(|client| Some(Arc::new(client) as SharedLlmClient))
                 .unwrap_or_else(|error| {
                     warn!(%error, "semantic router LLM disabled");
@@ -148,6 +152,7 @@ impl JobService {
         };
         Self {
             jobs,
+            workflow_state: WorkflowStateRepository::new(app_pool.clone()),
             messages: messages.clone(),
             job_memory: JobMemoryRepository::new(app_pool.clone()),
             canonical_state: CanonicalStateRepository::new(app_pool.clone()),
@@ -309,6 +314,56 @@ impl JobService {
 
         let mut client = input.client;
         project_admin_principal(&mut client, &self.catalog, &self.fineract_pool).await?;
+        let workflow_fields_present = input.workflow_id.is_some()
+            || input.node_id.is_some()
+            || input.workflow_revision.is_some();
+        if workflow_fields_present {
+            let (Some(workflow_id), Some(node_id), Some(workflow_revision), Some(clarification_id)) = (
+                input.workflow_id,
+                input.node_id.as_deref(),
+                input.workflow_revision,
+                input.clarification_id,
+            ) else {
+                return Ok(RespondToChatJobOutcome::Validation(vec![
+                    "workflow_identity".to_owned(),
+                ]));
+            };
+            let node_id = match NodeId::new(node_id) {
+                Ok(node_id) => node_id,
+                Err(_) => {
+                    return Ok(RespondToChatJobOutcome::Validation(vec![
+                        "node_id".to_owned(),
+                    ]));
+                }
+            };
+            let selected_value = input
+                .selected_option_id
+                .clone()
+                .map(serde_json::Value::String)
+                .or_else(|| (!input.answers.is_empty()).then(|| serde_json::json!(input.answers)))
+                .or_else(|| input.source_message.clone().map(serde_json::Value::String))
+                .unwrap_or(serde_json::Value::Null);
+            return Ok(
+                match self
+                    .workflow_state
+                    .resume(WorkflowResumeRequest {
+                        job_id: input.job_id,
+                        user_id: client.user_id,
+                        workflow_id,
+                        node_id,
+                        clarification_id,
+                        workflow_revision,
+                        selected_value,
+                    })
+                    .await?
+                {
+                    ResumeOutcome::Resumed => RespondToChatJobOutcome::WorkflowResumed,
+                    ResumeOutcome::NotFound => RespondToChatJobOutcome::NotFound,
+                    ResumeOutcome::NotWaiting => RespondToChatJobOutcome::NotActive,
+                    ResumeOutcome::Stale => RespondToChatJobOutcome::Stale,
+                },
+            );
+        }
         if self
             .jobs
             .get_internal_for_user(input.job_id, client.user_id)
@@ -339,6 +394,10 @@ impl JobService {
                 source_intent: None,
                 allow_free_text: true,
                 is_missing_execution_parameters: false,
+                workflow_id: None,
+                node_id: None,
+                resume_node_id: None,
+                entity_kind: None,
             }
         };
         let mut submission = match validate_submission(
@@ -421,6 +480,7 @@ impl JobService {
 #[derive(Debug)]
 pub enum RespondToChatJobOutcome {
     Inserted(ChatMessage),
+    WorkflowResumed,
     NotFound,
     NotActive,
     Stale,

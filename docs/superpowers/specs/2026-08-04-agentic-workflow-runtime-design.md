@@ -993,9 +993,11 @@ row here would be a spec gap.
 
 ## 20. Open items for the plan
 
-1. Whether `rig_core` 0.40.0's provider client can carry the custom
-   `chat_completions_url` and the `json_object` fallback, or whether the adapter keeps
-   the transport for those two cases specifically (§8.1).
+1. **Resolved (Phase 1):** `rig_core` 0.40.0's OpenAI-compatible completion
+   client accepts a custom base URL, which `LlmProvider` derives from the configured
+   `chat_completions_url`; `AgentBuilder::output_schema_raw` sends `json_schema`, and
+   `additional_params` carries the per-request `json_object` fallback. No raw transport
+   remains in the chat LLM boundary (§8.1).
 2. Exact `chat_jobs.current_step` value set replacing the 19-name CHECK constraint, and
    the backfill mapping for historical rows (§9.1).
 3. Whether `GraphState`/`TerminalState` survive as the job-level lifecycle vocabulary

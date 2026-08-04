@@ -333,6 +333,10 @@ mod tests {
             source_intent: None,
             allow_free_text: false,
             is_missing_execution_parameters: true,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }
     }
     fn field(key: &str, field_type: ClarificationFieldType, required: bool) -> ClarificationField {

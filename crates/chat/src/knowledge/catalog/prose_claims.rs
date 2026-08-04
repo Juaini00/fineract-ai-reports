@@ -180,6 +180,8 @@ mod tests {
             query_id: "client.test".into(),
             output_mode: "list".into(),
             request_shape: Default::default(),
+            kind: Default::default(),
+            member_capability_ids: vec![],
             display_name: Some(display_name.into()),
             description: Some(description.into()),
             data_areas: vec![],

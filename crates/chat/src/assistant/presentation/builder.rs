@@ -263,6 +263,10 @@ impl ResponseBuilder {
             source_intent: None,
             allow_free_text: true,
             is_missing_execution_parameters: true,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         })
     }
 
@@ -279,6 +283,10 @@ impl ResponseBuilder {
             source_intent: None,
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         })
     }
 

@@ -174,6 +174,10 @@ async fn semantic_clarification_reply_selects_balance_by_meaning() {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
 
     let outcome = ClarificationResolver::resolve(
@@ -312,6 +316,10 @@ fn assert_response_contract(prompt: &str, intent: &AssistantIntent) {
                 source_intent: None,
                 allow_free_text: true,
                 is_missing_execution_parameters: false,
+                workflow_id: None,
+                node_id: None,
+                resume_node_id: None,
+                entity_kind: None,
             })
         }
         _ => ResponseBuilder::selected(format!("{:?}", intent.domain)),

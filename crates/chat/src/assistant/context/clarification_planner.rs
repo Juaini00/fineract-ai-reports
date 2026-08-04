@@ -389,6 +389,10 @@ fn payload(
         source_intent: None,
         allow_free_text: false,
         is_missing_execution_parameters: true,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
@@ -434,6 +438,9 @@ mod tests {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }
     }
     fn required_no_default(name: &str) -> ParameterPolicy {
@@ -446,6 +453,9 @@ mod tests {
             fill_when_missing: false,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }
     }
     fn param(name: &str) -> QueryParameter {
@@ -468,6 +478,8 @@ mod tests {
                     dataset_recipe: None,
                     output_mode: "table".into(),
                     request_shape: RequestShape::default(),
+                    kind: Default::default(),
+                    member_capability_ids: vec![],
                     display_name: None,
                     description: None,
                     data_areas: vec![],

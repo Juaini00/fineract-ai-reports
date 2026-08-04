@@ -138,6 +138,8 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
             query_id: "q".into(),
             dataset_recipe: None,
             output_mode: "single".into(),
+            kind: Default::default(),
+            member_capability_ids: vec![],
             request_shape: RequestShape::default(),
             display_name: Some("Savings deposit total".into()),
             description: Some("deposit total".into()),

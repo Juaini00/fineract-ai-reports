@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::knowledge::catalog::parameter_policy::{DefaultExpr, ParameterPolicy, ParameterType};
+use crate::knowledge::catalog::parameter_policy::{
+    DefaultExpr, ParameterPolicy, ParameterType, ProbeRef, ResolutionStrategy,
+};
 use crate::knowledge::dataset::model::DatasetKnowledge;
 use crate::knowledge::model::{
     CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
@@ -186,6 +188,22 @@ fn parse_parameters_block(value: &serde_yaml::Value) -> Result<Vec<ParameterPoli
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         let hard_cap = policy_map.get("hard_cap").and_then(|v| v.as_i64());
+        let user_required = policy_map
+            .get("user_required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let resolution = match policy_map.get("resolution") {
+            Some(value) => serde_yaml::from_value::<Vec<ResolutionStrategy>>(value.clone())
+                .with_context(|| format!("`resolution` for `{name}` must be a strategy list"))?,
+            None => Vec::new(),
+        };
+        let probe = match policy_map.get("probe") {
+            Some(value) => Some(
+                serde_yaml::from_value::<ProbeRef>(value.clone())
+                    .with_context(|| format!("`probe` for `{name}` is invalid"))?,
+            ),
+            None => None,
+        };
         out.push(ParameterPolicy {
             name,
             kind,
@@ -194,6 +212,9 @@ fn parse_parameters_block(value: &serde_yaml::Value) -> Result<Vec<ParameterPoli
             fill_when_missing,
             user_may_override,
             hard_cap,
+            user_required,
+            resolution,
+            probe,
         });
     }
     Ok(out)
@@ -269,6 +290,49 @@ parameters:
         assert_eq!(by_name["limit"].default, Some(DefaultExpr::Unbounded));
         assert_eq!(by_name["limit"].hard_cap, Some(10000));
         assert!(!by_name["office_ids"].user_may_override);
+    }
+
+    #[test]
+    fn parses_parameter_acquisition_metadata() {
+        let cap = parse_capability(
+            r#"
+id: probe_capability
+status: approved_mvp
+domain: savings
+query_id: probe.query
+output_mode: table
+request_shape:
+  operation: list
+  subject: savings_account
+  grouping: none
+  output: list
+  pii: none
+parameters:
+  client_id:
+    type: integer
+    user_required: true
+    resolution: [deterministic_extraction, authorized_data_probe, clarify]
+    probe:
+      dataset_id: client.identity
+      shape_id: identity_candidates
+      output_slot: client_id
+"#,
+        )
+        .unwrap();
+        let policy = &cap.parameter_policies[0];
+        assert!(policy.user_required);
+        assert_eq!(
+            policy.resolution,
+            vec![
+                ResolutionStrategy::DeterministicExtraction,
+                ResolutionStrategy::AuthorizedDataProbe,
+                ResolutionStrategy::Clarify,
+            ]
+        );
+        assert_eq!(
+            policy.probe.as_ref().unwrap().shape_id,
+            "identity_candidates"
+        );
     }
 
     #[test]

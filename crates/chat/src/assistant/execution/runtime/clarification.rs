@@ -405,6 +405,10 @@ pub(super) fn clarification_payload_for(
         source_intent,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
@@ -450,6 +454,10 @@ pub(super) fn clarification_payload(
         source_intent,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 

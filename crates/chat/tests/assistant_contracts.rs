@@ -100,6 +100,10 @@ fn assistant_contracts_representative_round_trip() {
             source_intent: Some(source.clone()),
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         },
         source_intent: Some(source),
         created_at: None,
@@ -223,6 +227,10 @@ fn clarification_view_select_option_round_trips_conditional_fields() {
         }],
         fields: Vec::new(),
         allow_free_text: true,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
     let parsed: ClarificationView =
         serde_json::from_value(serde_json::to_value(&view).unwrap()).unwrap();
@@ -252,6 +260,10 @@ fn clarification_view_validation_rejects_invalid_shapes() {
         options: Vec::new(),
         fields: Vec::new(),
         allow_free_text: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
     assert!(base.validate().is_err());
     let collect = ClarificationView {

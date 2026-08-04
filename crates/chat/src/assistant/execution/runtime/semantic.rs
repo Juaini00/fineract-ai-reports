@@ -482,6 +482,11 @@ pub(super) async fn complete_semantic_route(
                     "unsupported_in_domain",
                     ResponseBuilder::unsupported(),
                 ),
+                RerankerVerdict::FailedOperational => (
+                    TerminalState::FailedOperational,
+                    "reranker_failed_operational",
+                    ResponseBuilder::error(),
+                ),
             }
         }
         Err(error) => {

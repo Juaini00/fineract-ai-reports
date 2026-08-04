@@ -46,14 +46,13 @@ tokio = { version = "1.52.3", features = ["full"] }
 tower-http = { version = "0.6.11", features = ["trace", "tracing", "cors"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-uuid = { version = "1.23.3", features = ["serde", "v4"] }
+uuid = { version = "1.23.3", features = ["serde", "v3", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 # Semantic assistant platform migration — see docs/superpowers/specs/2026-07-12-semantic-assistant-platform-migration-design.md
 petgraph = "0.8.3"
 rig-core = "0.40.0"
 schemars = "1.2.1"
-swiftide = "0.32.1"
 
 [profile.dev]
 debug = "line-tables-only"

@@ -1,0 +1,42 @@
+---
+id: savings.products
+database: fineract
+source_sql: queries/datasets/savings/products.source.sql
+tables:
+  - m_savings_product
+  - m_savings_account
+  - m_client
+entity:
+  kind: product
+  id_field: savings_product_id
+  label_fields: [savings_product_name]
+  label_fallback: "Savings product {savings_product_id}"
+filters:
+  - { id: savings_product_id, expr: savings_product_id, type: integer, operators: [eq, in] }
+  - { id: savings_product_name, expr: savings_product_name, type: string, case_insensitive: true, operators: [eq] }
+  - { id: client_id, expr: client_id, type: integer, operators: [eq, in] }
+  - { id: currency_code, expr: currency_code, type: string, case_insensitive: true, operators: [eq] }
+shapes:
+  - id: products_by_client
+    role: resolver
+    expected_cardinality: many
+    row_cap: 25
+    produces:
+      - { slot: savings_product_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: lookup
+      subject: savings_product
+      grouping: none
+      output: lookup
+      pii: none
+    fragment: queries/datasets/savings/products.products_by_client.frag.sql
+    output_fields:
+      - { name: savings_product_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: savings_product_name, type: string, sensitivity: public_business, core: true }
+      - { name: client_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: currency_code, type: string, sensitivity: public_business, core: true }
+      - { name: deposit_type_enum, type: bigint, sensitivity: public_business }
+      - { name: nominal_annual_interest_rate, type: decimal, sensitivity: public_business }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

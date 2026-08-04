@@ -62,20 +62,22 @@ fn report(event: ProgressEvent) {
 }
 
 pub fn started(stage: Stage) {
+    let detail = stage.node_id().map(str::to_owned);
     report(ProgressEvent {
         stage,
         state: ProgressState::Started,
         ms: None,
-        detail: None,
+        detail,
     });
 }
 
 pub fn finished(stage: Stage, ms: u64) {
+    let detail = stage.node_id().map(str::to_owned);
     report(ProgressEvent {
         stage,
         state: ProgressState::Finished,
         ms: Some(ms),
-        detail: None,
+        detail,
     });
 }
 

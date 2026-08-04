@@ -417,6 +417,9 @@ fn defaults_business_today_when_policy_declares_it() {
         fill_when_missing: true,
         user_may_override: true,
         hard_cap: None,
+        user_required: false,
+        resolution: vec![],
+        probe: None,
     }];
     let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
     let ctx = EvaluationContext {
@@ -463,6 +466,9 @@ fn unbounded_limit_is_clamped_to_hard_cap() {
         fill_when_missing: true,
         user_may_override: true,
         hard_cap: Some(100),
+        user_required: false,
+        resolution: vec![],
+        probe: None,
     }];
     let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
     let ctx = EvaluationContext {
@@ -496,6 +502,9 @@ fn hard_cap_clamps_over_cap_and_preserves_within_cap_values() {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: Some(100),
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         },
     ];
     let mut over = serde_json::Map::from_iter([("limit".into(), serde_json::json!(5_000))]);
@@ -519,6 +528,9 @@ fn limit_without_hard_cap_is_not_clamped() {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         },
     ];
 
@@ -551,6 +563,9 @@ fn defaults_authorized_scope_when_policy_declares_it() {
         fill_when_missing: true,
         user_may_override: false,
         hard_cap: None,
+        user_required: false,
+        resolution: vec![],
+        probe: None,
     }];
     let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
     let ctx = EvaluationContext {

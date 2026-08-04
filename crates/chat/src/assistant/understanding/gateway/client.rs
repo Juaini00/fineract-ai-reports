@@ -176,6 +176,8 @@ mod tests {
                 dataset_recipe: None,
                 output_mode: "top_n".into(),
                 request_shape: Default::default(),
+                kind: Default::default(),
+                member_capability_ids: vec![],
                 display_name: None,
                 description: None,
                 data_areas: vec![],
