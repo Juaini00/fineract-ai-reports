@@ -2,15 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, ensure};
 use app_core::config::AppConfig;
-use chat::{
-    assistant::{
-        AssistantIntentKind, ContextWindow, LlmTraceRepository, SemanticRouter,
-        llm::{
-            rig_client::RigLlmClient, traced_client::LlmTraceContext,
-            traced_client::TracedLlmClient,
-        },
+use chat::assistant::{
+    AssistantIntentKind, ContextWindow, LlmTraceRepository, SemanticRouter,
+    llm::{
+        rig_client::RigLlmClient, traced_client::LlmTraceContext, traced_client::TracedLlmClient,
     },
-    knowledge::catalog::loader::KnowledgeLoader,
 };
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions, types::Json};
@@ -29,7 +25,6 @@ async fn main() -> anyhow::Result<()> {
 
     upsert_test_api_key(&pool).await?;
 
-    let catalog = KnowledgeLoader::new(&config.catalog.path, &config.catalog.query_path).load()?;
     let llm = Arc::new(RigLlmClient::new(&config.llm, Some(&config.embedding))?);
     let traced = Arc::new(TracedLlmClient::new(
         llm,
@@ -47,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
         }),
     ));
 
-    let router = SemanticRouter::new(traced, &catalog);
+    let router = SemanticRouter::new(traced);
     let intent = router
         .route("total savings deposit this month", &empty_context())
         .await?;

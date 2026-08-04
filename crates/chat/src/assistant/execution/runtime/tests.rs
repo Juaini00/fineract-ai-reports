@@ -389,23 +389,8 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         client_scope: json!({ "capabilities": ["savings_deposit_total"] }),
         warnings: Vec::new(),
     };
-    let catalog = KnowledgeCatalog {
-        root_path: Default::default(),
-        query_path: Default::default(),
-        data_areas: Vec::new(),
-        domains: Vec::new(),
-        schemas: Vec::new(),
-        metrics: Vec::new(),
-        capabilities: Vec::new(),
-        queries: Vec::new(),
-        policies: Vec::new(),
-        responses: Vec::new(),
-        parameter_inputs: Vec::new(),
-        classification: Default::default(),
-        datasets: Vec::new(),
-    };
     let llm = Arc::new(FakeLlm) as SharedLlmClient;
-    let router = SemanticRouter::new(llm.clone(), &catalog);
+    let router = SemanticRouter::new(llm.clone());
 
     let result = AssistantGraphRuntime::run_with_router(
         memory,
@@ -1437,4 +1422,321 @@ async fn gateway_pipeline_runtime_entry_maps_clarify_to_waiting() {
         .and_then(|p| p.as_ref())
         .expect("clarification payload attached");
     assert!(payload.fields.iter().any(|f| f.key == "search"));
+}
+
+/// The veto guard.
+///
+/// Old `router.rs` rule 28 told the model to answer `unsupported_in_domain`
+/// for "give me any N clients" — a claim about catalog coverage made by a
+/// stage that never sees the catalog, and a false one:
+/// `knowledge/capabilities/client/client_random_sample.yaml` is
+/// `approved_mvp` and lists this very phrasing among its examples. In
+/// production the verdict short-circuited `semantic.rs` before
+/// `RetrievalEngine::retrieve` was ever called, so the job completed
+/// `unsupported` with stage events `routing -> formatting` and no retrieval
+/// stage at all.
+///
+/// This fake is deliberately hostile on both ends: the router half still
+/// emits the string the deleted rule asked for (and `out_of_domain`), and
+/// the reranker half always answers `unsupported`. Neither is allowed to
+/// stop retrieval from running against the real catalog.
+///
+/// What this proves: no pre-retrieval stage can veto, and the real catalog
+/// does surface a random-sample/recent-list capability for this message.
+/// What it does NOT prove: that a live model picks the right one of them —
+/// that is `RerankerVerdict`'s job and needs a live LLM.
+struct VetoingFakeLlm {
+    intent: &'static str,
+}
+
+#[async_trait]
+impl LlmClient for VetoingFakeLlm {
+    async fn structured_value(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _system: &str,
+        user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        let is_rerank = serde_json::from_str::<serde_json::Value>(user)
+            .ok()
+            .is_some_and(|value| value.get("candidates").is_some());
+        let value = if is_rerank {
+            json!({
+                "decision": "unsupported",
+                "confidence": 0.0,
+                "alternatives": [],
+                "reason": "hostile fake"
+            })
+        } else {
+            json!({
+                "intent": self.intent,
+                "domain": "client",
+                "request_shape": {
+                    "operation": "random_sample",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "list",
+                    "pii": "client_identity"
+                },
+                "language": "en",
+                "entities": [],
+                "constraints": {},
+                "context_reference": "none",
+                "confidence": 0.9,
+                "reason": "fake"
+            })
+        };
+        Ok(LlmResponse {
+            value,
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+
+    async fn embed(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _text: &str,
+    ) -> Result<EmbeddingResponse> {
+        Ok(EmbeddingResponse {
+            vector: vec![1.0, 0.0],
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn router_verdict_cannot_veto_retrieval() {
+    let catalog = Arc::new(runtime_test_catalog());
+    // `unsupported_in_domain` is no longer an `AssistantIntentKind`; a model
+    // still emitting it lands on `ReportRequest` via `#[serde(other)]`, which
+    // is the point — an unnameable intent must reach retrieval, not fail the
+    // job and not become a rejection.
+    for intent in ["unsupported_in_domain", "out_of_domain"] {
+        let llm = Arc::new(VetoingFakeLlm { intent }) as SharedLlmClient;
+        let router = SemanticRouter::new(llm.clone());
+        // Chat's admin projection grants every approved capability; this
+        // mirrors it so the auth boundary in `allowed_ids` is not what the
+        // assertion measures.
+        let mut context = empty_context();
+        context.client_scope = json!({ "allow_all_capabilities": true });
+        let result = AssistantGraphRuntime::run_with_router(
+            empty_memory(),
+            context,
+            Some(&router),
+            Some(&llm),
+            None,
+            None,
+            Some(&catalog),
+            None,
+            None,
+            "give me 10 clients that we have in our system?",
+        )
+        .await;
+
+        let evidence = result
+            .memory
+            .retrieval_evidence
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let ids: Vec<&str> = evidence
+            .iter()
+            .filter_map(|item| item["capability_id"].as_str())
+            .collect();
+        assert!(
+            !ids.is_empty(),
+            "retrieval must run and produce candidates for intent={intent}"
+        );
+        assert!(
+            ids.contains(&"client_random_sample") || ids.contains(&"client_list_recent"),
+            "expected client_random_sample or client_list_recent for intent={intent}, got {ids:?}"
+        );
+        assert!(
+            result
+                .transitions
+                .iter()
+                .any(|transition| transition.from == GraphState::RetrieveKnowledge),
+            "graph must pass through RetrieveKnowledge for intent={intent}"
+        );
+    }
+}
+
+/// The sufficiency guard.
+///
+/// Production: "berikan saya 5 client yg ada pada <office>" was answered by a
+/// capability that had no user-supplied office parameter, so clients from all
+/// eight authorized offices came back and the job recorded
+/// `terminal_state: "completed"`. `reranker::RERANKER_SYSTEM` was given a rule
+/// against exactly that; a rule in a prompt is an instruction to a model, not a
+/// gate, so this drives the real graph instead.
+///
+/// The fake is permissive where the old one was hostile: its reranker half
+/// always selects `candidates[0]`, i.e. whatever retrieval ranked top. That is
+/// the model behaviour the prompt rule is supposed to prevent and cannot, so if
+/// an office-blind capability is still on the list, this test executes it.
+///
+/// The office is never spoken by the fake router — it carries no entities at
+/// all. It has to come from the deterministic extractor reading the user's own
+/// words, which is the standard `expressed_filters` requires.
+///
+/// Non-vacuity is asserted, not assumed: the same fake, same catalog and same
+/// question *without* an office must surface at least one capability that the
+/// catalog says cannot bind one, and that capability must be gone once the
+/// office is named. A capability id appears nowhere in this test — the parallel
+/// work adding a user-supplied office filter moves capabilities from one side
+/// of `capability_honours` to the other, and the assertion follows it.
+struct TopCandidateFakeLlm;
+
+#[async_trait]
+impl LlmClient for TopCandidateFakeLlm {
+    async fn structured_value(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _system: &str,
+        user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        let parsed = serde_json::from_str::<serde_json::Value>(user).unwrap_or(json!({}));
+        let value = match parsed["candidates"].as_array() {
+            Some(candidates) => json!({
+                "decision": "select",
+                "capability_id": candidates.first().map(|c| c["id"].clone()),
+                "confidence": 0.95,
+                "alternatives": [],
+                "reason": "top candidate"
+            }),
+            None => json!({
+                "intent": "report_request",
+                "domain": "client",
+                "request_shape": {
+                    "operation": "random_sample",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "list",
+                    "pii": "client_identity"
+                },
+                "language": "en",
+                "entities": [],
+                "constraints": {},
+                "context_reference": "none",
+                "confidence": 0.9,
+                "reason": "fake"
+            }),
+        };
+        Ok(LlmResponse {
+            value,
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+
+    async fn embed(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _text: &str,
+    ) -> Result<EmbeddingResponse> {
+        Ok(EmbeddingResponse {
+            vector: vec![1.0, 0.0],
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_named_office_cannot_be_answered_by_an_office_blind_capability() {
+    let catalog = Arc::new(runtime_test_catalog());
+    let llm = Arc::new(TopCandidateFakeLlm) as SharedLlmClient;
+
+    async fn run(
+        catalog: &Arc<KnowledgeCatalog>,
+        llm: &SharedLlmClient,
+        message: &str,
+    ) -> GraphRuntimeResult {
+        let router = SemanticRouter::new(llm.clone());
+        let mut context = empty_context();
+        // Mirrors chat's admin projection, so the auth boundary in
+        // `allowed_ids` is not what the assertion measures.
+        context.client_scope = json!({ "allow_all_capabilities": true });
+        AssistantGraphRuntime::run_with_router(
+            empty_memory(),
+            context,
+            Some(&router),
+            Some(llm),
+            None,
+            None,
+            Some(catalog),
+            None,
+            None,
+            message,
+        )
+        .await
+    }
+
+    fn candidate_ids(result: &GraphRuntimeResult) -> Vec<String> {
+        result
+            .memory
+            .retrieval_evidence
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["capability_id"].as_str().map(ToOwned::to_owned))
+            .collect()
+    }
+
+    let honours = |id: &str| {
+        crate::assistant::retrieval::capability_honours(&catalog, id, &ConstraintField::Office)
+    };
+
+    let control = run(&catalog, &llm, "give me 5 clients").await;
+    let control_ids = candidate_ids(&control);
+    let office_blind: Vec<String> = control_ids
+        .iter()
+        .filter(|id| !honours(id))
+        .cloned()
+        .collect();
+    assert!(
+        !office_blind.is_empty(),
+        "premise gone: retrieval for {control_ids:?} no longer offers any capability \
+         the catalog says cannot bind an office filter, so this test cannot observe a drop"
+    );
+
+    let scoped = run(&catalog, &llm, "give me 5 clients in Head Office").await;
+    let scoped_ids = candidate_ids(&scoped);
+    for id in &scoped_ids {
+        assert!(
+            honours(id),
+            "{id} reached the reranker for a question naming an office, but the \
+             catalog gives it no parameter an office can bind"
+        );
+    }
+    for id in &office_blind {
+        assert!(
+            !scoped_ids.contains(id),
+            "{id} survived the sufficiency gate: {scoped_ids:?}"
+        );
+    }
+    // The permissive fake selects candidates[0] unconditionally, so this is the
+    // capability that would have executed and returned unfiltered rows.
+    if let Some(selected) = scoped.memory.selected_capability.as_deref() {
+        assert!(
+            honours(selected),
+            "executed {selected} for a question naming an office it cannot filter by"
+        );
+    }
 }

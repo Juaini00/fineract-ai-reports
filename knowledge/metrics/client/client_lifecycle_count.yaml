@@ -2,6 +2,10 @@ id: client.lifecycle_count
 domain: client
 status: approved_mvp
 description: Count of clients by documented lifecycle status in authorized office scope.
+# This file is named client_lifecycle_count.yaml but declares client.lifecycle_count,
+# so capabilities were written against the filename-derived id. Both resolve here.
+aliases:
+  - client.client_lifecycle_count
 data_areas:
   - client_foundation
 source_table: m_client

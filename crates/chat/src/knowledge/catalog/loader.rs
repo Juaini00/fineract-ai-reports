@@ -7,7 +7,7 @@ use crate::knowledge::catalog::parameter_policy::{DefaultExpr, ParameterPolicy, 
 use crate::knowledge::dataset::model::DatasetKnowledge;
 use crate::knowledge::model::{
     CapabilityKnowledge, DataAreasKnowledge, DomainKnowledge, GenericKnowledge, KnowledgeCatalog,
-    ParameterInputKnowledge, QueryKnowledge,
+    ParameterBindingKnowledge, ParameterInputKnowledge, QueryKnowledge,
 };
 
 pub struct KnowledgeLoader {
@@ -33,6 +33,11 @@ impl KnowledgeLoader {
         let policies = self.load_yaml_dir::<GenericKnowledge>("policies")?;
         let responses = self.load_yaml_dir::<GenericKnowledge>("responses")?;
         let parameter_inputs = self.load_yaml_dir::<ParameterInputKnowledge>("parameters")?;
+        let parameter_bindings = self
+            .load_yaml_dir::<ParameterBindingKnowledge>("parameter-bindings")?
+            .into_iter()
+            .flat_map(|file| file.bindings)
+            .collect();
         let datasets = self.load_yaml_dir::<DatasetKnowledge>("datasets")?;
 
         let classification = self.load_classification_policy()?;
@@ -49,6 +54,7 @@ impl KnowledgeLoader {
             policies,
             responses,
             parameter_inputs,
+            parameter_bindings,
             classification,
             datasets,
         })

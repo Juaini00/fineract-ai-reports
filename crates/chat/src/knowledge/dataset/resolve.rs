@@ -148,6 +148,7 @@ mod tests {
                 input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             }],
+            filters_exempt: Vec::new(),
             shapes: vec![ShapeOption {
                 id: "account_match".into(),
                 request_shape: RequestShape {

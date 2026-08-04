@@ -456,6 +456,7 @@ impl AssistantGraphRuntime {
                 Some(payload),
                 Some(None),
                 input.sensitive_identifier.as_ref(),
+                &input.source_message,
             )
             .await;
         }
@@ -508,6 +509,7 @@ impl AssistantGraphRuntime {
                         Some(payload),
                         Some(None),
                         input.sensitive_identifier.as_ref(),
+                        &input.source_message,
                     )
                     .await;
                 }

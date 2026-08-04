@@ -1,0 +1,28 @@
+id: savings.charge_count
+domain: savings
+status: approved_mvp
+description: Count of active savings account charges in the authorized office scope, optionally narrowed by charge name, penalty flag, currency or due date. Answers "how many charges of type X exist", which a list capability cannot answer (issue 011).
+data_areas:
+  - savings_charges_fees
+source_table: m_savings_account_charge
+source_columns:
+  - id
+  - charge_id
+  - is_active
+  - is_penalty
+  - charge_due_date
+expression: COUNT(m_savings_account_charge.id)
+filters:
+  - m_savings_account_charge.is_active = true
+grouping_compatible:
+  - charge_id
+  - office_id
+  - currency_code
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_charges_fees data scope.
+  - id: office_scope_required
+    rule: metric must only count charges within authorized office_ids.
+  - id: active_filter_declared
+    rule: filters must exclude inactive charge rows.

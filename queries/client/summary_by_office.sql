@@ -8,6 +8,7 @@ SELECT
 FROM m_client c
 JOIN m_office o ON o.id = c.office_id
 WHERE c.office_id = ANY($1::bigint[])
+  AND ($3::text IS NULL OR lower(o.name) = lower($3::text))
 GROUP BY c.office_id, o.name
 ORDER BY total_count DESC, c.office_id ASC
 LIMIT $2;

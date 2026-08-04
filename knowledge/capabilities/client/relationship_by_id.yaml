@@ -10,6 +10,9 @@ metrics: [client.relationship_lookup]
 output_mode: list
 request_shape: { operation: lookup, subject: client, grouping: none, output: list, pii: client_identity }
 examples: [Continue with the selected client.]
+# Only reachable after a SelectEntity clarification supplies client_id; there is
+# no first-turn phrasing that could bind it.
+continuation: true
 guards:
   require_office_scope: true
   pii: { returns_pii: true, never_return: [account_no, external_id, mobile_no, email] }

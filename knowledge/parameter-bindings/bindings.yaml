@@ -1,0 +1,45 @@
+# What fills each approved query parameter, and in what order of preference.
+#
+# The names on the right are canonical constraint fields (ConstraintField). The
+# planner, the clarification planner and the "is this input already satisfied?"
+# check all read this one declaration. They used to each carry their own Rust
+# match on the parameter name, and they had drifted: six of the nine declared
+# clarification inputs hit a `_ => false` arm and so were reported missing on
+# every single turn regardless of what the user had typed.
+#
+# Adding a query parameter means adding a line here. The catalog validator
+# refuses to load if a non-scope query parameter has no entry, so a forgotten
+# binding is a startup failure, not a mystery clarification loop.
+#
+# An empty list is a real declaration: "nothing the user says binds this; only a
+# parameter policy default fills it."
+bindings:
+  from_date: [from_date]
+  to_date: [to_date]
+  # Snapshot date. There is no user-supplied "as of" fact yet; the capability's
+  # parameter policy default supplies it.
+  as_of_date: []
+  currency_code: [currency_code]
+  limit: [limit_value]
+  # A client-name search. Only a person name fills it. The `office` / `product`
+  # fallback that used to sit here was inherited from an old Rust
+  # `person_name.or(office).or(product)` precedence and had become a
+  # wrong-answer path: "clients in office Foo" with nobody named bound `Foo` as
+  # a *client name* and reported the empty result as an answer. Since
+  # `office_name` exists as a real narrowing parameter there is nothing left for
+  # the fallback to rescue.
+  search: [person_name]
+  # Fills two different jobs, both from the same canonical fact. In
+  # organization.office_name_lookup it is the subject ("does an office named X
+  # exist?"); everywhere else it is an optional *narrowing* filter ANDed after
+  # the authorized office_ids predicate. It is never the authorization
+  # boundary — that stays `office_ids`, source: authorized_scope.
+  office_name: [office]
+  product_name: [product]
+  charge_name: [charge_type]
+  client_id: [client_id]
+  latest_transaction_amount: [transaction_amount]
+  product_ids: [product_ids]
+  # Filter-only and never projected; reaches SQL as transient_sensitive_input,
+  # but still needs a declared home so a clarification answer can be stored.
+  account_number: [account_number]

@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 
 use crate::assistant::intent::RequestShape;
-use crate::assistant::{ClarificationFieldType, ClarificationValidation};
+use crate::assistant::{ClarificationFieldType, ClarificationValidation, ConstraintField};
 use crate::knowledge::dataset::model::{DatasetKnowledge, DatasetRecipe};
 
 #[derive(Debug, Clone)]
@@ -19,8 +20,88 @@ pub struct KnowledgeCatalog {
     pub policies: Vec<GenericKnowledge>,
     pub responses: Vec<GenericKnowledge>,
     pub parameter_inputs: Vec<ParameterInputKnowledge>,
+    /// Query parameter name -> the canonical facts that may fill it, in
+    /// precedence order. Declared once in `knowledge/parameter-bindings/`.
+    pub parameter_bindings: BTreeMap<String, Vec<ConstraintField>>,
     pub classification: ClassificationPolicy,
     pub datasets: Vec<DatasetKnowledge>,
+}
+
+/// The catalog's answer to "what fills this query parameter?".
+///
+/// Before this existed, three unrelated Rust match arms each answered it by
+/// parameter name — `input_satisfied`, `effective_parameter` and
+/// `params_from_verified` — and they disagreed. Six of the nine declared
+/// clarification inputs fell through `input_satisfied`'s `_ => false`, so they
+/// were reported missing on every turn no matter what the user had typed.
+///
+/// It is a single flat map rather than a field on `ParameterInputKnowledge`
+/// because a clarification input can only describe an *askable* parameter:
+/// the registry rejects anything that is not a single date/integer/text field,
+/// which excludes `product_ids` (array) and `as_of_date`. Binding must cover
+/// every parameter, askable or not, so it gets its own declaration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ParameterBindingKnowledge {
+    pub bindings: BTreeMap<String, Vec<ConstraintField>>,
+}
+
+impl KnowledgeCatalog {
+    /// Canonical facts that may fill `parameter`, in declared precedence order.
+    /// Empty means "no fact binds this" — the validator refuses to load a
+    /// catalog where a query parameter has no entry at all, so an empty slice
+    /// here is a deliberate declaration (a parameter only a policy default
+    /// fills), never a forgotten one.
+    pub fn binding_fields(&self, parameter: &str) -> &[ConstraintField] {
+        self.parameter_bindings
+            .get(parameter)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Resolve any spelling of a metric — canonical id, legacy id, or a
+    /// natural-language surface form — to the canonical id of the metric that
+    /// declares it.
+    ///
+    /// The alias list lives in `knowledge/metrics/*.yaml` beside the metric it
+    /// describes, so adding a spelling is a catalog edit. This replaces a
+    /// hand-written Rust match that had drifted far enough to normalize three
+    /// phrases onto metric ids no definition file declared, which made
+    /// `verify_capability_metric` reject the very capabilities those phrases
+    /// name.
+    pub fn resolve_metric_id(&self, raw: &str) -> Option<&str> {
+        let needle = normalize_metric_key(raw);
+        self.metrics
+            .iter()
+            .find(|metric| {
+                normalize_metric_key(&metric.id) == needle
+                    || metric_aliases(metric).any(|alias| normalize_metric_key(alias) == needle)
+            })
+            .map(|metric| metric.id.as_str())
+    }
+}
+
+/// Aliases ride in `GenericKnowledge::content` via `#[serde(flatten)]`, so no
+/// model change is needed to declare them.
+pub fn metric_aliases(metric: &GenericKnowledge) -> impl Iterator<Item = &str> {
+    metric
+        .content
+        .get("aliases")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+}
+
+/// Compare metric spellings without caring about `.` vs `_` vs spaces or case,
+/// so `savings.deposit_total`, `savings_deposit_total` and `deposit volume`
+/// all reduce to a comparable key.
+fn normalize_metric_key(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|character| match character {
+            '.' | '_' | '-' | ' ' => None,
+            other => Some(other.to_ascii_lowercase()),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -228,6 +309,14 @@ pub struct CapabilityKnowledge {
 
     #[serde(default)]
     pub examples: Vec<String>,
+
+    /// True when this capability can only be entered from a clarification the
+    /// assistant itself raised, never from a first-turn message. Its examples
+    /// are continuation phrasings ("Continue with the selected client."), so
+    /// the first-turn reachability check must skip it rather than pretend the
+    /// phrase should bind a parameter no user could have supplied yet.
+    #[serde(default)]
+    pub continuation: bool,
 
     #[serde(default)]
     pub required_parameters: Vec<String>,

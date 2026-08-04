@@ -7,7 +7,36 @@ tables:
   - m_client
   - m_office
   - m_charge
-filters: []
+filters:
+  - id: charge_name
+    expr: charge_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  - id: is_penalty
+    expr: is_penalty
+    type: boolean
+    operators: [eq]
+  - id: due_date
+    expr: due_date
+    type: date
+    operators: [eq, lt, gte]
+  - id: currency_code
+    expr: currency_code
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  # Narrows within the caller's authorized offices; it never widens them.
+  # Office scope itself stays bound from authorized_scope in the source SQL.
+  - id: office_name
+    expr: office_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+# A presentation label for currency_code, which is filterable. Narrowing by
+# "Rp" instead of "IDR" would be a second spelling of the same predicate.
+filters_exempt:
+  - currency_display_symbol
 shapes:
   - id: recent_list
     request_shape:
@@ -109,6 +138,23 @@ shapes:
       - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
       - { name: as_of_date, type: date, required: true }
       - { name: limit, type: integer, required: true }
+  # "ada berapa charge tipe X" is operation=summary/output=scalar. Without this
+  # shape the only charge capabilities were lists, so a count question was
+  # answered with a table of clients (issue 011).
+  - id: type_count
+    request_shape:
+      operation: summary
+      subject: savings_account_charge
+      grouping: none
+      output: scalar
+      pii: none
+    fragment: queries/datasets/savings/account_charges.type_count.frag.sql
+    output_fields:
+      - { name: charge_count, type: bigint, sensitivity: public_business, core: true }
+      - { name: savings_account_count, type: bigint, sensitivity: public_business, core: true }
+      - { name: amount_outstanding_total, type: decimal, sensitivity: public_business, core: true }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
 output_fields: []
 parameters: []
 timeout_ms: 3000

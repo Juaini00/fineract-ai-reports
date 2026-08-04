@@ -11,6 +11,7 @@ pub(super) async fn execute_selected_capability(
     active_payload: Option<&ClarificationPayload>,
     pending_clarification: Option<Option<ClarificationPayload>>,
     sensitive_identifier: Option<&crate::assistant::understanding::extraction::SensitiveIdentifier>,
+    source_message: &str,
 ) -> GraphRuntimeResult {
     let (Some(catalog), Some(client)) = (catalog, client) else {
         return graph_result(
@@ -162,6 +163,7 @@ pub(super) async fn execute_selected_capability(
                 intent,
                 deterministic_extraction.as_ref(),
                 eval_ctx.as_ref(),
+                Some(source_message),
             ) {
                 Ok(plan) => (plan, client.clone()),
                 Err(error) => {

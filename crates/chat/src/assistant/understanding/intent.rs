@@ -119,13 +119,27 @@ pub enum AssistantIntentKind {
     #[default]
     Greeting,
     Help,
-    ReportRequest,
     DataLookup,
     ClarificationReply,
     FollowUp,
+    /// The only intent that terminates before retrieval runs. It is a safety
+    /// boundary, not a claim about what the catalog covers.
     UnsafeRequest,
+    /// The router's "this looks off-topic" hint. **Not** a terminal answer —
+    /// it lowers the catalog-match prior (`retrieval::engine::catalog_fallback`)
+    /// and lets the reranker, which sees real capability rows, decide.
+    ///
+    /// There is deliberately no `UnsupportedInDomain` sibling: "the approved
+    /// catalog does not cover this" is a claim only a stage holding the
+    /// catalog can make, and the router does not hold it. That verdict now
+    /// belongs solely to `RerankerVerdict::Unsupported`.
     OutOfDomain,
-    UnsupportedInDomain,
+    /// Also the landing place for any intent string outside this list
+    /// (`#[serde(other)]`, which serde requires on the last variant): an
+    /// intent the router cannot name must reach retrieval, never fail the job
+    /// and never become a rejection.
+    #[serde(other)]
+    ReportRequest,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -180,6 +194,10 @@ pub enum AssistantEntityType {
     Metric,
     CapabilityHint,
     AccountNumber,
+    /// A charge/fee type name (`m_charge.name`), e.g. "Weekly Charge". Without
+    /// its own slot the router forced these into `Metric`, where nothing binds
+    /// them, and the narrowing was dropped on the way to SQL (issue 011).
+    ChargeType,
     /// An entity kind the model invented (e.g. `transaction_amount`). Without
     /// this arm a single hallucinated entity type fails the whole router call
     /// and the user gets nothing, even though the other entities were fine.

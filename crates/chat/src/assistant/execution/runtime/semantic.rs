@@ -52,6 +52,7 @@ async fn clarify_retrieval_candidates(
                     None,
                     None,
                     input.sensitive_identifier.as_ref(),
+                    &input.source_message,
                 )
                 .await;
             }
@@ -188,6 +189,7 @@ pub(super) async fn complete_semantic_route(
                             Some(payload),
                             pending_clarification,
                             None,
+                            &input.source_message,
                         )
                         .await;
                     }
@@ -221,6 +223,7 @@ pub(super) async fn complete_semantic_route(
                             Some(payload),
                             pending_clarification,
                             input.sensitive_identifier.as_ref(),
+                            &input.source_message,
                         )
                         .await;
                     }
@@ -314,31 +317,11 @@ pub(super) async fn complete_semantic_route(
                         simple_intent_transitions(TerminalState::BlockedByPolicy, "unsafe_request"),
                     );
                 }
-                Some(AssistantIntentKind::OutOfDomain) => {
-                    return graph_result(
-                        memory,
-                        TerminalState::OutOfDomain,
-                        "out_of_domain",
-                        ResponseBuilder::out_of_domain(),
-                        context.recent_messages.len(),
-                        None,
-                        simple_intent_transitions(TerminalState::OutOfDomain, "out_of_domain"),
-                    );
-                }
-                Some(AssistantIntentKind::UnsupportedInDomain) => {
-                    return graph_result(
-                        memory,
-                        TerminalState::Unsupported,
-                        "unsupported_in_domain",
-                        ResponseBuilder::unsupported(),
-                        context.recent_messages.len(),
-                        None,
-                        simple_intent_transitions(
-                            TerminalState::Unsupported,
-                            "unsupported_in_domain",
-                        ),
-                    );
-                }
+                // Nothing else terminates here. `OutOfDomain` in particular is
+                // a hint that rides into the plan and lowers the prior in
+                // `catalog_fallback`; only the reranker, which sees real
+                // capability ids/descriptions/examples, may answer
+                // "unsupported".
                 _ => {}
             }
             tracing::info!(
@@ -362,10 +345,48 @@ pub(super) async fn complete_semantic_route(
                 Ok(evidence) => (evidence, None),
                 Err(error) => (Vec::new(), Some(error.to_string())),
             };
+            // The sufficiency gate. Retrieval ranks on similarity, and the
+            // reranker prompt merely *asks* the model not to pick a candidate
+            // that drops a filter the user named — which is how "5 clients in
+            // <office>" completed with clients from all eight authorized
+            // offices. A candidate that cannot bind a constraint the user
+            // clearly expressed is not a worse answer to this question, it is
+            // an answer to a different one, so it stops being a candidate here
+            // rather than being argued about in a prompt.
+            let evidence = match catalog {
+                Some(catalog) => {
+                    let extraction = memory
+                        .current_user_message_metadata
+                        .get("deterministic_extraction")
+                        .cloned()
+                        .and_then(|value| {
+                            serde_json::from_value::<DeterministicExtraction>(value).ok()
+                        });
+                    let expressed = crate::assistant::retrieval::expressed_filters(
+                        message,
+                        memory.intent.as_ref(),
+                        extraction.as_ref(),
+                    );
+                    crate::assistant::retrieval::drop_insufficient(catalog, &expressed, evidence)
+                }
+                None => evidence,
+            };
             tracing::info!(
                 target: "assistant::mapping",
                 evidence_count = evidence.len(),
                 evidence = ?evidence.iter().map(|e| (&e.capability_id, e.score)).collect::<Vec<_>>(),
+                // Issue 011 item 6: measurement before tuning. `score_gap` is
+                // top-1 minus top-2; `tied_at_top` counts candidates sharing
+                // the leader's score. A gap near zero with several tied means
+                // ranking was decided by the reranker alone, with no prior.
+                score_gap = evidence
+                    .first()
+                    .zip(evidence.get(1))
+                    .map(|(first, second)| first.score - second.score),
+                tied_at_top = evidence.first().map(|first| evidence
+                    .iter()
+                    .filter(|item| (item.score - first.score).abs() < f32::EPSILON)
+                    .count()),
                 warning = ?warning,
                 "retrieval evidence"
             );
@@ -418,6 +439,7 @@ pub(super) async fn complete_semantic_route(
                                 None,
                                 None,
                                 input.sensitive_identifier.as_ref(),
+                                &input.source_message,
                             )
                             .await;
                             result.retrieval_trace = retrieval_trace.clone();

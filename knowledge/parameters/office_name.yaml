@@ -1,0 +1,9 @@
+id: office_name
+parameters:
+  - office_name
+type: text
+label: Office name
+help_text: Enter the office name to narrow to. Only offices already in your authorized scope are searched.
+required: true
+validation:
+  max_length: 200

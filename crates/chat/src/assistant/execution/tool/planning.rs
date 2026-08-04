@@ -28,6 +28,7 @@ pub(super) fn plan_selected_capability(
         intent,
         Some(&legacy_extraction),
         None,
+        None,
     )
 }
 
@@ -37,6 +38,7 @@ pub(super) fn plan_selected_capability_verified(
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
     ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<ExecutionPlan> {
     if let Some(error) = deterministic_extraction.and_then(|value| value.temporal_error.as_ref()) {
         bail!("{}: {}", error.code, error.message);
@@ -46,18 +48,24 @@ pub(super) fn plan_selected_capability_verified(
         .iter()
         .find(|item| item.id == capability_id && item.status == "approved_mvp")
         .ok_or_else(|| anyhow::anyhow!("selected capability is not executable"))?;
-    verify_capability_metric(capability.metrics.as_slice(), deterministic_extraction)?;
+    verify_capability_metric(
+        catalog,
+        capability.metrics.as_slice(),
+        deterministic_extraction,
+    )?;
     let query = catalog
         .queries
         .iter()
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
     let params = params_from_verified(
+        catalog,
         query,
         intent,
         deterministic_extraction,
         &capability.parameter_policies,
         ctx,
+        message,
     )?;
     let dataset_selection = capability
         .dataset_recipe

@@ -345,7 +345,7 @@ async fn run_pipeline(
     catalog: &Arc<KnowledgeCatalog>,
     fixture: &Fixture,
 ) -> (RerankerVerdict, Option<String>) {
-    let router = SemanticRouter::new(llm.clone(), catalog);
+    let router = SemanticRouter::new(llm.clone());
     let intent = router
         .route(&fixture.message, &empty_context())
         .await

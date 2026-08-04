@@ -82,6 +82,7 @@ impl KnowledgeValidator {
             catalog.parameter_inputs.iter().map(|item| item.id.as_str()),
         )?;
         validate_parameter_input_registry(&catalog.parameter_inputs, &catalog.queries)?;
+        validate_parameter_bindings(catalog)?;
 
         for area in &catalog.data_areas {
             validate_status("data area", &area.id, &area.status, DATA_AREA_STATUSES)?;
@@ -212,6 +213,21 @@ impl KnowledgeValidator {
                     capability.id,
                     capability.query_id
                 );
+            }
+
+            // A metric id with no definition file cannot be resolved, so the
+            // runtime metric guard compares against a name that means nothing
+            // and rejects the capability. Four such ids shipped undetected
+            // because nothing tied `metrics:` back to `knowledge/metrics/`.
+            for metric in &capability.metrics {
+                if catalog.resolve_metric_id(metric).is_none() {
+                    bail!(
+                        "capability {} references metric {} with no definition in knowledge/metrics \
+                         (declare it, or add it to an existing metric's aliases)",
+                        capability.id,
+                        metric
+                    );
+                }
             }
 
             if capability.status == "approved_mvp" {
@@ -384,6 +400,47 @@ fn validate_generic_layer(
         }
     }
 
+    Ok(())
+}
+
+/// Every query parameter the planner has to fill must declare where its value
+/// comes from, and every declaration must name a parameter that exists.
+///
+/// This is the guard that makes `knowledge/parameter-bindings/` authoritative
+/// instead of advisory. Without it a new required parameter simply never binds:
+/// the planner reports `missing parameter <name>` on every turn and the
+/// clarification loop asks for something it cannot store — which is exactly how
+/// `office_name`, `charge_name`, `client_id`, `account_number`,
+/// `latest_transaction_amount` and `product_name` shipped unreachable.
+fn validate_parameter_bindings(catalog: &KnowledgeCatalog) -> Result<()> {
+    for query in &catalog.queries {
+        for parameter in &query.parameters {
+            if matches!(
+                parameter.source.as_deref(),
+                Some("authorized_scope" | "transient_sensitive_input")
+            ) {
+                continue;
+            }
+            if !catalog.parameter_bindings.contains_key(&parameter.name) {
+                bail!(
+                    "query {} parameter {} has no entry in knowledge/parameter-bindings \
+                     (declare which constraint fields fill it, or an empty list if only a \
+                     policy default does)",
+                    query.id,
+                    parameter.name
+                );
+            }
+        }
+    }
+    for name in catalog.parameter_bindings.keys() {
+        if !catalog
+            .queries
+            .iter()
+            .any(|query| query.parameters.iter().any(|p| p.name == *name))
+        {
+            bail!("parameter binding {name} names a parameter no approved query declares");
+        }
+    }
     Ok(())
 }
 
@@ -1185,6 +1242,7 @@ mod tests {
             queries: vec![],
             policies: vec![],
             responses: vec![],
+            parameter_bindings: Default::default(),
             parameter_inputs: vec![],
             classification: Default::default(),
             datasets: vec![],
@@ -1260,6 +1318,7 @@ mod tests {
             data_areas: vec![],
             metrics: vec![],
             examples: vec![],
+            continuation: false,
             required_parameters: vec![],
             optional_parameters: vec![],
             defaults: CapabilityDefaults::default(),

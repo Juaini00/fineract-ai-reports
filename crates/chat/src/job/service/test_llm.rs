@@ -56,17 +56,23 @@ impl LlmClient for TestLlmClient {
             (AssistantIntentKind::Help, AssistantDomain::Unknown)
         } else if lower.contains("laptop") {
             (AssistantIntentKind::OutOfDomain, AssistantDomain::Unknown)
-        } else if lower.contains("loan")
-            || lower.contains("charges")
-            || lower.contains("fees")
-            || lower.contains("tax")
-            || lower.contains("accounting")
+        // The fake router mirrors the real one: it classifies, it never
+        // vetoes. Loan / tax / accounting requests used to be hard-coded to
+        // `unsupported_in_domain` here, which made ~every test green for the
+        // wrong reason — the veto, not the catalog. They now fall through as
+        // report requests and reach retrieval, where an empty candidate list
+        // produces the same `unsupported` answer via the reranker.
+        } else if lower.contains("loan") {
+            (AssistantIntentKind::ReportRequest, AssistantDomain::Loan)
+        } else if lower.contains("tax") {
+            (AssistantIntentKind::ReportRequest, AssistantDomain::Tax)
+        } else if lower.contains("accounting")
             || lower.contains("journal")
             || lower.contains(" gl ")
         {
             (
-                AssistantIntentKind::UnsupportedInDomain,
-                AssistantDomain::Unknown,
+                AssistantIntentKind::ReportRequest,
+                AssistantDomain::Accounting,
             )
         } else if lower.contains("raw account") {
             (AssistantIntentKind::UnsafeRequest, AssistantDomain::Client)

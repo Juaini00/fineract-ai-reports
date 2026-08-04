@@ -1,0 +1,30 @@
+id: savings.account_identity
+domain: savings
+status: approved_mvp
+description: Savings account identity resolution from an exact account number — owner client, owning office, product and status. Not an aggregate; it names the relationship being read.
+data_areas:
+  - savings_core
+  - client_foundation
+  - organization_foundation
+source_table: m_savings_account
+source_columns:
+  - id
+  - account_no
+  - client_id
+  - product_id
+  - status_enum
+expression: m_savings_account resolved by exact account_no to its owner, office and product
+filters:
+  - account owner office must be inside authorized office scope
+  - account_no is matched by equality only and is never projected
+grouping_compatible: []
+sensitivity: client_identity
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_core data scope.
+  - id: filter_only_identifier
+    rule: account_no is filter-only — equality match, never returned in output.
+  - id: owner_office_scope_required
+    rule: resolution must enforce owner office scope.
+  - id: pii_gated
+    rule: client identity fields must be redacted when the caller lacks can_view_pii.

@@ -1,0 +1,9 @@
+id: charge_name
+parameters:
+  - charge_name
+type: text
+label: Charge type
+help_text: Enter the charge or fee name exactly as it appears in the product setup, e.g. "Weekly Charge".
+required: true
+validation:
+  max_length: 200

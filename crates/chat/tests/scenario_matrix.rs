@@ -12,7 +12,6 @@ use chat::assistant::{
     SemanticRouter,
     llm::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage},
 };
-use chat::knowledge::catalog::loader::KnowledgeLoader;
 use common::spawn_app;
 use serde_json::json;
 
@@ -77,11 +76,7 @@ impl LlmClient for ScenarioFakeLlm {
 
 #[tokio::test]
 async fn semantic_assistant_default_scenario_matrix_routes_without_live_services() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let catalog = KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
-        .load()
-        .expect("load catalog");
-    let router = SemanticRouter::new(Arc::new(ScenarioFakeLlm), &catalog);
+    let router = SemanticRouter::new(Arc::new(ScenarioFakeLlm));
     for (prompt, expected_intent, expected_domain) in [
         (
             "Hi",

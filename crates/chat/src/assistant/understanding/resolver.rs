@@ -197,6 +197,7 @@ mod tests {
             data_areas: vec![],
             metrics: vec![],
             examples: vec![],
+            continuation: false,
             required_parameters: vec![],
             optional_parameters: vec![],
             defaults: CapabilityDefaults::default(),

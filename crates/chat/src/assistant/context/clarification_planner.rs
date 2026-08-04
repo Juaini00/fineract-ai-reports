@@ -125,7 +125,7 @@ impl<'a> ClarificationPlanner<'a> {
         let defaults = limit_default(capability, query, &inputs);
         let missing = inputs
             .into_iter()
-            .filter(|input| !input_satisfied(input, facts, &defaults))
+            .filter(|input| !input_satisfied(self.catalog, input, query, facts, &defaults))
             .map(|input| field_for(input, facts, capability))
             .collect();
         Some(Candidate {
@@ -169,7 +169,7 @@ pub fn defaultless_missing_fields(
                         && capability.defaults.default_limit.is_some()))
             })
         })
-        .filter(|input| !input_satisfied(input, facts, &defaults))
+        .filter(|input| !input_satisfied(catalog, input, query, facts, &defaults))
         .map(|input| field_for(input, facts, capability))
         .collect()
 }
@@ -245,44 +245,36 @@ fn limit_default(
     .collect()
 }
 
+/// An input is satisfied once every parameter this query actually takes from it
+/// has a value.
+///
+/// This used to be a match on the input id ending in `_ => false`, which meant
+/// six of the nine declared inputs — office_name, product_name, charge_name,
+/// client_id, account_number, latest_transaction_amount — were reported missing
+/// on every turn no matter what the user had typed, and the clarification could
+/// never be answered away. The catalog's binding declaration answers it now, so
+/// a new input needs no code here at all.
 fn input_satisfied(
+    catalog: &KnowledgeCatalog,
     input: &ParameterInputKnowledge,
+    query: &QueryKnowledge,
     facts: &ClarificationFacts,
     defaults: &ConstraintPatch,
 ) -> bool {
-    match input.id.as_str() {
-        "date_range" => {
-            matches!(
-                facts.values.get(&ConstraintField::FromDate),
-                Some(TypedFactValue::Date(_))
-            ) && matches!(
-                facts.values.get(&ConstraintField::ToDate),
-                Some(TypedFactValue::Date(_))
-            )
-        }
-        "limit" => {
-            matches!(
-                facts
-                    .values
-                    .get(&ConstraintField::LimitMode)
-                    .or_else(|| defaults.get(&ConstraintField::LimitMode)),
-                Some(TypedFactValue::LimitMode(
-                    LimitMode::TopN | LimitMode::Limit
-                ))
-            ) && matches!(
-                facts
-                    .values
-                    .get(&ConstraintField::LimitValue)
-                    .or_else(|| defaults.get(&ConstraintField::LimitValue)),
-                Some(TypedFactValue::Integer(_))
-            )
-        }
-        "search" => matches!(
-            facts.values.get(&ConstraintField::PersonName),
-            Some(TypedFactValue::PersonName(_))
-        ),
-        _ => false,
+    let mut relevant = input
+        .parameters
+        .iter()
+        .filter(|name| query.parameters.iter().any(|p| p.name == **name))
+        .peekable();
+    if relevant.peek().is_none() {
+        return false;
     }
+    relevant.all(|name| {
+        catalog
+            .binding_fields(name)
+            .iter()
+            .any(|field| facts.values.contains_key(field) || defaults.contains_key(field))
+    })
 }
 
 fn field_for(
@@ -481,6 +473,7 @@ mod tests {
                     data_areas: vec![],
                     metrics: vec![],
                     examples: vec![],
+                    continuation: false,
                     required_parameters: vec![],
                     optional_parameters: vec![],
                     defaults: CapabilityDefaults { default_limit },
@@ -521,6 +514,16 @@ mod tests {
             queries,
             policies: vec![],
             responses: vec![],
+            parameter_bindings: [
+                ("from_date", vec![ConstraintField::FromDate]),
+                ("to_date", vec![ConstraintField::ToDate]),
+                ("limit", vec![ConstraintField::LimitValue]),
+                ("top_n", vec![ConstraintField::LimitValue]),
+                ("search", vec![ConstraintField::PersonName]),
+            ]
+            .into_iter()
+            .map(|(name, fields)| (name.to_string(), fields))
+            .collect(),
             parameter_inputs: vec![
                 input(
                     "date_range",
