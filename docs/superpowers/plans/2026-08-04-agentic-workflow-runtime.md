@@ -69,7 +69,7 @@ These are referenced by ID from the phase gates. `∅` means the command must pr
 | `V-L9` | `command grep -rEn 'SemanticRouter\|ClassificationResult\|ClassificationOutcome' crates/` | ∅ (baseline 40) |
 | `V-L10` | `command grep -rEn 'AssistantGraphRuntime' crates/` | ∅ (baseline 23) |
 | `V-L11` | `command grep -rEn 'knowledge::dataset::legacy' crates/` | ∅ |
-| `V-L12` | `command grep -rEn 'reqwest' crates/chat/src/assistant/llm/` | ∅ (baseline 8), or the Task 1.2 amendment |
+| `V-L12` | `command grep -rEn 'reqwest' crates/chat/src/assistant/llm/` | 2 (amended, see below) |
 | `V-L13` | `command grep -rEn 'size_of::<rig_core' crates/` | ∅ (baseline 1) |
 | `V-L14` | `command grep -rEn swiftide .` | ∅ (baseline 14) |
 | `V-L15` | `command grep -rEn Swiftide crates/` | ∅ |
@@ -144,6 +144,14 @@ modify `llm/mod.rs`, `llm/traced_client.rs`.
 - [ ] **Step 2: Spike.** Determine whether `rig_core` 0.40.0's provider client supports (4) custom completion URL and (2) a per-request response-format override. Record the answer in the spec's §20 open item 1. **If it cannot**, the adapter keeps a `reqwest` transport for exactly those cases and `V-L12` is amended in this plan with the surviving line range and a one-line reason — it is not silently left in.
 - [ ] **Step 3:** Implement `LlmProvider` over `rig_core`. All eight retained tests pass unchanged.
 - [ ] **Step 4:** Delete `crates/chat/examples/phase0_rig_poc.rs` — its purpose (proving the `Tool` trait round-trips) is now discharged by production code.
+
+**V-L12 amendment (recorded 2026-08-04):** `provider.rs` (the production Rig boundary) has
+zero `reqwest` references — the spike was unnecessary because Rig's provider client covers
+both the custom completion URL and the per-request `json_object` fallback. The 2 remaining
+`reqwest` hits are `planner_client.rs:25,43`, which backs the **legacy** semantic pipeline
+(`understanding/classifier/`, `assistant/llm/semantic/`) — the same modules Task 7.1 deletes
+wholesale under `V-L9`. Migrating this file to Rig now would be rewriting code with a fixed
+deletion date; `planner_client.rs` is deleted alongside its callers in Task 7.1, not migrated.
 
 **Gate 1.2:** `V-L13` ∅, `V-L17` ∅, `V-TREE-RIG` non-empty, `cargo test -p chat llm::`, `V-BUILD`, `V-LINT`.
 
