@@ -21,10 +21,12 @@ pub(super) fn words(message: &str) -> Vec<&str> {
         .collect()
 }
 
+const CURRENCY_CODES: &[&str] = &["IDR", "USD", "EUR", "AED", "SAR"];
+
 pub(super) fn extract_currency(message: &str) -> Option<String> {
     message
         .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .find(|word| matches!(*word, "IDR" | "USD" | "EUR" | "AED" | "SAR"))
+        .find(|word| CURRENCY_CODES.contains(word))
         .map(str::to_string)
 }
 
@@ -52,6 +54,32 @@ const NAME_ANCHORS: &[&str] = &[
 /// user actually typed.
 const LOWERCASE_NAME_ANCHORS: &[&str] = &["named", "name", "nama", "bernama"];
 
+/// Anchors that announce *that* a name follows without saying what kind of thing
+/// it names. Same four words as `LOWERCASE_NAME_ANCHORS`, read for a different
+/// decision: when one of these introduces a phrase, the kind is resolved from
+/// the sentence's subject instead (see `subject_kind`), because "apakah ada
+/// office dengan nama Foo" was binding `Foo` as a *person* — the word `office`
+/// sat four tokens away and nothing ever looked at it.
+const NAMING_ANCHORS: &[&str] = LOWERCASE_NAME_ANCHORS;
+
+/// Prepositions that place something somewhere. The only thing a report is
+/// placed *in* is an office, so a locative licenses a one-token office capture
+/// the way `office` / `kantor` does — that is what makes "yg ada pada Foo"
+/// bind an office at all.
+///
+/// Deliberate refusals, both checked in `locative_refuses`: a month name and a
+/// currency code, the two capitalised things a locative introduces that are not
+/// places ("deposits in January", "balances in IDR"). Everything else is
+/// accepted, and the cost of being wrong is bounded: `office_name` reaches SQL
+/// as an exact `lower(o.name) = lower($n)` match ANDed after the authorized
+/// scope predicate, so a word that is not an office name returns no rows —
+/// visibly empty, never another office's rows.
+///
+/// ponytail: no gazetteer. Validating the captured name against `m_office`
+/// belongs in a resolver that can reach the database and ask when it misses,
+/// not in a pure substring reader.
+const LOCATIVE_ANCHORS: &[&str] = &["pada", "di", "in", "at", "dari"];
+
 /// How many tokens a lowercase run may take. A capitalised run self-terminates
 /// at the first lowercase word; a lowercase one has no such edge, so it needs a
 /// hard stop. Two covers "john doe", and under-capturing is the safe direction:
@@ -63,12 +91,19 @@ const MAX_LOWERCASE_NAME_TOKENS: usize = 2;
 /// office foo" would swallow its own tail and bind a string no client matches.
 /// Only closed-class words belong here — prepositions, articles, conjunctions,
 /// pronouns, question words — never a word that could be somebody's name.
+///
+/// The quantifiers ("berapa", "banyak", "many", "much", "jumlah", "total",
+/// "how") were added with `lowercase_kind_run`: they are the words that sit
+/// directly in front of a bare domain noun ("ada berapa charge di sistem"), and
+/// without them that run would be read as a charge literally named "berapa
+/// charge".
 const NAME_STOP_WORDS: &[&str] = &[
-    "a", "ada", "all", "an", "and", "apa", "are", "as", "at", "atau", "by", "dan", "dari",
-    "dengan", "di", "each", "every", "her", "his", "id", "ids", "in", "ini", "is", "itu", "kami",
-    "ke", "kita", "me", "my", "no", "not", "of", "on", "only", "or", "our", "pada", "per", "punya",
-    "saya", "semua", "siapa", "the", "their", "this", "tidak", "to", "us", "was", "we", "were",
-    "which", "who", "with", "yang", "yg",
+    "a", "ada", "all", "an", "and", "any", "apa", "are", "as", "at", "atau", "banyak", "berapa",
+    "by", "dan", "dari", "dengan", "di", "each", "every", "her", "his", "how", "id", "ids", "in",
+    "ini", "is", "itu", "jumlah", "kami", "ke", "kita", "many", "me", "much", "my", "no", "not",
+    "of", "on", "only", "or", "our", "pada", "per", "punya", "saya", "semua", "siapa", "the",
+    "their", "this", "tidak", "to", "total", "us", "was", "we", "were", "which", "who", "with",
+    "yang", "yg",
 ];
 
 /// Nouns that make a capitalised phrase a *thing*, not a person. "Head Office",
@@ -105,10 +140,15 @@ pub(super) enum NamedEntityKind {
 /// Precision rules, in the order they matter:
 /// - a run must be capitalised, and a run that starts the sentence is ignored —
 ///   otherwise every "Show", "Find" and "How" becomes a name;
-/// - a single-word run needs an explicit anchor in front of it ("named Tony"),
-///   because one stray capital ("the savings account ID") is not evidence;
+/// - a single-word run needs an explicit anchor in front of it ("named Tony",
+///   "office Foo", "pada Foo"), because one stray capital ("the savings account
+///   ID") is not evidence. Every kind-bearing word licenses this, not only the
+///   person-name words: an office named in one word used to vanish entirely,
+///   and the report came back covering every office the caller can see;
 /// - a multi-word run stands on its own — two adjacent capitals mid-sentence is
-///   a proper noun in both English and Indonesian;
+///   a proper noun in both English and Indonesian — and a spaced hyphen between
+///   two capitals keeps the run together, so "Foo - Dubai Branch" stays one
+///   office name instead of collapsing to "Dubai Branch";
 /// - a run containing a domain noun is that thing, never a person.
 ///
 /// A run that is *not* capitalised is read too, but only directly after a
@@ -131,17 +171,38 @@ pub(super) fn extract_named_entities(message: &str) -> Vec<(NamedEntityKind, Str
                 found.push((NamedEntityKind::Person, phrase));
                 index = next;
             } else {
+                if let Some(entity) = lowercase_kind_run(message, &tokens, index) {
+                    found.push(entity);
+                }
                 index += 1;
             }
             continue;
         }
         let start = index;
         let mut end = index;
-        while end + 1 < tokens.len()
-            && is_capitalised(tokens[end + 1].0)
-            && !separated(message, tokens[end].2, tokens[end + 1].1)
-        {
-            end += 1;
+        loop {
+            if end + 1 < tokens.len()
+                && is_capitalised(tokens[end + 1].0)
+                && !separated(message, tokens[end].2, tokens[end + 1].1)
+            {
+                end += 1;
+                continue;
+            }
+            // "Foo - Dubai Branch": the deployment spells child offices
+            // `Parent - Child`, and the spaced hyphen tokenises on its own, so
+            // the run used to break and bind only the child half — an exact
+            // `lower(o.name) = lower($n)` match against a name that does not
+            // exist, i.e. zero rows for an office that has clients.
+            if end + 2 < tokens.len()
+                && tokens[end + 1].0 == "-"
+                && is_capitalised(tokens[end + 2].0)
+                && !separated(message, tokens[end].2, tokens[end + 1].1)
+                && !separated(message, tokens[end + 1].2, tokens[end + 2].1)
+            {
+                end += 2;
+                continue;
+            }
+            break;
         }
         index = end + 1;
 
@@ -154,33 +215,172 @@ pub(super) fn extract_named_entities(message: &str) -> Vec<(NamedEntityKind, Str
             .iter()
             .map(|token| token.0)
             .collect::<Vec<_>>();
-        if words.len() == 1 && !NAME_ANCHORS.contains(&anchor.as_str()) {
+        let phrase = words.join(" ");
+        if words.len() == 1
+            && (anchor_kind(&anchor).is_none()
+                || (LOCATIVE_ANCHORS.contains(&anchor.as_str()) && locative_refuses(&phrase)))
+        {
             continue;
         }
-        let phrase = words.join(" ");
-        let kind = classify(&phrase, &anchor);
+        let kind = resolve_kind(message, &tokens, start, &phrase, &anchor);
         found.push((kind, phrase));
     }
     found
 }
 
-/// What a phrase denotes, given the word that introduced it.
-fn classify(phrase: &str, anchor: &str) -> NamedEntityKind {
+/// What kind of thing a word introduces, or `None` when it introduces nothing
+/// and so cannot license a one-token capture on its own.
+fn anchor_kind(word: &str) -> Option<NamedEntityKind> {
+    if OFFICE_WORDS.contains(&word) || LOCATIVE_ANCHORS.contains(&word) {
+        Some(NamedEntityKind::Office)
+    } else if CHARGE_WORDS.contains(&word) || matches!(word, "type" | "tipe" | "jenis") {
+        Some(NamedEntityKind::ChargeType)
+    } else if PRODUCT_WORDS.contains(&word) {
+        Some(NamedEntityKind::Product)
+    } else if NAME_ANCHORS.contains(&word) {
+        Some(NamedEntityKind::Person)
+    } else {
+        None
+    }
+}
+
+/// A domain noun carried by the phrase itself, if any.
+fn phrase_kind(phrase: &str) -> Option<NamedEntityKind> {
     let lower = phrase.to_ascii_lowercase();
     let has = |list: &[&str]| {
         lower
             .split(' ')
             .any(|word| list.contains(&word) || list.contains(&word.trim_end_matches('s')))
     };
-    if has(OFFICE_WORDS) || OFFICE_WORDS.contains(&anchor) {
-        NamedEntityKind::Office
-    } else if has(CHARGE_WORDS) || matches!(anchor, "type" | "tipe" | "jenis") {
-        NamedEntityKind::ChargeType
+    if has(OFFICE_WORDS) {
+        Some(NamedEntityKind::Office)
+    } else if has(CHARGE_WORDS) {
+        Some(NamedEntityKind::ChargeType)
     } else if has(PRODUCT_WORDS) {
+        Some(NamedEntityKind::Product)
+    } else {
+        None
+    }
+}
+
+/// What a phrase denotes. Precedence, highest first:
+///
+/// 1. a domain noun inside the phrase — "Dubai Branch" is an office whatever
+///    introduced it;
+/// 2. the sentence's subject, but *only* when the nearest anchor is a naming
+///    word. `nama` / `named` say a name follows without saying of what, so the
+///    kind comes from the nearest kind-bearing word before it;
+/// 3. the nearest anchor's own kind;
+/// 4. person, when nothing named a kind.
+///
+/// Rule 2 is deliberately scoped to naming anchors. Consulting the sentence for
+/// every run would read "how many savings accounts does Hiroshi Tanaka have?"
+/// as a *product* named Hiroshi Tanaka.
+///
+/// A sentence naming two kinds resolves per run, because every step above is
+/// nearest-first: in "clients in office Foo with charge Weekly Charge", `Foo`
+/// takes `office` and `Weekly Charge` carries its own noun, so both bind.
+fn resolve_kind(
+    message: &str,
+    tokens: &[(&str, usize, usize)],
+    start: usize,
+    phrase: &str,
+    anchor: &str,
+) -> NamedEntityKind {
+    phrase_kind(phrase)
+        .or_else(|| {
+            NAMING_ANCHORS
+                .contains(&anchor)
+                .then(|| subject_kind(message, tokens, start))
+                .flatten()
+        })
+        .or_else(|| anchor_kind(anchor))
+        .unwrap_or(NamedEntityKind::Person)
+}
+
+/// The kind the sentence was already talking about, read backwards from the
+/// naming anchor and stopping at the first word that names one. Naming anchors
+/// are skipped — they are what sent us looking in the first place — and the
+/// scan does not cross a sentence boundary.
+fn subject_kind(
+    message: &str,
+    tokens: &[(&str, usize, usize)],
+    start: usize,
+) -> Option<NamedEntityKind> {
+    for index in (0..start.saturating_sub(1)).rev() {
+        let word = tokens[index].0.to_ascii_lowercase();
+        if !NAMING_ANCHORS.contains(&word.as_str())
+            && let Some(kind) = anchor_kind(&word)
+        {
+            return Some(kind);
+        }
+        if sentence_start(message, tokens[index].1) {
+            break;
+        }
+    }
+    None
+}
+
+/// A month name or a currency code — capitalised words a locative introduces
+/// that are not places. Refusing them is what keeps "deposits in January" from
+/// binding an office filter.
+fn locative_refuses(phrase: &str) -> bool {
+    super::temporal::month_number(&phrase.to_ascii_lowercase()).is_some()
+        || CURRENCY_CODES.contains(&phrase)
+}
+
+/// A charge or product name typed in lower case: `<qualifier> <domain noun>`,
+/// where `index` sits on the domain noun. This is what makes
+/// `savings_charge_count_by_type`'s own example — "ada berapa saving weekly
+/// charge …" — reach a bound plan; before it, nothing was extracted at all.
+///
+/// Four refusals, each load-bearing because a lowercase run has no capital
+/// corroborating it:
+/// - the domain noun must be written in its exact singular form. "unpaid
+///   charges" and "savings accounts" are the user talking *about* charges and
+///   accounts; "weekly charge" is a name;
+/// - it must be the head of the phrase — if a name word follows it, the real
+///   head is further right ("saving weekly charge" yields "weekly charge", not
+///   "berapa saving");
+/// - the qualifier must not itself be a domain noun, so "savings account" and
+///   "biaya penalty" are refused rather than bound as products or charges
+///   nobody named;
+/// - the qualifier must be a name word, which excludes every stop word and
+///   quantifier, and must be lower case — a capitalised one was already taken
+///   by the capitalised path.
+///
+/// Office is deliberately absent. An office filter silently narrows a whole
+/// report, and "the main office" would bind one on no evidence but two ordinary
+/// words; `charge_name` / `product_name` are instead the *subject* of their
+/// capabilities, which without a value are unreachable rather than wrong.
+fn lowercase_kind_run(
+    message: &str,
+    tokens: &[(&str, usize, usize)],
+    index: usize,
+) -> Option<(NamedEntityKind, String)> {
+    let head = tokens[index].0.to_ascii_lowercase();
+    let kind = if CHARGE_WORDS.contains(&head.as_str()) {
+        NamedEntityKind::ChargeType
+    } else if PRODUCT_WORDS.contains(&head.as_str()) {
         NamedEntityKind::Product
     } else {
-        NamedEntityKind::Person
+        return None;
+    };
+    if tokens
+        .get(index + 1)
+        .is_some_and(|next| is_name_word(next.0))
+    {
+        return None;
     }
+    let qualifier = tokens.get(index.checked_sub(1)?)?;
+    if is_capitalised(qualifier.0)
+        || separated(message, qualifier.2, tokens[index].1)
+        || !is_name_word(qualifier.0)
+        || phrase_kind(qualifier.0).is_some()
+    {
+        return None;
+    }
+    Some((kind, format!("{} {}", qualifier.0, tokens[index].0)))
 }
 
 /// A person's name typed in lower case, read off the anchor in front of it.
@@ -223,7 +423,11 @@ fn lowercase_name_run(
         .map(|token| token.0)
         .collect::<Vec<_>>()
         .join(" ");
-    matches!(classify(&phrase, &anchor_word), NamedEntityKind::Person).then_some((phrase, end + 1))
+    matches!(
+        resolve_kind(message, tokens, start, &phrase, &anchor_word),
+        NamedEntityKind::Person
+    )
+    .then_some((phrase, end + 1))
 }
 
 /// Could this token be part of somebody's name? Letters (and hyphens) only, and

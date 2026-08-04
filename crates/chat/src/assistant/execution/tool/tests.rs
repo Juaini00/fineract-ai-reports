@@ -696,6 +696,179 @@ fn every_approved_capability_can_execute_its_own_example() {
     );
 }
 
+/// The measured matrix: real sentences, the real extractor, the real planner.
+///
+/// One table rather than fifteen tests, because the thing under test is a single
+/// decision — what kind of thing a captured phrase names — and the interesting
+/// evidence is the *spread* of phrasings it has to survive: one word or two,
+/// capitalised or not, English or Indonesian, anchored on a domain noun, on a
+/// locative, or on a bare "nama".
+///
+/// Nine of these fifteen produced the wrong parameters before this table
+/// existed. Seven named an office and none of the seven bound one: the office
+/// simply vanished and the report came back covering every office the caller
+/// could see, `terminal_state: "completed"`.
+#[test]
+fn named_entities_bind_the_filter_the_sentence_actually_names() {
+    let catalog = catalog();
+    let ctx = crate::knowledge::catalog::parameter_policy::EvaluationContext {
+        business_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        wall_today: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+        authorized_office_ids: vec![1, 2, 3, 4, 5, 6, 7, 40],
+    };
+    // (message, capability, parameters that must be bound exactly)
+    let matrix: &[(&str, &str, &[(&str, &str)])] = &[
+        // A one-word office name, anchored on a domain noun.
+        (
+            "pada office Foo ada berapa client?",
+            "client_summary_by_office",
+            &[("office_name", "Foo")],
+        ),
+        (
+            "ada berapa client di office Foo",
+            "client_summary_by_office",
+            &[("office_name", "Foo")],
+        ),
+        (
+            "how many clients in office Foo?",
+            "client_summary_by_office",
+            &[("office_name", "Foo")],
+        ),
+        // A one-word office name anchored only on a locative, alongside a limit.
+        (
+            "berikan saya 5 client yg ada pada Foo",
+            "client_random_sample",
+            &[("office_name", "Foo"), ("limit", "5")],
+        ),
+        // `nama` announces a name; the sentence says what kind of thing it names.
+        (
+            "apakah ada office dengan nama Foo",
+            "organization_office_name_lookup",
+            &[("office_name", "Foo")],
+        ),
+        (
+            "is there an office named Foo?",
+            "organization_office_name_lookup",
+            &[("office_name", "Foo")],
+        ),
+        // The deployment spells child offices `Parent - Child`.
+        (
+            "berikan saya client yg ada pada Foo - Dubai Branch",
+            "client_random_sample",
+            &[("office_name", "Foo - Dubai Branch")],
+        ),
+        // A charge type typed entirely in lower case — this capability's own
+        // documented example phrasing.
+        (
+            "ada berapa saving weekly charge yg dimiliki oleh system sekarang",
+            "savings_charge_count_by_type",
+            &[("charge_name", "weekly charge")],
+        ),
+        (
+            "tipe weekly charge ada berapa di savings?",
+            "savings_charge_count_by_type",
+            &[("charge_name", "weekly charge")],
+        ),
+        // The six that already worked and must keep working.
+        (
+            "berapa savings account milik client Hiroshi Tanaka",
+            "client_name_lookup",
+            &[("search", "Hiroshi Tanaka")],
+        ),
+        (
+            "berapa savings account milik client HIROSHI TANAKA",
+            "client_name_lookup",
+            &[("search", "HIROSHI TANAKA")],
+        ),
+        (
+            "cari client dengan nama hiroshi tanaka",
+            "client_name_lookup",
+            &[("search", "hiroshi tanaka")],
+        ),
+        (
+            "how many savings accounts does Hiroshi Tanaka have?",
+            "client_savings_overview",
+            &[("search", "Hiroshi Tanaka")],
+        ),
+        (
+            "tipe Weekly Charge ada berapa di savings?",
+            "savings_charge_count_by_type",
+            &[("charge_name", "Weekly Charge")],
+        ),
+        (
+            "how many Weekly Charge charges are on savings accounts?",
+            "savings_charge_count_by_type",
+            &[("charge_name", "Weekly Charge")],
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for (message, capability_id, expected) in matrix {
+        let extraction = extract_message_facts(message);
+        let intent = AssistantIntent {
+            intent: AssistantIntentKind::ReportRequest,
+            domain: AssistantDomain::Unknown,
+            request_shape: Default::default(),
+            language: AssistantLanguage::En,
+            canonical_query_en: (*message).into(),
+            entities: Vec::new(),
+            constraints: AssistantConstraints::default(),
+            context_reference: ContextReference::None,
+            source: None,
+            confidence: 0.9,
+            reason: (*message).into(),
+        };
+        match plan_selected_capability_verified(
+            &catalog,
+            capability_id,
+            &intent,
+            Some(&extraction),
+            Some(&ctx),
+            Some(message),
+        ) {
+            Err(error) => failures.push(format!("{message:?}: planning failed: {error}")),
+            Ok(plan) => {
+                for (name, value) in *expected {
+                    let bound = plan.params.get(*name).map(|bound| match bound {
+                        serde_json::Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    });
+                    if bound.as_deref() != Some(*value) {
+                        failures.push(format!(
+                            "{message:?}: {name} = {bound:?}, expected {value:?} \
+                             (all params: {})",
+                            plan.params
+                        ));
+                    }
+                }
+            }
+        }
+
+        // A named office also has to *reach* the sufficiency gate: it was inert
+        // for exactly these sentences, because the extractor handed it nothing.
+        if expected.iter().any(|(name, _)| *name == "office_name") {
+            let expressed = crate::assistant::retrieval::sufficiency::expressed_filters(
+                message,
+                Some(&intent),
+                Some(&extraction),
+            );
+            if !expressed.contains(&crate::assistant::ConstraintField::Office) {
+                failures.push(format!(
+                    "{message:?}: office filter never reached the sufficiency gate: {expressed:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} sentences bound the wrong parameters:\n  {}",
+        failures.len(),
+        matrix.len(),
+        failures.join("\n  ")
+    );
+}
+
 fn parameter(name: &str, required: bool) -> crate::knowledge::model::QueryParameter {
     crate::knowledge::model::QueryParameter {
         name: name.into(),

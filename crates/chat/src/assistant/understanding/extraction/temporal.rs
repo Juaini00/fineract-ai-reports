@@ -324,7 +324,9 @@ fn month_expr(tokens: &[(&str, usize, usize)], index: usize) -> Option<(u32, Opt
     Some((month, year, index + if year.is_some() { 2 } else { 1 }))
 }
 
-fn month_number(word: &str) -> Option<u32> {
+/// `pub(super)` so `token.rs` can refuse to read a month name as an office name
+/// ("deposits in January"). One month table, not two.
+pub(super) fn month_number(word: &str) -> Option<u32> {
     const MONTHS: [(&str, &str); 12] = [
         ("january", "januari"),
         ("february", "februari"),
