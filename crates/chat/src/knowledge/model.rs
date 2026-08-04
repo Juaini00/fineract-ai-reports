@@ -310,6 +310,20 @@ pub struct CapabilityKnowledge {
     #[serde(default)]
     pub examples: Vec<String>,
 
+    /// What this capability is for, in the user's terms. Authored in every
+    /// capability YAML since the catalog was written, but until now dropped on
+    /// the floor by serde — the field simply did not exist here, so the
+    /// reranker judged coverage from `display_name`/`description` alone. That
+    /// is how `client_list_recent` ("Recently Activated Clients", whose SQL has
+    /// no recency predicate at all) came to refuse "all clients from <office>".
+    #[serde(default)]
+    pub supported_intents: Vec<String>,
+
+    /// Intents this capability must never be selected for. Same history as
+    /// `supported_intents`: authored, ignored, now load-bearing.
+    #[serde(default)]
+    pub unsupported_intents: Vec<String>,
+
     /// True when this capability can only be entered from a clarification the
     /// assistant itself raised, never from a first-turn message. Its examples
     /// are continuation phrasings ("Continue with the selected client."), so

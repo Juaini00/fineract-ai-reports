@@ -481,6 +481,8 @@ mod tests {
                         max_limit: Some(100),
                         max_date_range_days,
                     },
+                    supported_intents: Vec::new(),
+                    unsupported_intents: Vec::new(),
                     parameter_policies: vec![],
                 },
             )

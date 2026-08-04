@@ -140,6 +140,15 @@ exists:
   migration gap, not a filter gap. It belongs to the dataset-model rollout in
   `docs/superpowers/specs/2026-07-31-dataset-model-design.md`, not here. Once a
   client dataset exists, this issue's rules apply to it.
+
+  > **This exclusion was wrong.** `client_list_recent` already bound
+  > `office_name` on the legacy query path, so "show me all clients from
+  > <office>" was answerable the whole time — it was refused because the
+  > capability's *prose* described a recency filter its SQL does not perform.
+  > Deferring the client domain on dataset-migration grounds left a live defect
+  > behind a resolved status. Fixed in
+  > [012](./012-capability-prose-contradicts-approved-sql.md); the scope test is
+  > "can the approved SQL answer it", not "has this domain been migrated yet".
 - **Loan domain** — no capabilities or datasets exist. Tracked by
   [008-loan-domain-analyst-capabilities](./008-loan-domain-analyst-capabilities.md).
 - **Audit** — not a chat domain. It is a management/compliance surface with

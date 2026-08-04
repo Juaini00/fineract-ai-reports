@@ -1,0 +1,6 @@
+id: client_all_by_office_id
+message: "tampilkan semua nasabah di kantor Head Office"
+language: id
+domain: client
+expected_decision: select
+expected_capability: client_list_recent

@@ -54,6 +54,8 @@ fn make_capability(id: &str, domain: &str, subject: RequestSubject) -> Capabilit
         defaults: Default::default(),
         guards: Default::default(),
         dataset_recipe: None,
+        supported_intents: Vec::new(),
+        unsupported_intents: Vec::new(),
         parameter_policies: vec![],
     }
 }

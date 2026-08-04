@@ -1,8 +1,11 @@
 id: savings_account_charges_recent
 status: approved_mvp
 domain: savings
-display_name: Recently Created Savings Account Charges
-description: List the most recently created savings account charges within the caller's authorized office scope, ordered by audit creation time.
+display_name: Savings Account Charges, Newest First
+# Same defect as client_list_recent: the SQL restricts nothing by date. It
+# returns every savings account charge in the caller's office scope and only
+# orders by audit creation time.
+description: List savings account charges within the caller's authorized office scope, ordered by audit creation time newest first. Returns every charge in scope up to the row cap; it does not restrict the rows to a recent period, and it cannot narrow by charge type.
 data_areas:
 - organization_foundation
 - client_foundation
@@ -25,8 +28,11 @@ examples:
 - Tampilkan charge tabungan yang paling baru dibuat.
 - Saya ingin tahu charge paling baru yang telah dibuat.
 supported_intents:
-- most recently created savings account charges
-- latest savings charges by creation time
+- every savings account charge in the caller's office scope, unranked
+- newest savings account charges, which this capability serves by sort order
+unsupported_intents:
+- charges narrowed to one charge type, which this capability cannot bind
+- charges created strictly within a named date range, which this capability cannot restrict
 defaults:
   authorized_scope_only: true
   default_limit: 50

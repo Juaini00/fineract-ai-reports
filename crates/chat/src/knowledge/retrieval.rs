@@ -51,7 +51,8 @@ impl RetrievalDocumentBuilder {
         );
         documents.extend(catalog.capabilities.iter().map(|capability| {
             let domain = catalog.domains.iter().find(|d| d.id == capability.domain);
-            build_capability_document(capability, domain)
+            let query = catalog.queries.iter().find(|q| q.id == capability.query_id);
+            build_capability_document(capability, domain, query)
         }));
         documents.extend(catalog.queries.iter().map(build_query_document));
         documents.extend(
@@ -189,6 +190,7 @@ fn concept_line(concepts: &[crate::knowledge::model::DomainConcept]) -> String {
 fn build_capability_document(
     capability: &CapabilityKnowledge,
     domain: Option<&DomainKnowledge>,
+    query: Option<&QueryKnowledge>,
 ) -> RetrievalDocument {
     let title = capability
         .display_name
@@ -199,6 +201,23 @@ fn build_capability_document(
             d.concepts
                 .iter()
                 .flat_map(|c| c.synonyms.iter().cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // The filters a *user* may name, as opposed to `office_ids`, which is the
+    // authorization boundary and is bound from `authorized_scope` whether the
+    // user mentions an office or not. Conflating the two is what let a
+    // capability look office-filterable when it could only ever return the
+    // caller's whole scope.
+    let user_filters: Vec<String> = query
+        .map(|query| {
+            query
+                .parameters
+                .iter()
+                .filter(|parameter| parameter.source.as_deref() != Some("authorized_scope"))
+                .filter(|parameter| parameter.name != "limit")
+                .map(|parameter| parameter.name.clone())
                 .collect()
         })
         .unwrap_or_default();
@@ -216,9 +235,12 @@ fn build_capability_document(
         optional_list("Data areas", &capability.data_areas),
         optional_list("Metrics", &capability.metrics),
         optional_list("Examples", &capability.examples),
+        optional_list("Supported intents", &capability.supported_intents),
+        optional_list("Unsupported intents", &capability.unsupported_intents),
         optional_list("Domain concepts", &concept_synonyms),
         optional_list("Required parameters", &capability.required_parameters),
         optional_list("Optional parameters", &capability.optional_parameters),
+        optional_list("User filters", &user_filters),
     ]);
 
     RetrievalDocument {
@@ -236,8 +258,11 @@ fn build_capability_document(
             "data_areas": capability.data_areas,
             "metrics": capability.metrics,
             "examples": capability.examples,
+            "supported_intents": capability.supported_intents,
+            "unsupported_intents": capability.unsupported_intents,
             "required_parameters": capability.required_parameters,
             "optional_parameters": capability.optional_parameters,
+            "user_filters": user_filters,
         }),
     }
 }
@@ -329,6 +354,8 @@ mod tests {
             optional_parameters: Vec::new(),
             defaults: Default::default(),
             guards: Default::default(),
+            supported_intents: Vec::new(),
+            unsupported_intents: Vec::new(),
             parameter_policies: Vec::new(),
         }
     }
@@ -337,7 +364,7 @@ mod tests {
     fn build_capability_document_humanizes_id_when_display_name_missing() {
         let capability = capability_with("client_lifecycle_summary", None);
 
-        let document = build_capability_document(&capability, None);
+        let document = build_capability_document(&capability, None, None);
 
         assert_eq!(document.title, "Client Lifecycle Summary");
     }
@@ -346,7 +373,7 @@ mod tests {
     fn build_capability_document_uses_display_name_when_present() {
         let capability = capability_with("client_lifecycle_summary", Some("Client Lifecycle"));
 
-        let document = build_capability_document(&capability, None);
+        let document = build_capability_document(&capability, None, None);
 
         assert_eq!(document.title, "Client Lifecycle");
     }

@@ -1,0 +1,6 @@
+id: client_all_in_scope_en
+message: "list every client in my offices"
+language: en
+domain: client
+expected_decision: select
+expected_capability: client_list_recent
