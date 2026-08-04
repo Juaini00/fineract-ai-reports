@@ -26,6 +26,7 @@ tracing.workspace = true
 uuid.workspace = true
 validator.workspace = true
 pgvector.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 redis.workspace = true
 tokio.workspace = true

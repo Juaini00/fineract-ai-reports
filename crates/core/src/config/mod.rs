@@ -239,7 +239,7 @@ impl AppConfig {
                 )
                 .parse()
                 .context("LLM_TIMEOUT_MS must be an integer")?,
-                max_retries: get_env_or("LLM_MAX_RETRIES", "1")
+                max_retries: get_env_or("LLM_MAX_RETRIES", "3")
                     .parse()
                     .context("LLM_MAX_RETRIES must be an integer")?,
                 max_output_tokens: get_env_or(
@@ -283,7 +283,7 @@ impl AppConfig {
                 )
                 .parse()
                 .context("EMBEDDING_TIMEOUT_MS must be an integer")?,
-                max_retries: get_env_or("EMBEDDING_MAX_RETRIES", "1")
+                max_retries: get_env_or("EMBEDDING_MAX_RETRIES", "3")
                     .parse()
                     .context("EMBEDDING_MAX_RETRIES must be an integer")?,
                 dimensions: get_env_or("EMBEDDING_DIMENSIONS", "1024")

@@ -594,6 +594,7 @@ dependencies = [
  "hex",
  "petgraph",
  "pgvector",
+ "rand 0.8.6",
  "redis",
  "reqwest 0.13.4",
  "rig-core",
