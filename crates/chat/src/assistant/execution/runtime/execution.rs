@@ -1,5 +1,4 @@
 use super::*;
-use crate::assistant::workflow::response::client_entity_options;
 
 pub(super) async fn execute_selected_capability(
     mut memory: JobMemory,
@@ -8,6 +7,7 @@ pub(super) async fn execute_selected_capability(
     catalog: Option<&Arc<KnowledgeCatalog>>,
     client: Option<&PrincipalContext>,
     fineract_pool: Option<&PgPool>,
+    workflow_state: Option<&WorkflowStateRepository>,
     canonical: Option<&CanonicalRuntimeContext>,
     active_payload: Option<&ClarificationPayload>,
     pending_clarification: Option<Option<ClarificationPayload>>,
@@ -288,66 +288,229 @@ pub(super) async fn execute_selected_capability(
     let limits = canonical
         .map(|context| context.execution_limits)
         .unwrap_or_default();
+    // Workflow-engine execution path (Phase 7 cutover). The `plan`/`policy`
+    // built above still gate policy and feed `workflow_response` + audit; the
+    // SQL now runs through `WorkflowRunner` over a compiled single-capability
+    // workflow instead of the direct `execute_plan_with_sensitive` call.
+    let Some(state) = workflow_state else {
+        // No app-DB state repository wired (e.g. no-DB test harness) — mirror
+        // the `fineract_pool`-absent guard above rather than run a workflow
+        // whose durable node-run ledger has nowhere to live.
+        return graph_result(
+            memory,
+            TerminalState::Completed,
+            "execution_not_configured",
+            ResponseBuilder::selected(capability_id),
+            recent_message_count,
+            pending_clarification.clone(),
+            execution_transitions(TerminalState::Completed, "execution_not_configured"),
+        );
+    };
+
+    let proposal =
+        match crate::assistant::llm::tool::propose_workflow(catalog, vec![capability_id.clone()]) {
+            Ok(proposal) => proposal,
+            Err(error) => {
+                tracing::warn!(
+                    target: "assistant::execute_selected_capability",
+                    capability_id = %capability_id,
+                    error = ?error,
+                    "propose_workflow failed; returning routing error"
+                );
+                memory.warnings = json!([{ "message": format!("{error:?}") }]);
+                return graph_result(
+                    memory,
+                    TerminalState::FailedOperational,
+                    "canonical_snapshot_invalid",
+                    ResponseBuilder::error(),
+                    recent_message_count,
+                    pending_clarification.clone(),
+                    execution_transitions(
+                        TerminalState::FailedOperational,
+                        "canonical_snapshot_invalid",
+                    ),
+                );
+            }
+        };
+
+    let catalog_version = canonical
+        .and_then(|context| context.catalog_version)
+        .unwrap_or_else(Uuid::nil);
+    // ponytail: proven single-capability budget literal (mirrors the Task 2
+    // node_executor tests); `WorkflowBudgets` has no Default constructor.
+    let budgets = crate::assistant::workflow::WorkflowBudgets {
+        shared_timeout_ms: 30_000,
+        shared_row_cap: 1_000,
+        max_query_count: 5,
+        max_parallel_queries: 1,
+        max_model_turns: 2,
+        max_node_retries: 0,
+    };
+    let workflow = match crate::assistant::workflow::compile::compile(
+        proposal,
+        catalog,
+        catalog_version,
+        budgets,
+    ) {
+        Ok(workflow) => workflow,
+        Err(error) => {
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                error = %error,
+                "workflow compile failed; returning routing error"
+            );
+            memory.warnings = json!([{ "message": error.to_string() }]);
+            return graph_result(
+                memory,
+                TerminalState::FailedOperational,
+                "workflow_compile_failed",
+                ResponseBuilder::error(),
+                recent_message_count,
+                pending_clarification.clone(),
+                execution_transitions(TerminalState::FailedOperational, "workflow_compile_failed"),
+            );
+        }
+    };
+
+    if let Err(error) = state
+        .install_workflow(memory.job_id, execution_client.user_id, &workflow)
+        .await
+    {
+        tracing::warn!(
+            target: "assistant::execute_selected_capability",
+            capability_id = %capability_id,
+            error = %error,
+            "install_workflow failed; returning routing error"
+        );
+        memory.warnings = json!([{ "message": error.to_string() }]);
+        return graph_result(
+            memory,
+            TerminalState::FailedOperational,
+            "execution_failed",
+            ResponseBuilder::error(),
+            recent_message_count,
+            pending_clarification.clone(),
+            execution_transitions(TerminalState::FailedOperational, "execution_failed"),
+        );
+    }
+
+    // The sensitive identifier reaches the executor out-of-band (Task 3): it is
+    // carried by `FineractDataExecutor`, never through node bindings/parameters,
+    // so it is bound straight into approved SQL without being persisted.
+    let executor = crate::assistant::llm::tool::FineractDataExecutor::new(
+        pool.clone(),
+        catalog.clone(),
+        policy.clone(),
+        limits,
+        sensitive_identifier.cloned(),
+    );
+    let node_executor = crate::assistant::workflow::CapabilityNodeExecutor::new(
+        executor,
+        execution_client.clone(),
+        catalog.clone(),
+        state.clone(),
+        memory.job_id,
+        workflow.clone(),
+    );
+    let runner = crate::assistant::workflow::WorkflowRunner::new(
+        state.clone(),
+        node_executor,
+        catalog.clone(),
+    );
+
     crate::job::progress::started(crate::job::progress::Stage::Execution);
     let execution_started_at = std::time::Instant::now();
-    let execution_result =
-        execute_plan_with_sensitive(pool, catalog, &plan, &policy, limits, sensitive_identifier)
-            .await;
+    let run_outcome = runner
+        .run(
+            memory.job_id,
+            execution_client.user_id,
+            &execution_client,
+            &workflow,
+        )
+        .await;
     crate::job::progress::finished(
         crate::job::progress::Stage::Execution,
         execution_started_at.elapsed().as_millis() as u64,
     );
-    match execution_result {
-        Ok(result) => {
-            let tool_result =
-                super::super::tool::tool_result_from_execution(&tool_request, result.clone());
-            let entity_options = matches!(
-                capability_id.as_str(),
-                "client_name_lookup" | "client_relationship_lookup"
-            )
-            .then(|| client_entity_options(&tool_result.rows, policy.can_view_pii))
-            .unwrap_or_default();
-            if entity_options.len() > 1 {
-                let options = entity_options;
-                let payload = ClarificationPayload {
-                    version: crate::assistant::CLARIFICATION_VERSION_1,
-                    id: uuid::Uuid::new_v4(),
-                    revision: 1,
-                    kind: crate::assistant::ClarificationKind::SelectEntity,
-                    question: "Which client did you mean?".into(),
-                    options,
-                    fields: Vec::new(),
-                    attempt: 1,
-                    source_intent: intent
-                        .as_ref()
-                        .map(|intent| source_intent_snapshot(intent, &intent.reason)),
-                    allow_free_text: false,
-                    is_missing_execution_parameters: false,
-                    workflow_id: None,
-                    node_id: None,
-                    resume_node_id: None,
-                    entity_kind: None,
-                };
-                return graph_result(
-                    memory,
-                    TerminalState::WaitingForUserInput,
-                    "ambiguous_client_identity",
-                    ResponseBuilder::clarification(payload.clone()),
-                    recent_message_count,
-                    Some(Some(payload)),
-                    execution_transitions(
-                        TerminalState::WaitingForUserInput,
-                        "ambiguous_client_identity",
-                    ),
-                );
-            }
-            let mut response = ResponseBuilder::from_tool_result(
-                intent.as_ref().expect("successful execution has intent"),
-                &plan,
-                &policy,
-                &tool_result,
-                catalog,
+
+    let outcome = match run_outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let reason = if error.to_string() == "execution_timed_out" {
+                "execution_timed_out"
+            } else {
+                "execution_failed"
+            };
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                query_id = %plan.query_id,
+                error = %error,
+                %reason,
+                "workflow run failed; returning routing error"
             );
+            memory.warnings = json!([{ "message": error.to_string() }]);
+            // Preserve the legacy failure summary shape so the audit producer
+            // can still emit `execution.timed_out` (Bundle 11 / W-L).
+            memory.execution_summary = json!({
+                "plan": plan,
+                "policy": policy,
+                "result": { "timed_out": reason == "execution_timed_out" },
+            });
+            return graph_result(
+                memory,
+                TerminalState::FailedOperational,
+                reason,
+                ResponseBuilder::error(),
+                recent_message_count,
+                pending_clarification.clone(),
+                execution_transitions(TerminalState::FailedOperational, reason),
+            );
+        }
+    };
+
+    let intent_ref = intent.as_ref().expect("successful execution has intent");
+    let response_outcome = match crate::assistant::workflow::response::workflow_response(
+        outcome,
+        state,
+        memory.job_id,
+        workflow.id,
+        &capability_id,
+        intent_ref,
+        &plan,
+        &policy,
+        catalog,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::warn!(
+                target: "assistant::execute_selected_capability",
+                capability_id = %capability_id,
+                error = %error,
+                "workflow_response mapping failed; returning routing error"
+            );
+            memory.warnings = json!([{ "message": error.to_string() }]);
+            memory.execution_summary = json!({ "plan": plan, "policy": policy });
+            return graph_result(
+                memory,
+                TerminalState::FailedOperational,
+                "execution_failed",
+                ResponseBuilder::error(),
+                recent_message_count,
+                pending_clarification.clone(),
+                execution_transitions(TerminalState::FailedOperational, "execution_failed"),
+            );
+        }
+    };
+
+    match response_outcome {
+        crate::assistant::workflow::WorkflowResponseOutcome::Response(mut response) => {
+            // Re-apply the business-vs-wall reporting-date note here: Task 4's
+            // `workflow_response` intentionally does not port it, so it lives at
+            // the one call site that has the canonical reference instant.
             if let Some(context) = canonical {
                 let jakarta =
                     chrono::FixedOffset::east_opt(7 * 3600).expect("valid Jakarta offset");
@@ -372,41 +535,35 @@ pub(super) async fn execute_selected_capability(
                 pending_clarification.clone(),
                 execution_transitions(TerminalState::Completed, "execution_completed"),
             );
-            result_state.memory.execution_summary = json!({ "plan": plan, "policy": policy, "tool_request": tool_request, "tool_result": tool_result, "result": result });
+            // Audit shape: the completed-path row data now lives in the node-run
+            // ledger, not an in-memory `ExecutionResult`. `execution_audit_from_memory`
+            // only reads `plan`/`policy` here, so plan+policy is behavior-equivalent.
+            result_state.memory.execution_summary = json!({ "plan": plan, "policy": policy });
             result_state
         }
-        Err(error) => {
-            let reason = if error.to_string() == "execution_timed_out" {
-                "execution_timed_out"
-            } else {
-                "execution_failed"
-            };
-            tracing::warn!(
-                target: "assistant::execute_selected_capability",
-                capability_id = %capability_id,
-                query_id = %plan.query_id,
-                error = %error,
-                %reason,
-                "clarification-reply execute_plan failed; returning routing error"
-            );
-            memory.warnings = json!([{ "message": error.to_string() }]);
-            // Populate summary with plan/query info even on failure so the audit
-            // producer can emit `execution.timed_out` (Bundle 11 / W-L).
-            memory.execution_summary = json!({
-                "plan": plan,
-                "policy": policy,
-                "result": { "timed_out": reason == "execution_timed_out" },
-            });
+        crate::assistant::workflow::WorkflowResponseOutcome::Clarification(payload) => {
             graph_result(
                 memory,
-                TerminalState::FailedOperational,
-                reason,
-                ResponseBuilder::error(),
+                TerminalState::WaitingForUserInput,
+                "ambiguous_client_identity",
+                ResponseBuilder::clarification(payload.clone()),
                 recent_message_count,
-                pending_clarification,
-                execution_transitions(TerminalState::FailedOperational, reason),
+                Some(Some(payload)),
+                execution_transitions(
+                    TerminalState::WaitingForUserInput,
+                    "ambiguous_client_identity",
+                ),
             )
         }
+        crate::assistant::workflow::WorkflowResponseOutcome::Failed => graph_result(
+            memory,
+            TerminalState::FailedOperational,
+            "execution_failed",
+            ResponseBuilder::error(),
+            recent_message_count,
+            pending_clarification.clone(),
+            execution_transitions(TerminalState::FailedOperational, "execution_failed"),
+        ),
     }
 }
 pub(super) fn evidence_refs(evidence: &serde_json::Value) -> Vec<String> {

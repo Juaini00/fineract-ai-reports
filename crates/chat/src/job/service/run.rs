@@ -244,6 +244,7 @@ impl JobService {
             runtime_llm.as_ref(),
             self.runtime_knowledge_enabled.then_some(&self.knowledge),
             Some(&self.fineract_pool),
+            Some(&self.workflow_state),
             Some(&self.catalog),
             Some(client),
             Some(&canonical),

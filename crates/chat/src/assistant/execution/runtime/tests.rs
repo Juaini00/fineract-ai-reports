@@ -406,6 +406,7 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         None,
         None,
         None,
+        None,
         "show savings",
     )
     .await;
@@ -464,6 +465,7 @@ async fn semantic_router_unavailable_fails_closed() {
         None,
         None,
         None,
+        None,
         "show client savings",
     )
     .await;
@@ -484,6 +486,7 @@ async fn greeting_completes_without_router() {
     let result = AssistantGraphRuntime::run_with_router(
         empty_memory(),
         empty_context(),
+        None,
         None,
         None,
         None,
@@ -590,6 +593,7 @@ async fn exact_pending_option_id_resolves_before_router() {
     let result = AssistantGraphRuntime::run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -707,6 +711,7 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         None,
         None,
         None,
+        None,
         RuntimeUserInput {
             message: "client_summary".into(),
             source_message: "client summary".into(),
@@ -744,6 +749,7 @@ async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
     let result = AssistantGraphRuntime::run_with_router(
         empty_memory(),
         pending_context(false, 3, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -796,6 +802,7 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
     let result = AssistantGraphRuntime::run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -856,6 +863,7 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
     let result = AssistantGraphRuntime::run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -922,6 +930,7 @@ async fn defaultless_required_search_asks_and_runs_nothing() {
         None,
         None,
         None,
+        None,
         Some(&catalog),
         Some(&client),
         None,
@@ -982,6 +991,7 @@ async fn fully_defaulted_capability_completes_without_asking() {
     let result = AssistantGraphRuntime::run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -1276,6 +1286,7 @@ async fn others_continues_missing_parameters_with_message_facts() {
         None,
         None,
         None,
+        None,
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
@@ -1311,6 +1322,7 @@ async fn long_message_continues_missing_parameters() {
     let result = AssistantGraphRuntime::run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -1551,6 +1563,7 @@ async fn router_verdict_cannot_veto_retrieval() {
             Some(&llm),
             None,
             None,
+            None,
             Some(&catalog),
             None,
             None,
@@ -1694,6 +1707,7 @@ async fn a_named_office_cannot_be_answered_by_an_office_blind_capability() {
             context,
             Some(&router),
             Some(llm),
+            None,
             None,
             None,
             Some(catalog),

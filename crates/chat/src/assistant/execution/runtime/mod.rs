@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use crate::assistant::temporal::BusinessDateSource;
 use crate::assistant::understanding::extraction::SensitiveIdentifier;
+use crate::assistant::workflow::WorkflowStateRepository;
 
 use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
@@ -47,7 +48,6 @@ use crate::assistant::{
     retrieval::RetrievalEngine,
     stable_uuid,
 };
-use crate::execution::repository::execute_plan_with_sensitive;
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
 
@@ -371,6 +371,7 @@ impl AssistantGraphRuntime {
         llm: Option<&SharedLlmClient>,
         knowledge: Option<&KnowledgeRepository>,
         fineract_pool: Option<&PgPool>,
+        workflow_state: Option<&WorkflowStateRepository>,
         catalog: Option<&Arc<KnowledgeCatalog>>,
         client: Option<&PrincipalContext>,
         canonical: Option<&CanonicalRuntimeContext>,
@@ -456,6 +457,7 @@ impl AssistantGraphRuntime {
                 catalog,
                 client,
                 fineract_pool,
+                workflow_state,
                 canonical,
                 Some(payload),
                 Some(None),
@@ -509,6 +511,7 @@ impl AssistantGraphRuntime {
                         catalog,
                         client,
                         fineract_pool,
+                        workflow_state,
                         canonical,
                         Some(payload),
                         Some(None),
@@ -654,6 +657,7 @@ impl AssistantGraphRuntime {
             llm,
             knowledge,
             fineract_pool,
+            workflow_state,
             catalog,
             client,
             canonical,
