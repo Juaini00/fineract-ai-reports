@@ -1,7 +1,9 @@
 pub mod data;
+pub mod data_executor;
 pub mod metadata;
 
 pub use data::{ApprovedDataExecutor, DataToolRejection, DataToolRequest, GuardedDataTools};
+pub use data_executor::FineractDataExecutor;
 pub use metadata::{
     CapabilityMetadata, CatalogSearch, DatasetMetadata, EntityResolverMetadata,
     METADATA_TOOL_NAMES, MetadataTool, MetadataToolError, find_compatible_next_steps,
