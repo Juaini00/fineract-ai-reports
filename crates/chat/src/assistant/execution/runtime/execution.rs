@@ -1,4 +1,5 @@
 use super::*;
+use crate::assistant::workflow::response::client_entity_options;
 
 pub(super) async fn execute_selected_capability(
     mut memory: JobMemory,
@@ -408,40 +409,6 @@ pub(super) async fn execute_selected_capability(
         }
     }
 }
-fn client_entity_options(
-    rows: &[serde_json::Value],
-    can_view_pii: bool,
-) -> Vec<crate::assistant::ClarificationOption> {
-    let mut seen = std::collections::HashSet::new();
-    rows.iter()
-        .filter_map(|row| {
-            let client_id = row.get("client_id")?.as_i64()?;
-            if !seen.insert(client_id) {
-                return None;
-            }
-            let label = if can_view_pii {
-                row.get("display_name")?.as_str()?.to_owned()
-            } else {
-                format!("Client {client_id}")
-            };
-            let office = row.get("office_name").and_then(serde_json::Value::as_str);
-            let status = row.get("status_label").and_then(serde_json::Value::as_str);
-            Some(crate::assistant::ClarificationOption {
-                id: format!("client:{client_id}"),
-                label,
-                description: Some(
-                    [office, status]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join(" · "),
-                ),
-                fields: Vec::new(),
-            })
-        })
-        .collect()
-}
-
 pub(super) fn evidence_refs(evidence: &serde_json::Value) -> Vec<String> {
     evidence
         .as_array()
@@ -454,44 +421,4 @@ pub(super) fn evidence_refs(evidence: &serde_json::Value) -> Vec<String> {
                 .map(ToOwned::to_owned)
         })
         .collect()
-}
-
-#[cfg(test)]
-mod entity_clarification_tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_client_rows_build_safe_entity_choices() {
-        let rows = vec![
-            json!({"client_id": 7, "display_name": "Alex Doe", "office_name": "North", "status_label": "active", "external_id": "SECRET"}),
-            json!({"client_id": 8, "display_name": "Alex Doe", "office_name": "South", "status_label": "pending", "mobile_no": "SECRET"}),
-        ];
-
-        let options = client_entity_options(&rows, true);
-
-        assert_eq!(options.len(), 2);
-        assert_eq!(options[0].id, "client:7");
-        assert_eq!(options[0].label, "Alex Doe");
-        assert_eq!(options[0].description.as_deref(), Some("North · active"));
-        assert!(!serde_json::to_string(&options).unwrap().contains("SECRET"));
-    }
-
-    #[test]
-    fn entity_choices_hide_names_when_pii_is_disallowed() {
-        let rows = vec![json!({
-            "client_id": 7,
-            "display_name": "Alex Doe",
-            "office_name": "North",
-            "status_label": "active"
-        })];
-
-        let options = client_entity_options(&rows, false);
-
-        assert_eq!(options[0].label, "Client 7");
-        assert!(
-            !serde_json::to_string(&options)
-                .unwrap()
-                .contains("Alex Doe")
-        );
-    }
 }

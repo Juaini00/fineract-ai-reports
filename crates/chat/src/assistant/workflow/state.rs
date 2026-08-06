@@ -143,6 +143,24 @@ impl WorkflowStateRepository {
             .transpose()
     }
 
+    /// Reads back the clarification payload `mark_workflow_paused` persisted
+    /// to `assistant_job_memory.pending_clarification_json` for a job that is
+    /// currently `WaitingForUserInput`.
+    pub async fn load_pending_clarification(
+        &self,
+        job_id: Uuid,
+    ) -> Result<Option<ClarificationPayload>> {
+        let row: Option<Option<Value>> = sqlx::query_scalar(
+            "SELECT pending_clarification_json FROM assistant_job_memory WHERE job_id = $1",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.flatten()
+            .map(|value| serde_json::from_value(value).map_err(Into::into))
+            .transpose()
+    }
+
     pub async fn node_runs(&self, job_id: Uuid, workflow_id: Uuid) -> Result<Vec<WorkflowNodeRun>> {
         let rows = sqlx::query_as::<_, NodeRunRow>(
             r#"

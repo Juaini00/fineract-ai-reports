@@ -2,6 +2,7 @@ pub mod compile;
 pub mod contract;
 pub mod graph;
 pub mod node_executor;
+pub(crate) mod response;
 pub mod run;
 pub mod state;
 pub mod verify;
@@ -16,6 +17,7 @@ pub use compile::{
 pub use contract::*;
 pub use graph::WorkflowGraph;
 pub use node_executor::CapabilityNodeExecutor;
+pub use response::{WorkflowResponseOutcome, workflow_response};
 pub use run::{NodeExecution, WorkflowNodeExecutor, WorkflowRunOutcome, WorkflowRunner};
 pub use state::{
     NodeRunStatus, ResumeOutcome, WorkflowNodeRun, WorkflowResumeRequest, WorkflowStateRepository,
