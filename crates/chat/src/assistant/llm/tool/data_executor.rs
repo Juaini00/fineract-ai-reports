@@ -49,6 +49,14 @@ impl FineractDataExecutor {
 /// Builds a minimal single-capability `ExecutionPlan` from a guarded
 /// `DataToolRequest`. Kept as a free function so it can be unit-tested
 /// without a live database pool.
+///
+/// Mirrors the legacy planner's `dataset_recipe` -> `dataset_selection`
+/// translation (`assistant::execution::tool::planning::plan_selected_capability_verified`)
+/// via the same `resolve_recipe` helper: a capability with a `dataset_recipe`
+/// (e.g. `savings_account_identity_lookup`, whose `account_number` filter is
+/// `FilterInputPolicy::ExactIdentifier`) must populate `dataset_selection`,
+/// or `execute_plan_with_sensitive`'s `compose_dataset_binds` never runs and
+/// the transient sensitive identifier is never actually bound into SQL.
 pub(super) fn build_execution_plan(
     request: &DataToolRequest,
     catalog: &KnowledgeCatalog,
@@ -59,14 +67,33 @@ pub(super) fn build_execution_plan(
         .find(|capability| capability.id == request.capability_id)
         .with_context(|| format!("capability {} not found in catalog", request.capability_id))?;
 
+    let params = json!(request.parameters);
+    let dataset_selection = capability
+        .dataset_recipe
+        .as_ref()
+        .map(|recipe| {
+            let dataset = catalog
+                .datasets
+                .iter()
+                .find(|dataset| dataset.id == recipe.dataset_id)
+                .with_context(|| {
+                    format!(
+                        "dataset {} not found for capability {}",
+                        recipe.dataset_id, capability.id
+                    )
+                })?;
+            crate::knowledge::dataset::resolve::resolve_recipe(dataset, recipe, &params)
+        })
+        .transpose()?;
+
     Ok(ExecutionPlan {
         plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: request.capability_id.clone(),
         query_id: capability.query_id.clone(),
-        dataset_selection: None,
+        dataset_selection,
         output_mode: capability.output_mode.clone(),
-        params: json!(request.parameters),
+        params,
         retrieval_plan: Default::default(),
         evidence_evaluation: Default::default(),
         requires_policy_check: true,

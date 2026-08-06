@@ -309,6 +309,7 @@ fn resolve_statement(
 #[derive(Debug)]
 struct DatasetBindValue {
     kind: String,
+    operator: FilterOperator,
     value: Option<Value>,
 }
 
@@ -342,12 +343,14 @@ fn compose_dataset_binds(
                 for index in 0..2 {
                     binds.push(DatasetBindValue {
                         kind: slot.kind.clone(),
+                        operator: *operator,
                         value: values.and_then(|values| values.get(index)).cloned(),
                     });
                 }
             } else {
                 binds.push(DatasetBindValue {
                     kind: slot.kind.clone(),
+                    operator: *operator,
                     value: sensitive_value
                         .clone()
                         .or_else(|| selected.map(|filter| filter.value.clone())),
@@ -362,6 +365,30 @@ fn bind_dataset_value<'q>(
     query: sqlx::query::Query<'q, Postgres, PgArguments>,
     bind: &DatasetBindValue,
 ) -> Result<sqlx::query::Query<'q, Postgres, PgArguments>> {
+    // `FilterOperator::In` composes its placeholder as `$n::<cast>[] ... = ANY($n::<cast>[])`
+    // (`compose::predicate`), so it needs an array bind — a scalar bind here
+    // sends the wrong Postgres type OID and the driver fails with "cannot
+    // cast type X to X[]" before the query ever runs, active filter or not.
+    if bind.operator == FilterOperator::In {
+        return match bind.kind.as_str() {
+            "integer" => Ok(query.bind(
+                bind.value
+                    .as_ref()
+                    .and_then(Value::as_array)
+                    .map(|values| values.iter().filter_map(Value::as_i64).collect::<Vec<_>>()),
+            )),
+            "string" => Ok(
+                query.bind(bind.value.as_ref().and_then(Value::as_array).map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })),
+            ),
+            other => bail!("unsupported dataset filter `in` bind type {other}"),
+        };
+    }
     match bind.kind.as_str() {
         "date" => Ok(query.bind(
             bind.value

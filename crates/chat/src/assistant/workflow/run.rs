@@ -545,6 +545,19 @@ fn bindings_for(
 ) -> Result<BTreeMap<String, Value>> {
     let mut bindings = BTreeMap::new();
     for input in &node.inputs {
+        // The real value never travels through bindings/parameters at all —
+        // `GuardedDataTools::parameters_have_declared_provenance` rejects any
+        // parameter whose only declared source is `ExactSensitiveInput`, and
+        // `FineractDataExecutor` receives the value out-of-band (constructor
+        // field, forwarded to `execute_plan_with_sensitive` separately from
+        // `plan.params`). So this input contributes no binding at all, not
+        // even a `Null` placeholder.
+        if matches!(
+            input.source,
+            super::contract::BindingSource::ExactSensitiveInput
+        ) {
+            continue;
+        }
         let value = match &input.source {
             super::contract::BindingSource::AuthorizedScope => {
                 json!(effective_office_scope(principal, None)?)
@@ -556,7 +569,7 @@ fn bindings_for(
             // Catalog defaults, extractions, and user answers are preserved in
             // workflow state by the compiler/resume path; a runner never makes
             // up an untrusted value for them.
-            super::contract::BindingSource::ExactSensitiveInput => Value::Null,
+            super::contract::BindingSource::ExactSensitiveInput => unreachable!("handled above"),
             _ => Value::Null,
         };
         bindings.insert(input.parameter.clone(), value);
