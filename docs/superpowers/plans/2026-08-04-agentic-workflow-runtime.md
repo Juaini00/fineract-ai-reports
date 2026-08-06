@@ -66,7 +66,7 @@ These are referenced by ID from the phase gates. `∅` means the command must pr
 | `V-L6` | `command grep -rEn 'deterministic_simple_response' crates/` | ∅ (baseline 2) |
 | `V-L7` | `command grep -rEn 'AI_REPORT_GATEWAY_PIPELINE\|run_via_gateway_pipeline\|route_via_gateway_pipeline' .` | ∅ (baseline 8) |
 | `V-L8` | `command grep -rEn 'CanonicalGatewayMode\|CHAT_CANONICAL_GATEWAY_MODE' .` | ∅ (baseline 28) |
-| `V-L9` | `command grep -rEn 'SemanticRouter\|ClassificationResult\|ClassificationOutcome' crates/` | ∅ (baseline 40) |
+| `V-L9` | `command grep -rEn 'SemanticRouter\|ClassificationResult\|ClassificationOutcome' crates/` | deferred to Phase 7b, see amendment below |
 | `V-L10` | `command grep -rEn 'AssistantGraphRuntime' crates/` | ∅ (baseline 23) |
 | `V-L11` | `command grep -rEn 'knowledge::dataset::legacy' crates/` | ∅ |
 | `V-L12` | `command grep -rEn 'reqwest' crates/chat/src/assistant/llm/` | 2 (amended, see below) |
@@ -80,6 +80,32 @@ These are referenced by ID from the phase gates. `∅` means the command must pr
 | `V-L20` | `command grep -rEn 'capability_id\|output_mode ==' crates/chat/src/assistant/presentation/` | ∅ (baseline 2) |
 | `V-L21` | `command grep -rEn 'MIN_SELECT_CONFIDENCE\|RerankerDecision::clarify' crates/` | ∅ (baseline 5) |
 | `V-FLAGS` | `command grep -rEn 'env::var' crates/*/src` | only `core/src/config/mod.rs` helper lines |
+
+**V-L9 amendment (recorded 2026-08-06):** the workflow-compiler research pass (issue-012
+Phase 7 planning session) found that `propose_workflow` (`assistant/llm/tool/metadata.rs`)
+is a bare identifier-validation function — it takes `capability_ids: Vec<String>` and
+returns a `WorkflowProposal`, with no LLM call and no natural-language input. There is no
+Rig tool-calling agent anywhere in `src/` that turns a user message into a candidate
+`capability_ids` list. Building that agent (an LLM loop over `search_catalog` /
+`inspect_capability` / `propose_workflow`, replacing the classifier's selection role) is a
+separate feature at least as large as the workflow-runtime itself, not a Phase 7 deletion
+task. Retiring `SemanticRouter` before that agent exists would leave production chat with
+no capability-selection step at all.
+
+**Scope for this Phase 7 pass:** `SemanticRouter` / `understanding/classifier/` /
+`ClassificationResult` / `ClassificationOutcome` **stay** as the capability-selection step.
+The cutover replaces only the *execution* mechanics downstream of selection — the atomic
+planner (`execution::plan::`, `V-L1`) and `execute_selected_capability`'s SQL-execution
+path — with `compile()` + `WorkflowRunner` + a new concrete `WorkflowNodeExecutor`. Once a
+capability_id is chosen by the classifier, it is wrapped in a single-capability
+`WorkflowProposal` and run through the new engine instead of the old planner.
+
+`V-L9` becomes a **Phase 7b** item, scoped to: build the Rig proposal agent, wire it in
+place of `SemanticRouter` in `job/service/run.rs`, delete `understanding/classifier/`,
+`llm/router.rs`, `runtime/semantic.rs`, and the `ClassificationResult`/`ClassificationOutcome`
+types. Phase 7b is out of scope for the plan below. `V-L7` (gateway pipeline) and `V-L10`
+(`AssistantGraphRuntime`) are unaffected by this amendment — both are dead or fully
+superseded by the new job-service call path regardless of the selection-step decision.
 
 ---
 
