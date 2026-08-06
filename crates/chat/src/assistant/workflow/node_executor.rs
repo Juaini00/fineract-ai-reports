@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::assistant::llm::tool::data::{DataToolRequest, GuardedDataTools};
 use crate::assistant::llm::tool::data_executor::FineractDataExecutor;
+use crate::assistant::{CLARIFICATION_VERSION_1, ClarificationKind, ClarificationPayload};
 use crate::knowledge::model::KnowledgeCatalog;
 
 use super::contract::{ExecutionWorkflow, NodeKind, WorkflowNode};
@@ -69,13 +70,49 @@ impl WorkflowNodeExecutor for CapabilityNodeExecutor {
         node: &WorkflowNode,
         bindings: &BTreeMap<String, Value>,
     ) -> Result<NodeExecution> {
+        // `WorkflowRunner::resolve_execution` handles `CardinalityBranch`,
+        // `Complete`, and `ComposeResult` inline, and routes everything else
+        // (`ExecuteQuery`, `ResolveEntity`, `ClarificationInterrupt`) here.
+        if matches!(node.kind, NodeKind::ClarificationInterrupt(_)) {
+            // The caller (`WorkflowRunner::execute_node`) overwrites
+            // `workflow_id`/`node_id`/`entity_kind`/`resume_node_id` on the
+            // returned payload from the node/graph itself, so only the
+            // user-facing question content needs to be filled in here.
+            let kind = match &node.kind {
+                NodeKind::ClarificationInterrupt(interrupt) => {
+                    match interrupt.clarification_kind.as_str() {
+                        "select_option" => ClarificationKind::SelectOption,
+                        "select_entity" => ClarificationKind::SelectEntity,
+                        "free_text" => ClarificationKind::FreeText,
+                        _ => ClarificationKind::CollectFields,
+                    }
+                }
+                _ => unreachable!(),
+            };
+            return Ok(NodeExecution::Waiting {
+                clarification: Box::new(ClarificationPayload {
+                    version: CLARIFICATION_VERSION_1,
+                    id: Uuid::new_v4(),
+                    revision: 0,
+                    kind,
+                    question: "Additional information is needed to continue.".into(),
+                    options: vec![],
+                    fields: vec![],
+                    attempt: 0,
+                    source_intent: None,
+                    allow_free_text: false,
+                    is_missing_execution_parameters: true,
+                    workflow_id: None,
+                    node_id: None,
+                    resume_node_id: None,
+                    entity_kind: None,
+                }),
+            });
+        }
+
         let capability_id = match &node.kind {
             NodeKind::ExecuteQuery(query) => query.capability_id.clone(),
             NodeKind::ResolveEntity(_) => node.policy.required_capability.clone(),
-            // `WorkflowRunner::resolve_execution` only routes ExecuteQuery/
-            // ResolveEntity nodes to `WorkflowNodeExecutor::execute` — every
-            // other kind (CardinalityBranch, Complete, ComposeResult, ...)
-            // is handled inline by the runner itself.
             other => unreachable!("WorkflowRunner never routes {other:?} to WorkflowNodeExecutor"),
         }
         .ok_or_else(|| anyhow!("workflow node has no declared capability id"))?;
@@ -139,10 +176,10 @@ mod tests {
     use super::*;
     use crate::assistant::execution::plan::{PolicyDecision, PolicyDecisionStatus};
     use crate::assistant::workflow::{
-        CompleteNode, EdgeCondition, ExecuteQueryNode, FailPolicy, Idempotency, NodeBudget, NodeId,
-        NodePolicy, NodeRunStatus, OfficeScope, OutputContract, OutputMode, RetryPolicy,
-        TerminalState, WORKFLOW_CONTRACT_VERSION, WorkflowBudgets, WorkflowEdge,
-        WorkflowRunOutcome, WorkflowRunner,
+        ClarificationInterruptNode, CompleteNode, EdgeCondition, ExecuteQueryNode, FailPolicy,
+        Idempotency, NodeBudget, NodeId, NodePolicy, NodeRunStatus, OfficeScope, OutputContract,
+        OutputMode, RetryPolicy, TerminalState, WORKFLOW_CONTRACT_VERSION, WorkflowBudgets,
+        WorkflowEdge, WorkflowRunOutcome, WorkflowRunner,
     };
     use crate::execution::repository::ExecutionLimits;
     use crate::knowledge::catalog::loader::KnowledgeLoader;
@@ -356,6 +393,106 @@ mod tests {
                 max_sensitivity: Sensitivity::FilterOnly,
             },
         }
+    }
+
+    /// Single-node workflow whose entry node is a `ClarificationInterrupt` —
+    /// exercises `resolve_execution`'s `_` arm, which routes this kind to
+    /// `WorkflowNodeExecutor::execute` same as `ExecuteQuery`/`ResolveEntity`.
+    fn clarification_workflow() -> ExecutionWorkflow {
+        let clarify_id = NodeId::new("clarify_amount").unwrap();
+        let clarify_node = WorkflowNode {
+            id: clarify_id.clone(),
+            kind: NodeKind::ClarificationInterrupt(ClarificationInterruptNode {
+                clarification_kind: "collect_fields".into(),
+                option_source: NodeId::new("query").unwrap(),
+                resume: NodeId::new("query").unwrap(),
+            }),
+            inputs: vec![],
+            outputs: vec![],
+            policy: NodePolicy {
+                required_capability: None,
+                office_scope: OfficeScope::AuthorizedIntersection,
+                max_sensitivity: Sensitivity::FilterOnly,
+                pii_required: false,
+            },
+            budget: NodeBudget {
+                timeout_ms: 0,
+                row_cap: 0,
+                query_cost: 0,
+            },
+            idempotency: Idempotency::Replayable,
+            retry: RetryPolicy { max_attempts: 0 },
+        };
+        ExecutionWorkflow {
+            id: Uuid::new_v4(),
+            contract_version: WORKFLOW_CONTRACT_VERSION,
+            catalog_version: Uuid::nil(),
+            nodes: vec![clarify_node],
+            edges: vec![],
+            budgets: WorkflowBudgets {
+                shared_timeout_ms: 30_000,
+                shared_row_cap: 1_000,
+                max_query_count: 5,
+                max_parallel_queries: 1,
+                max_model_turns: 2,
+                max_node_retries: 0,
+            },
+            fail_policy: FailPolicy::FailFast,
+            output_contract: OutputContract {
+                mode: OutputMode::Table,
+                allows_partial: false,
+                max_sensitivity: Sensitivity::FilterOnly,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_node_executor_waits_on_clarification_interrupt_node() {
+        // No `FINERACT_DATABASE_URL` gate: a `ClarificationInterrupt` node
+        // never reaches `GuardedDataTools`, so the Fineract pool is unused —
+        // `db.pool` is passed only to satisfy `FineractDataExecutor::new`.
+        let db = spawn_db().await;
+        let user_id = db.insert_user().await;
+        let job_id = insert_job(&db.pool, user_id).await;
+        let state = WorkflowStateRepository::new(db.pool.clone());
+
+        let workflow = clarification_workflow();
+        state
+            .install_workflow(job_id, user_id, &workflow)
+            .await
+            .expect("install workflow");
+
+        let catalog = Arc::new(catalog());
+        let principal = admin_principal(user_id);
+        let executor = FineractDataExecutor::new(
+            db.pool.clone(),
+            catalog.clone(),
+            allowed_policy(),
+            ExecutionLimits::default(),
+            None,
+        );
+        let node_executor = CapabilityNodeExecutor::new(
+            executor,
+            principal.clone(),
+            catalog.clone(),
+            state.clone(),
+            job_id,
+            workflow.clone(),
+        );
+        let runner = WorkflowRunner::new(state, node_executor, catalog);
+
+        let outcome = runner
+            .run(job_id, user_id, &principal, &workflow)
+            .await
+            .expect("workflow pauses for clarification, not panics");
+        assert_eq!(
+            outcome,
+            WorkflowRunOutcome::WaitingForUserInput {
+                node_id: NodeId::new("clarify_amount").unwrap()
+            }
+        );
+
+        db.drop_database().await;
     }
 
     #[tokio::test]
