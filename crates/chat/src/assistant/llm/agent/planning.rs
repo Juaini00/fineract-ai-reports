@@ -180,4 +180,86 @@ mod tests {
         let workflow = compile(proposal, &catalog, Uuid::nil(), budgets()).unwrap();
         verify(workflow, &principal(&catalog), &catalog).expect("verified workflow");
     }
+
+    /// The sentence -> proposal path with a REAL model (DeepSeek). Gated behind
+    /// `RUN_LIVE_DEEPSEEK_PLANNER=1` + `DEEPSEEK_API_KEY` (mirrors the
+    /// `RUN_LIVE_SCENARIO_MATRIX` gate): the deterministic `FakeLlmClient`
+    /// cannot exercise a genuine model turning natural language into a
+    /// `WorkflowProposal`. Proves the planner's output still travels through the
+    /// real compiler + verifier — the model is never trusted to emit SQL or an
+    /// unapproved capability.
+    #[tokio::test]
+    async fn live_deepseek_planner_proposes_a_compilable_workflow_from_a_sentence() {
+        if std::env::var("RUN_LIVE_DEEPSEEK_PLANNER").ok().as_deref() != Some("1") {
+            eprintln!("skipping: set RUN_LIVE_DEEPSEEK_PLANNER=1 to run the live planner test");
+            return;
+        }
+        let Ok(api_key) = std::env::var("DEEPSEEK_API_KEY") else {
+            eprintln!("skipping: DEEPSEEK_API_KEY unset");
+            return;
+        };
+        if api_key.trim().is_empty() {
+            eprintln!("skipping: DEEPSEEK_API_KEY empty");
+            return;
+        }
+
+        let config = app_core::config::LlmConfig {
+            provider: "deepseek".into(),
+            api_key,
+            chat_completions_url: std::env::var("DEEPSEEK_CHAT_COMPLETIONS_URL")
+                .unwrap_or_else(|_| "https://api.deepseek.com/chat/completions".into()),
+            base_url: std::env::var("DEEPSEEK_BASE_URL")
+                .unwrap_or_else(|_| "https://api.deepseek.com".into()),
+            model: std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-chat".into()),
+            timeout_ms: 30_000,
+            max_retries: 2,
+            max_output_tokens: 2_000,
+            temperature: 0.0,
+        };
+        let client: crate::assistant::llm::SharedLlmClient = Arc::new(
+            crate::assistant::llm::provider::LlmProvider::new(&config, None)
+                .expect("build DeepSeek provider"),
+        );
+
+        let catalog = KnowledgeLoader::new("../../knowledge", "../../queries")
+            .load()
+            .unwrap();
+        let agent = PlanningAgent::new(client, 4);
+
+        let proposal = agent
+            .propose(
+                "Show a savings overview for a client: account count, unpaid charges, transactions.",
+                &catalog,
+            )
+            .await
+            .expect("the planner proposes a workflow from a real sentence");
+
+        assert!(
+            !proposal.capability_ids.is_empty(),
+            "the planner selected at least one capability from the sentence"
+        );
+        for id in &proposal.capability_ids {
+            assert!(
+                catalog
+                    .capabilities
+                    .iter()
+                    .any(|capability| &capability.id == id && capability.status == "approved_mvp"),
+                "planner proposed a non-approved capability id: {id}"
+            );
+        }
+
+        // Contract: the planner SELECTS approved capabilities; the deterministic
+        // compiler builds the graph (a raw model's hand-built nodes are not
+        // trusted). Feed a capability-ids-only proposal — the same shape
+        // `propose_workflow` emits — through the real compiler + verifier so the
+        // model can never smuggle SQL or an unsafe node past them.
+        let selection = WorkflowProposal {
+            capability_ids: proposal.capability_ids.clone(),
+            nodes: vec![],
+            edges: vec![],
+        };
+        let workflow = compile(selection, &catalog, Uuid::nil(), budgets())
+            .expect("planner selection compiles");
+        verify(workflow, &principal(&catalog), &catalog).expect("planner selection verifies");
+    }
 }
