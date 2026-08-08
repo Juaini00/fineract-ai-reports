@@ -1,10 +1,22 @@
 # 012 — Agentic workflow runtime and framework completion
 
-Status: active — design required before implementation
+Status: resolved
 Severity: blocker
 Area: chat | runtime | catalog | datasets | retrieval | security | docs
 Created: 2026-08-04
-Resolved:
+Resolved: 2026-08-08
+
+> **Resolution (2026-08-08).** The production request path is one verified
+> workflow runtime. Phase 8 acceptance (A1–A7 node-trace) and the SI-1..SI-14
+> security invariants each have a passing test; the targeted suites and the live
+> scenario matrix are green. Phase 7 legacy deletion is complete — every `V-L*`
+> gate is ∅ except `V-L9` (SemanticRouter / classifier), which is the recorded
+> **Phase 7b** deferral (the Rig proposal agent that would replace the classifier
+> is a separate feature; the classifier remains the one capability-selection
+> step). `V-L12` = 2 per its amendment. `V-FLAGS`: no production config selects a
+> runtime (only `core::config` env helpers + test-only DB URLs). `V-TREE`:
+> swiftide absent, rig-core present. See the Definition-of-Done traceability at
+> the end of this file.
 
 ## Executive summary
 
@@ -728,3 +740,27 @@ The spec must settle contracts and migration boundaries. The plan must contain d
 - `crates/chat/src/knowledge/dataset/`
 - `crates/chat/src/knowledge/index/swiftide.rs`
 - `knowledge/datasets/`
+
+## Definition-of-Done traceability (resolved 2026-08-08)
+
+| # | Done condition | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Production request path is one verified workflow runtime | ✅ | `run_with_router` → verified planner → `compile`/`verify` → `WorkflowRunner`; atomic planner, `CanonicalGatewayMode`, `AssistantGraphRuntime`/`Topology`, gateway/shadow all deleted (V-L1/6/8/10/16 = 0). |
+| 2 | Atomic/sequential/conditional/composite/bounded-iterative contracts exist and are tested | ✅ | `workflow::contract`; A1 (cardinality branches), A4 (composite compare), `workflow_parallel_budget`, iteration compile tests. |
+| 3 | Data-aware probes precede clarification when the acquisition contract permits | ✅ | A3 `a3_charge_type_probe_runs_before_clarification`; compiler acquisition order tests. |
+| 4 | Clarification resumes the exact persisted workflow node | ✅ | `workflow_resume` (5 identity dimensions) + A6 restart-resume; no probe re-run. |
+| 5 | Rig is the real structured agent/tool boundary | ✅ (planning-agent→classifier-replacement wiring is Phase 7b / V-L9) | Rig provider (`llm/provider.rs`), understanding + planning agents over `rig_core`; 6 metadata tools; V-TREE-RIG non-empty. The classifier→Rig-proposal swap is the recorded Phase 7b deferral. |
+| 6 | Petgraph drives validated workflow dependencies and scheduling | ✅ | `workflow::graph` (petgraph `is_cyclic`/`toposort`/`runnable`) is the runner's control plane; the after-the-fact `AssistantGraphTopology` validator was deleted. |
+| 7 | Swiftide genuinely used or removed truthfully | ✅ | Removed; `CatalogIndexPipeline` renamed; V-TREE-SWIFTIDE ∅ (V-L14/L15 = 0). |
+| 8 | Dataset contracts support resolver/probe/output-binding surfaces | ✅ | `knowledge/datasets/*` resolver/probe shapes; `ResolveEntity`/`In`-array binding; `catalog/validate`. |
+| 9 | Every node preserves approved SQL, authz, office scope, PII, budgets, audit lineage | ✅ | SI-1..SI-14 tests (per-node policy SI-6, office-in-SQL SI-2, sensitive-not-persisted SI-7/A5, budgets SI-10, lineage SI-13). |
+| 10 | Acceptance scenarios pass against production-like DB | ✅ | A1–A7 green against live Fineract/app Postgres. |
+| 11 | Complete legacy inventory deleted; machine-checkable searches clean | ✅ | Every `V-L*` gate ∅ except the deferred `V-L9` (Phase 7b) and amended `V-L12`=2. |
+| 12 | No production flag/fallback/alias can re-enable legacy | ✅ | `V-FLAGS`: only `core::config` env helpers + test-only DB URLs; `CanonicalGatewayMode`/`CHAT_CANONICAL_GATEWAY_MODE` deleted. |
+| 13 | Architecture/runtime docs describe the implemented system | ✅ | `docs/architecture/.../07-7-execution-types.md`, `project-setup/05-5-chat-crate.md` updated to the one-workflow-runtime. |
+
+**Deferred (recorded, out of scope for 012):** `V-L9` — retire `SemanticRouter` /
+`understanding/classifier/` and build the Rig proposal agent that turns a user
+message into a candidate `capability_ids` list. Tracked as **Phase 7b**; until
+then the classifier remains the single capability-selection step and the
+workflow engine runs the selected capability.

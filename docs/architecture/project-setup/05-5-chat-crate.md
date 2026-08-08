@@ -120,7 +120,7 @@ Boundary rules inside `chat`:
 ```text
 api = HTTP mapping only, split by catalog/job/session
 chat/classifier = deterministic local intent classification before AI/vector
-chat/planner = deterministic conversion from matched classification into an atomic execution plan
+chat/workflow = the one execution runtime (issue 012): the classifier-selected capability is compiled + verified into a typed workflow (petgraph control plane) and run by WorkflowRunner. The legacy atomic planner, CanonicalGatewayMode selector, and AssistantGraphRuntime/Topology were deleted in Phase 7
 api::ChatAppState = composition for chat services and the cached validated knowledge catalog
 chat/model = durable session/message/job data types, split by concern
 chat/repository = PostgreSQL access, split by concern
