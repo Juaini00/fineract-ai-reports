@@ -348,7 +348,7 @@ impl JobRepository {
             UPDATE chat_jobs
             SET
                 status = 'waiting_for_user_input',
-                current_step = 'taking_decision',
+                current_step = 'waiting_for_user_input',
                 updated_at = now()
             WHERE id = $1
             "#,
@@ -680,7 +680,7 @@ impl JobRepository {
             UPDATE chat_jobs
             SET
                 status = 'completed',
-                current_step = 'response',
+                current_step = 'completed',
                 result_json = $1,
                 error_json = NULL,
                 completed_at = now(),
@@ -721,7 +721,7 @@ impl JobRepository {
         let (event_type, outcome, summary, sanitized_error) = match terminal {
             AssistantResponseTerminal::Completed { outcome } => {
                 sqlx::query(
-                    "UPDATE chat_jobs SET status = 'completed', current_step = 'response', result_json = $1, error_json = NULL, completed_at = now(), updated_at = now() WHERE id = $2",
+                    "UPDATE chat_jobs SET status = 'completed', current_step = 'completed', result_json = $1, error_json = NULL, completed_at = now(), updated_at = now() WHERE id = $2",
                 )
                 .bind(result_json)
                 .bind(job_id)
@@ -736,7 +736,7 @@ impl JobRepository {
             }
             AssistantResponseTerminal::Failed { error_json } => {
                 sqlx::query(
-                    "UPDATE chat_jobs SET status = 'failed', current_step = 'response', result_json = $1, error_json = $2, failed_at = now(), updated_at = now() WHERE id = $3",
+                    "UPDATE chat_jobs SET status = 'failed', current_step = 'failed', result_json = $1, error_json = $2, failed_at = now(), updated_at = now() WHERE id = $3",
                 )
                 .bind(result_json)
                 .bind(error_json)
@@ -811,7 +811,7 @@ impl JobRepository {
             UPDATE chat_jobs
             SET
                 status = 'failed',
-                current_step = 'response',
+                current_step = 'failed',
                 error_json = $1,
                 failed_at = now(),
                 updated_at = now()
