@@ -370,6 +370,19 @@ async fn spawn_app_with_options(
             .unwrap_or_else(|_| "postgres://root:password@127.0.0.1:5432/fineract_default".into())
     });
 
+    // Real embedding retrieval requires a Voyage key. When `VOYAGEAI_API_KEY`
+    // is set in the environment, wire the live client so full-stack tests can
+    // bootstrap `ChatAppState` (which syncs the vector index on boot). When it
+    // is absent (default CI), keep the empty key + unreachable URL — the same
+    // behaviour these tests had before, so nothing that ran without a key
+    // starts requiring one.
+    let voyage_api_key = std::env::var("VOYAGEAI_API_KEY").unwrap_or_default();
+    let voyage_base_url = if voyage_api_key.is_empty() {
+        "https://example.invalid".to_string()
+    } else {
+        std::env::var("VOYAGEAI_BASE_URL").unwrap_or_else(|_| "https://api.voyageai.com/v1".into())
+    };
+
     // Create per-test app DB
     let db_name = format!("ai_report_test_{}", Uuid::new_v4().simple());
     let admin_pool = PgPoolOptions::new()
@@ -446,8 +459,8 @@ async fn spawn_app_with_options(
             dimensions: 1024,
         },
         voyage_ai: VoyageAiConfig {
-            api_key: String::new(),
-            base_url: "https://example.invalid".into(),
+            api_key: voyage_api_key.clone(),
+            base_url: voyage_base_url.clone(),
             embedding_model: "voyage-3-large".into(),
             timeout_ms: 5000,
             embedding_dimensions: 1024,
