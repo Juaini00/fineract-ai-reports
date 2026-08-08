@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::assistant::execution::plan::{ExecutionPlan, PolicyDecision};
 use crate::assistant::{
     AssistantIntent, AssistantResponse, CLARIFICATION_VERSION_1, ClarificationKind,
-    ClarificationOption, ClarificationPayload, ResponseBuilder, SourceIntentSnapshot,
-    tool_request_from_plan, tool_result_from_execution,
+    ClarificationOption, ClarificationPayload, RequestOperation, RequestSubject, ResponseBuilder,
+    SourceIntentSnapshot, tool_request_from_plan, tool_result_from_execution,
 };
 use crate::knowledge::model::KnowledgeCatalog;
 
@@ -52,12 +52,22 @@ pub async fn workflow_response(
             let tool_request = tool_request_from_plan(plan, Vec::new());
             let tool_result = tool_result_from_execution(&tool_request, execution_result);
 
-            let entity_options = matches!(
-                capability_id,
-                "client_name_lookup" | "client_relationship_lookup"
-            )
-            .then(|| client_entity_options(&tool_result.rows, policy.can_view_pii))
-            .unwrap_or_default();
+            // Generic client-entity disambiguation: any capability whose
+            // request shape is a client lookup returns client-identity
+            // candidate rows, so >1 distinct client is an ambiguity to resolve.
+            // Keyed off the catalog request-shape (operation=lookup,
+            // subject=client), never a hardcoded capability-id list. A by-id
+            // lookup also matches but returns <=1 row, so it never clarifies.
+            let is_client_lookup = catalog.capabilities.iter().any(|capability| {
+                capability.id == capability_id
+                    && capability.request_shape.operation == RequestOperation::Lookup
+                    && capability.request_shape.subject == RequestSubject::Client
+            });
+            let entity_options = if is_client_lookup {
+                client_entity_options(&tool_result.rows, policy.can_view_pii)
+            } else {
+                Vec::new()
+            };
             if entity_options.len() > 1 {
                 let payload = ClarificationPayload {
                     version: CLARIFICATION_VERSION_1,
