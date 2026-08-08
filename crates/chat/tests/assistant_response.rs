@@ -1,6 +1,5 @@
 use chat::assistant::execution::plan::{
-    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision, PolicyDecisionStatus,
-    RetrievalPlan,
+    EvidenceEvaluation, ExecutionPlan, PolicyDecision, PolicyDecisionStatus, RetrievalPlan,
 };
 use chat::assistant::{
     AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
@@ -101,7 +100,6 @@ fn intent() -> AssistantIntent {
 
 fn plan() -> ExecutionPlan {
     ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "client".into(),
         capability: "client_name_lookup".into(),
         query_id: "client.name_lookup".into(),

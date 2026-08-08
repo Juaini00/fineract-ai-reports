@@ -506,9 +506,7 @@ mod tests {
     use std::path::Path;
 
     use super::{integer_param, resolve_sql_path};
-    use crate::assistant::execution::plan::{
-        EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
-    };
+    use crate::assistant::execution::plan::{EvidenceEvaluation, ExecutionPlan, RetrievalPlan};
     use crate::knowledge::model::{QueryOutputField, QueryParameter, Sensitivity};
 
     #[test]
@@ -564,7 +562,6 @@ mod tests {
     #[test]
     fn optional_integer_param_returns_none_when_missing() {
         let plan = ExecutionPlan {
-            plan_type: ExecutionPlanType::Atomic,
             domain: "savings".to_string(),
             capability: "savings_activity_list".to_string(),
             query_id: "savings.activity_list".to_string(),

@@ -6,8 +6,7 @@
 use app_core::auth::model::PrincipalContext;
 use chat::assistant::ClarificationFieldType;
 use chat::assistant::execution::plan::{
-    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
-    evaluate_policy,
+    EvidenceEvaluation, ExecutionPlan, PolicyDecisionStatus, RetrievalPlan, evaluate_policy,
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
@@ -369,7 +368,6 @@ fn retrieval_documents_cover_all_capabilities() {
 fn pii_policy_uses_selected_query_output_fields() {
     let catalog = load_catalog();
     let plan = ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "savings".into(),
         capability: "savings_deposit_top_n".into(),
         query_id: "savings.deposit_top_n".into(),
@@ -394,7 +392,6 @@ fn pii_policy_uses_selected_query_output_fields() {
 fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
     let catalog = load_catalog();
     let plan = ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "client".into(),
         capability: "client_name_lookup".into(),
         query_id: "client.name_lookup".into(),

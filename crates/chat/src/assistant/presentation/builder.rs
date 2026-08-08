@@ -510,9 +510,7 @@ fn is_hidden(field: &QueryOutputField, can_view_pii: bool) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        assistant::execution::plan::{
-            EvidenceEvaluation, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
-        },
+        assistant::execution::plan::{EvidenceEvaluation, PolicyDecisionStatus, RetrievalPlan},
         assistant::{
             AssistantConstraints, AssistantDomain, AssistantIntentKind, AssistantLanguage,
             ContextReference,
@@ -769,7 +767,6 @@ mod tests {
 
     fn plan() -> ExecutionPlan {
         ExecutionPlan {
-            plan_type: ExecutionPlanType::Atomic,
             domain: "client".into(),
             capability: "client_lookup".into(),
             query_id: "client.lookup".into(),

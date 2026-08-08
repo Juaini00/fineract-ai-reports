@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
-use crate::assistant::execution::plan::{ExecutionPlan, ExecutionPlanType, PolicyDecision};
+use crate::assistant::execution::plan::{ExecutionPlan, PolicyDecision};
 use crate::assistant::llm::tool::data::{ApprovedDataExecutor, DataToolRequest};
 use crate::assistant::understanding::extraction::SensitiveIdentifier;
 use crate::execution::repository::{ExecutionLimits, execute_plan_with_sensitive};
@@ -66,7 +66,7 @@ impl FineractDataExecutor {
 /// `FilterInputPolicy::ExactIdentifier`) must populate `dataset_selection`,
 /// or `execute_plan_with_sensitive`'s `compose_dataset_binds` never runs and
 /// the transient sensitive identifier is never actually bound into SQL.
-pub(super) fn build_execution_plan(
+pub(super) fn build_query_request(
     request: &DataToolRequest,
     catalog: &KnowledgeCatalog,
     resolved_params: &BTreeMap<String, Value>,
@@ -110,7 +110,6 @@ pub(super) fn build_execution_plan(
         .transpose()?;
 
     Ok(ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: request.capability_id.clone(),
         query_id: capability.query_id.clone(),
@@ -126,7 +125,7 @@ pub(super) fn build_execution_plan(
 #[async_trait]
 impl ApprovedDataExecutor for FineractDataExecutor {
     async fn execute_approved(&self, request: &DataToolRequest) -> Result<Value> {
-        let plan = build_execution_plan(request, &self.catalog, &self.resolved_params)?;
+        let plan = build_query_request(request, &self.catalog, &self.resolved_params)?;
         execute_plan_with_sensitive(
             &self.pool,
             &self.catalog,
@@ -158,7 +157,7 @@ mod tests {
         };
         let catalog = catalog();
         let plan =
-            super::build_execution_plan(&request, &catalog, &std::collections::BTreeMap::new())
+            super::build_query_request(&request, &catalog, &std::collections::BTreeMap::new())
                 .expect("client_name_lookup is in the sample catalog");
         assert_eq!(plan.capability, "client_name_lookup");
         assert_eq!(plan.params["person_name"], serde_json::json!("Alex"));

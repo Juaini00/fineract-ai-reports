@@ -210,7 +210,7 @@ mod entity_clarification_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assistant::execution::plan::{ExecutionPlanType, PolicyDecisionStatus};
+    use crate::assistant::execution::plan::PolicyDecisionStatus;
     use crate::assistant::llm::tool::data_executor::FineractDataExecutor;
     use crate::assistant::workflow::contract::{
         CompleteNode, EdgeCondition, ExecuteQueryNode, ExecutionWorkflow, FailPolicy, Idempotency,
@@ -367,7 +367,6 @@ mod tests {
 
     fn plan() -> ExecutionPlan {
         ExecutionPlan {
-            plan_type: ExecutionPlanType::Atomic,
             domain: "organization".into(),
             capability: CAPABILITY_ID.into(),
             query_id: QUERY_ID.into(),
