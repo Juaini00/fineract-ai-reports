@@ -65,7 +65,7 @@ pub use presentation::renderer::{MarkdownRenderer, ResponseRenderer};
 pub use reranker::{LlmReranker, RerankerDecision, RerankerVerdict};
 pub use response::{AssistantResponse, AssistantResponseType, EvidenceReference};
 pub use retrieval::RetrievalEngine;
-pub use runtime::{AssistantGraphRuntime, GraphRuntimeResult, RuntimeUserInput};
+pub use runtime::{GraphRuntimeResult, RuntimeUserInput, run_with_router};
 pub use state::graph::{
     AssistantGraphTopology, GraphState, GraphTransition, TerminalState, TransitionRule,
 };

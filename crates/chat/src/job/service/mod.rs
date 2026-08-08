@@ -23,17 +23,17 @@ use crate::assistant::workflow::{
     NodeId, ResumeOutcome, WorkflowResumeRequest, WorkflowStateRepository,
 };
 use crate::assistant::{
-    AssistantGraphRuntime, AssistantGraphTopology, CanonicalStateRepository, ContextBuilder,
-    ContextWindowPolicy, DeterministicExtraction, EffectiveConstraints, ExtractionProvenance,
-    FactSourceKind, JobMemory, MarkdownRenderer, OriginalIntent, PlannerInputSnapshot,
-    PrincipalProjection, ResponseRenderer, RuntimeUserInput, SemanticRouter, TerminalState,
-    deterministic_observations, executable_constraint_contracts,
+    AssistantGraphTopology, CanonicalStateRepository, ContextBuilder, ContextWindowPolicy,
+    DeterministicExtraction, EffectiveConstraints, ExtractionProvenance, FactSourceKind, JobMemory,
+    MarkdownRenderer, OriginalIntent, PlannerInputSnapshot, PrincipalProjection, ResponseRenderer,
+    RuntimeUserInput, SemanticRouter, TerminalState, deterministic_observations,
+    executable_constraint_contracts,
     llm::{
         SharedLlmClient,
         provider::LlmProvider,
         traced_client::{LlmTraceContext, TracedLlmClient},
     },
-    merge_observations, original_request_observations, stable_uuid,
+    merge_observations, original_request_observations, run_with_router, stable_uuid,
 };
 use crate::audit::{AuditEvent, AuditHandle, llm_trace_repository::LlmTraceRepository};
 use crate::conversation::model::ChatMessage;

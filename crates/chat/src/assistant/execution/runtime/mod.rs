@@ -140,293 +140,278 @@ pub(super) fn clarification_facts_from_intent(
     ClarificationFacts { values }
 }
 
-pub struct AssistantGraphRuntime;
-
-impl AssistantGraphRuntime {
-    pub async fn run_with_router(
-        mut memory: JobMemory,
-        context: ContextWindow,
-        router: Option<&SemanticRouter>,
-        llm: Option<&SharedLlmClient>,
-        knowledge: Option<&KnowledgeRepository>,
-        fineract_pool: Option<&PgPool>,
-        workflow_state: Option<&WorkflowStateRepository>,
-        catalog: Option<&Arc<KnowledgeCatalog>>,
-        client: Option<&PrincipalContext>,
-        canonical: Option<&CanonicalRuntimeContext>,
-        input: impl Into<RuntimeUserInput>,
-    ) -> GraphRuntimeResult {
-        let input = input.into();
-        // This input is constructed from the validated service submission; canonical
-        // planning consumes the patch directly rather than re-parsing user text.
-        if input.clarification_id.is_some() {
-            memory.current_user_message_metadata["validated_constraint_patch"] =
-                serde_json::to_value(&input.constraint_patch).unwrap_or_else(|_| json!({}));
-            memory.current_user_message_metadata["clarification_id"] =
-                json!(input.clarification_id);
-            memory.current_user_message_metadata["clarification_revision"] =
-                json!(input.clarification_revision);
-            memory.current_user_message_metadata["structured_deterministic_extraction"] =
-                serde_json::to_value(extract_for_context(&input.source_message, canonical))
-                    .unwrap_or_else(|_| json!({}));
-        }
-        let message = input.message.as_str();
-        let mut clear_pending_after_reroute = false;
-        if context
-            .warnings
-            .iter()
-            .any(|warning| warning.code == ContextWarningCode::SessionContextExceeded)
-        {
-            return graph_result(
-                memory,
-                TerminalState::ContextWindowExceeded,
-                "context_window_exceeded",
-                ResponseBuilder::context_window_exceeded(),
-                context.recent_messages.len(),
-                None,
-                vec![
-                    GraphTransition {
-                        from: GraphState::ReceiveMessage,
-                        to: Some(GraphState::BuildContextWindow),
-                        terminal: None,
-                        reason: "message_received".into(),
-                    },
-                    GraphTransition {
-                        from: GraphState::BuildContextWindow,
-                        to: None,
-                        terminal: Some(TerminalState::ContextWindowExceeded),
-                        reason: "context_window_exceeded".into(),
-                    },
-                ],
-            );
-        }
-        // A missing-parameter clarification already identifies one capability. Treat
-        // any free-text reply (including an explicit "Others") as facts for that
-        // capability rather than routing it as a fresh request.
-        if let Some(payload) = &context.pending_clarification
-            && payload.is_missing_execution_parameters
-            && input
-                .selected_option_id
-                .as_deref()
-                .is_none_or(|id| id.eq_ignore_ascii_case(OTHER_CLARIFICATION_OPTION_ID))
-            && let Some(capability_id) = continuation_capability(payload)
-        {
-            let mut intent = intent_from_source(payload, &context, canonical);
-            merge_deterministic_extraction_at(
-                &mut memory,
-                &mut intent,
-                &input.source_message,
-                canonical,
-            );
-            apply_constraint_patch(&mut intent, &input.constraint_patch);
-            memory.intent = Some(intent);
-            record_source_extraction_metadata(
-                &mut memory,
-                payload,
-                canonical,
-                &input.source_message,
-            );
-            memory.selected_capability = Some(capability_id.clone());
-            memory.retrieval_evidence =
-                clarification_audit("missing_parameters", &capability_id, &input, payload);
-            return execute_selected_capability(
-                memory,
-                context.recent_messages.len(),
-                capability_id,
-                catalog,
-                client,
-                fineract_pool,
-                workflow_state,
-                canonical,
-                Some(payload),
-                Some(None),
-                input.sensitive_identifier.as_ref(),
-                &input.source_message,
-            )
-            .await;
-        }
-        if let Some(payload) = &context.pending_clarification
-            && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
-        {
-            let mut continuation_intent = intent_from_source(payload, &context, canonical);
-            merge_deterministic_extraction_at(
-                &mut memory,
-                &mut continuation_intent,
-                &input.source_message,
-                canonical,
-            );
-            apply_constraint_patch(&mut continuation_intent, &input.constraint_patch);
-            memory.intent = Some(continuation_intent);
-            record_source_extraction_metadata(
-                &mut memory,
-                payload,
-                canonical,
-                &input.source_message,
-            );
-            match outcome {
-                ClarificationOutcome::SelectedOption { option_id, .. } => {
-                    memory.selected_capability = Some(option_id.clone());
-                    memory.source_intent = payload
-                        .source_intent
-                        .as_ref()
-                        .map(serde_json::to_value)
-                        .transpose()
-                        .ok()
-                        .flatten();
-                    memory.retrieval_evidence = clarification_audit(
-                        if input.selected_option_id.is_some() {
-                            "explicit_option_id"
-                        } else {
-                            "exact_label"
-                        },
-                        &option_id,
-                        &input,
-                        payload,
-                    );
-                    return execute_selected_capability(
-                        memory,
-                        context.recent_messages.len(),
-                        option_id,
-                        catalog,
-                        client,
-                        fineract_pool,
-                        workflow_state,
-                        canonical,
-                        Some(payload),
-                        Some(None),
-                        input.sensitive_identifier.as_ref(),
-                        &input.source_message,
-                    )
-                    .await;
-                }
-                ClarificationOutcome::FreeFormOther { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
-                    return graph_result(
-                        memory,
-                        TerminalState::WaitingForUserInput,
-                        "clarification_other_selected",
-                        ResponseBuilder::free_form_other_prompt(),
-                        context.recent_messages.len(),
-                        Some(None),
-                        clarification_transitions(
-                            TerminalState::WaitingForUserInput,
-                            "clarification_other_selected",
-                        ),
-                    );
-                }
-                ClarificationOutcome::NewRequest { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "new_request", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
-                    clear_pending_after_reroute = true;
-                }
-                ClarificationOutcome::Unresolved { .. } => {
-                    memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
-                    if payload.attempt >= MAX_CLARIFICATION_ATTEMPTS {
-                        return graph_result(
-                            memory,
-                            TerminalState::WaitingForUserInput,
-                            "clarification_recovery",
-                            {
-                                let mut response = ResponseBuilder::free_form_other_prompt();
-                                response.title = Some("Describe your request".into());
-                                response
-                            },
-                            context.recent_messages.len(),
-                            Some(None),
-                            clarification_transitions(
-                                TerminalState::WaitingForUserInput,
-                                "clarification_recovery",
-                            ),
-                        );
-                    }
-                    let next_payload = incremented_clarification(payload);
-                    return graph_result(
-                        memory,
-                        TerminalState::WaitingForUserInput,
-                        "clarification_unresolved",
-                        ResponseBuilder::clarification(next_payload.clone()),
-                        context.recent_messages.len(),
-                        Some(Some(next_payload)),
-                        clarification_transitions(
-                            TerminalState::WaitingForUserInput,
-                            "clarification_unresolved",
-                        ),
-                    );
-                }
-                _ => {}
-            }
-        }
-        if let Some((intent_kind, response)) = deterministic_simple_response(message) {
-            memory.intent = Some(deterministic_intent(intent_kind.clone(), message));
-            return graph_result(
-                memory,
-                TerminalState::Completed,
-                match intent_kind {
-                    AssistantIntentKind::Greeting => "greeting",
-                    AssistantIntentKind::Help => "help",
-                    _ => "simple_intent",
-                },
-                response,
-                context.recent_messages.len(),
-                None,
-                simple_intent_transitions(TerminalState::Completed, "simple_intent"),
-            );
-        }
-        let Some(router) = router else {
-            return graph_result(
-                memory,
-                TerminalState::FailedOperational,
-                "semantic_router_unavailable",
-                ResponseBuilder::error(),
-                context.recent_messages.len(),
-                None,
-                simple_intent_transitions(
-                    TerminalState::FailedOperational,
-                    "semantic_router_unavailable",
-                ),
-            );
-        };
-        crate::job::progress::started(crate::job::progress::Stage::Routing);
-        let routing_started_at = std::time::Instant::now();
-        let route = router.route(message, &context).await;
-        crate::job::progress::finished(
-            crate::job::progress::Stage::Routing,
-            routing_started_at.elapsed().as_millis() as u64,
-        );
-        match &route {
-            Ok(intent) => tracing::info!(
-                target: "assistant::mapping",
-                message = %message,
-                intent = ?intent.intent,
-                domain = ?intent.domain,
-                request_shape = ?intent.request_shape,
-                entities = ?intent.entities,
-                confidence = intent.confidence,
-                "router intent"
-            ),
-            Err(error) => tracing::warn!(
-                target: "assistant::mapping",
-                message = %message,
-                error = ?error,
-                "router failed"
-            ),
-        }
-        let mut result = complete_semantic_route(
+pub async fn run_with_router(
+    mut memory: JobMemory,
+    context: ContextWindow,
+    router: Option<&SemanticRouter>,
+    llm: Option<&SharedLlmClient>,
+    knowledge: Option<&KnowledgeRepository>,
+    fineract_pool: Option<&PgPool>,
+    workflow_state: Option<&WorkflowStateRepository>,
+    catalog: Option<&Arc<KnowledgeCatalog>>,
+    client: Option<&PrincipalContext>,
+    canonical: Option<&CanonicalRuntimeContext>,
+    input: impl Into<RuntimeUserInput>,
+) -> GraphRuntimeResult {
+    let input = input.into();
+    // This input is constructed from the validated service submission; canonical
+    // planning consumes the patch directly rather than re-parsing user text.
+    if input.clarification_id.is_some() {
+        memory.current_user_message_metadata["validated_constraint_patch"] =
+            serde_json::to_value(&input.constraint_patch).unwrap_or_else(|_| json!({}));
+        memory.current_user_message_metadata["clarification_id"] = json!(input.clarification_id);
+        memory.current_user_message_metadata["clarification_revision"] =
+            json!(input.clarification_revision);
+        memory.current_user_message_metadata["structured_deterministic_extraction"] =
+            serde_json::to_value(extract_for_context(&input.source_message, canonical))
+                .unwrap_or_else(|_| json!({}));
+    }
+    let message = input.message.as_str();
+    let mut clear_pending_after_reroute = false;
+    if context
+        .warnings
+        .iter()
+        .any(|warning| warning.code == ContextWarningCode::SessionContextExceeded)
+    {
+        return graph_result(
             memory,
-            context,
-            route,
-            llm,
-            knowledge,
-            fineract_pool,
-            workflow_state,
+            TerminalState::ContextWindowExceeded,
+            "context_window_exceeded",
+            ResponseBuilder::context_window_exceeded(),
+            context.recent_messages.len(),
+            None,
+            vec![
+                GraphTransition {
+                    from: GraphState::ReceiveMessage,
+                    to: Some(GraphState::BuildContextWindow),
+                    terminal: None,
+                    reason: "message_received".into(),
+                },
+                GraphTransition {
+                    from: GraphState::BuildContextWindow,
+                    to: None,
+                    terminal: Some(TerminalState::ContextWindowExceeded),
+                    reason: "context_window_exceeded".into(),
+                },
+            ],
+        );
+    }
+    // A missing-parameter clarification already identifies one capability. Treat
+    // any free-text reply (including an explicit "Others") as facts for that
+    // capability rather than routing it as a fresh request.
+    if let Some(payload) = &context.pending_clarification
+        && payload.is_missing_execution_parameters
+        && input
+            .selected_option_id
+            .as_deref()
+            .is_none_or(|id| id.eq_ignore_ascii_case(OTHER_CLARIFICATION_OPTION_ID))
+        && let Some(capability_id) = continuation_capability(payload)
+    {
+        let mut intent = intent_from_source(payload, &context, canonical);
+        merge_deterministic_extraction_at(
+            &mut memory,
+            &mut intent,
+            &input.source_message,
+            canonical,
+        );
+        apply_constraint_patch(&mut intent, &input.constraint_patch);
+        memory.intent = Some(intent);
+        record_source_extraction_metadata(&mut memory, payload, canonical, &input.source_message);
+        memory.selected_capability = Some(capability_id.clone());
+        memory.retrieval_evidence =
+            clarification_audit("missing_parameters", &capability_id, &input, payload);
+        return execute_selected_capability(
+            memory,
+            context.recent_messages.len(),
+            capability_id,
             catalog,
             client,
+            fineract_pool,
+            workflow_state,
             canonical,
-            input,
+            Some(payload),
+            Some(None),
+            input.sensitive_identifier.as_ref(),
+            &input.source_message,
         )
         .await;
-        if clear_pending_after_reroute && result.pending_clarification.is_none() {
-            result.pending_clarification = Some(None);
-        }
-        result
     }
+    if let Some(payload) = &context.pending_clarification
+        && let Some(outcome) = resolve_pending_clarification(&input, payload, &memory, &context)
+    {
+        let mut continuation_intent = intent_from_source(payload, &context, canonical);
+        merge_deterministic_extraction_at(
+            &mut memory,
+            &mut continuation_intent,
+            &input.source_message,
+            canonical,
+        );
+        apply_constraint_patch(&mut continuation_intent, &input.constraint_patch);
+        memory.intent = Some(continuation_intent);
+        record_source_extraction_metadata(&mut memory, payload, canonical, &input.source_message);
+        match outcome {
+            ClarificationOutcome::SelectedOption { option_id, .. } => {
+                memory.selected_capability = Some(option_id.clone());
+                memory.source_intent = payload
+                    .source_intent
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .ok()
+                    .flatten();
+                memory.retrieval_evidence = clarification_audit(
+                    if input.selected_option_id.is_some() {
+                        "explicit_option_id"
+                    } else {
+                        "exact_label"
+                    },
+                    &option_id,
+                    &input,
+                    payload,
+                );
+                return execute_selected_capability(
+                    memory,
+                    context.recent_messages.len(),
+                    option_id,
+                    catalog,
+                    client,
+                    fineract_pool,
+                    workflow_state,
+                    canonical,
+                    Some(payload),
+                    Some(None),
+                    input.sensitive_identifier.as_ref(),
+                    &input.source_message,
+                )
+                .await;
+            }
+            ClarificationOutcome::FreeFormOther { .. } => {
+                memory.retrieval_evidence = json!({ "clarification_outcome": "free_form_other", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
+                return graph_result(
+                    memory,
+                    TerminalState::WaitingForUserInput,
+                    "clarification_other_selected",
+                    ResponseBuilder::free_form_other_prompt(),
+                    context.recent_messages.len(),
+                    Some(None),
+                    clarification_transitions(
+                        TerminalState::WaitingForUserInput,
+                        "clarification_other_selected",
+                    ),
+                );
+            }
+            ClarificationOutcome::NewRequest { .. } => {
+                memory.retrieval_evidence = json!({ "clarification_outcome": "new_request", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
+                clear_pending_after_reroute = true;
+            }
+            ClarificationOutcome::Unresolved { .. } => {
+                memory.retrieval_evidence = json!({ "clarification_outcome": "unresolved", "clarification_id": payload.id, "clarification_revision": payload.revision, "clarification_kind": payload.kind });
+                if payload.attempt >= MAX_CLARIFICATION_ATTEMPTS {
+                    return graph_result(
+                        memory,
+                        TerminalState::WaitingForUserInput,
+                        "clarification_recovery",
+                        {
+                            let mut response = ResponseBuilder::free_form_other_prompt();
+                            response.title = Some("Describe your request".into());
+                            response
+                        },
+                        context.recent_messages.len(),
+                        Some(None),
+                        clarification_transitions(
+                            TerminalState::WaitingForUserInput,
+                            "clarification_recovery",
+                        ),
+                    );
+                }
+                let next_payload = incremented_clarification(payload);
+                return graph_result(
+                    memory,
+                    TerminalState::WaitingForUserInput,
+                    "clarification_unresolved",
+                    ResponseBuilder::clarification(next_payload.clone()),
+                    context.recent_messages.len(),
+                    Some(Some(next_payload)),
+                    clarification_transitions(
+                        TerminalState::WaitingForUserInput,
+                        "clarification_unresolved",
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
+    if let Some((intent_kind, response)) = deterministic_simple_response(message) {
+        memory.intent = Some(deterministic_intent(intent_kind.clone(), message));
+        return graph_result(
+            memory,
+            TerminalState::Completed,
+            match intent_kind {
+                AssistantIntentKind::Greeting => "greeting",
+                AssistantIntentKind::Help => "help",
+                _ => "simple_intent",
+            },
+            response,
+            context.recent_messages.len(),
+            None,
+            simple_intent_transitions(TerminalState::Completed, "simple_intent"),
+        );
+    }
+    let Some(router) = router else {
+        return graph_result(
+            memory,
+            TerminalState::FailedOperational,
+            "semantic_router_unavailable",
+            ResponseBuilder::error(),
+            context.recent_messages.len(),
+            None,
+            simple_intent_transitions(
+                TerminalState::FailedOperational,
+                "semantic_router_unavailable",
+            ),
+        );
+    };
+    crate::job::progress::started(crate::job::progress::Stage::Routing);
+    let routing_started_at = std::time::Instant::now();
+    let route = router.route(message, &context).await;
+    crate::job::progress::finished(
+        crate::job::progress::Stage::Routing,
+        routing_started_at.elapsed().as_millis() as u64,
+    );
+    match &route {
+        Ok(intent) => tracing::info!(
+            target: "assistant::mapping",
+            message = %message,
+            intent = ?intent.intent,
+            domain = ?intent.domain,
+            request_shape = ?intent.request_shape,
+            entities = ?intent.entities,
+            confidence = intent.confidence,
+            "router intent"
+        ),
+        Err(error) => tracing::warn!(
+            target: "assistant::mapping",
+            message = %message,
+            error = ?error,
+            "router failed"
+        ),
+    }
+    let mut result = complete_semantic_route(
+        memory,
+        context,
+        route,
+        llm,
+        knowledge,
+        fineract_pool,
+        workflow_state,
+        catalog,
+        client,
+        canonical,
+        input,
+    )
+    .await;
+    if clear_pending_after_reroute && result.pending_clarification.is_none() {
+        result.pending_clarification = Some(None);
+    }
+    result
 }

@@ -237,7 +237,7 @@ impl JobService {
                 global_max_rows: self.query_config.global_max_rows,
             },
         };
-        let mut result = AssistantGraphRuntime::run_with_router(
+        let mut result = run_with_router(
             memory,
             context,
             router.as_ref(),

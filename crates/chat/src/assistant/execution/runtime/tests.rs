@@ -350,7 +350,7 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
     let llm = Arc::new(FakeLlm) as SharedLlmClient;
     let router = SemanticRouter::new(llm.clone());
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
         Some(&router),
@@ -409,7 +409,7 @@ async fn semantic_router_unavailable_fails_closed() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
         None,
@@ -437,7 +437,7 @@ async fn semantic_router_unavailable_fails_closed() {
 
 #[tokio::test]
 async fn greeting_completes_without_router() {
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         empty_context(),
         None,
@@ -544,7 +544,7 @@ async fn exact_pending_option_id_resolves_before_router() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
         None,
@@ -655,7 +655,7 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
         None,
@@ -700,7 +700,7 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
 
 #[tokio::test]
 async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(false, 3, "savings_deposit_top_n"),
         None,
@@ -753,7 +753,7 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
     };
     let message = "show 10 clients with the most savings accounts";
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
         None,
@@ -814,7 +814,7 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
     };
     let message = "Rank offices by savings transaction volume";
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
         None,
@@ -877,7 +877,7 @@ async fn defaultless_required_search_asks_and_runs_nothing() {
         legacy_api_key_id: None,
     };
     let message = "look up a client please";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
         None,
@@ -942,7 +942,7 @@ async fn fully_defaulted_capability_completes_without_asking() {
         legacy_api_key_id: None,
     };
     let message = "Rank offices by savings transaction volume this month";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
         None,
@@ -1230,7 +1230,7 @@ fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
 #[tokio::test]
 async fn others_continues_missing_parameters_with_message_facts() {
     let message = "this month";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
         None,
@@ -1273,7 +1273,7 @@ async fn others_continues_missing_parameters_with_message_facts() {
 #[tokio::test]
 async fn long_message_continues_missing_parameters() {
     let message = "Please use every transaction from this current month for the report";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
         None,
@@ -1407,7 +1407,7 @@ async fn router_verdict_cannot_veto_retrieval() {
         // assertion measures.
         let mut context = empty_context();
         context.client_scope = json!({ "allow_all_capabilities": true });
-        let result = AssistantGraphRuntime::run_with_router(
+        let result = run_with_router(
             empty_memory(),
             context,
             Some(&router),
@@ -1553,7 +1553,7 @@ async fn a_named_office_cannot_be_answered_by_an_office_blind_capability() {
         // Mirrors chat's admin projection, so the auth boundary in
         // `allowed_ids` is not what the assertion measures.
         context.client_scope = json!({ "allow_all_capabilities": true });
-        AssistantGraphRuntime::run_with_router(
+        run_with_router(
             empty_memory(),
             context,
             Some(&router),

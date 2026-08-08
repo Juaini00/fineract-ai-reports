@@ -21,8 +21,6 @@ fn canonical_public_paths_resolve() {
 
     let _: Option<chat::assistant::context_builder::ContextBuilder> =
         None::<chat::assistant::context::builder::ContextBuilder>;
-    let _: Option<chat::assistant::runtime::AssistantGraphRuntime> =
-        None::<chat::assistant::execution::runtime::AssistantGraphRuntime>;
 }
 
 #[test]
