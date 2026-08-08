@@ -392,18 +392,14 @@ fn acquisition_source(
     // Exact-identifier dataset filters (e.g. savings `account_number`) are
     // transient, equality-only, and never a normal SQL bind: the value reaches
     // approved SQL out-of-band via `FineractDataExecutor`'s sensitive
-    // identifier, so the compiled binding stays `Null` and is never persisted
-    // raw. Emit a satisfied (non-clarify) binding unconditionally — the caller's
-    // `defaultless_missing_fields` gate already guaranteed the value is present
-    // by the time compilation runs, and there is no ConstraintField fact to
-    // consult (the raw value is deliberately kept out of `plan.params`).
+    // identifier field (`run.rs::bindings_for` skips `ExactSensitiveInput`
+    // inputs entirely — no `Null` placeholder, no `plan.params` entry) and
+    // `state::persisted_output` redacts it from the durable node-run ledger
+    // (SI-7). Emit a satisfied (non-clarify) binding unconditionally — the
+    // caller's `defaultless_missing_fields` gate already guaranteed the value
+    // is present by the time compilation runs.
     if is_exact_identifier_param(capability, &parameter_policy.name, catalog) {
-        let field = catalog
-            .binding_fields(&parameter_policy.name)
-            .first()
-            .cloned()
-            .ok_or(CompileError::Unsupported)?;
-        return Ok(BindingSource::DeterministicExtraction { field });
+        return Ok(BindingSource::ExactSensitiveInput);
     }
     let strategies = if parameter_policy.resolution.is_empty() {
         vec![

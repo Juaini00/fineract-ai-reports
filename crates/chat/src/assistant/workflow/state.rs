@@ -586,16 +586,49 @@ impl WorkflowStateRepository {
     }
 }
 
-/// Exact sensitive inputs are intentionally absent from durable output JSON.
+/// Exact sensitive input values are intentionally absent from durable output
+/// JSON (SI-7). Redacts only the fields named by each `ExactSensitiveInput`
+/// input (e.g. `account_number`) rather than dropping the whole output: the
+/// approved query result itself (e.g. `masked_account_number`,
+/// `client_display_name`) is not the sensitive value and must survive so
+/// `workflow_response` can still read the completed node's
+/// `untrusted_tool_output`. Recurses through nested objects/arrays because the
+/// real payload is `{"untrusted_tool_output": {"rows": [...]}}`.
+// ponytail: field-name match is the redaction boundary — a future capability
+// that legitimately projects a column literally named the same as a sensitive
+// parameter would also get it stripped. None do today (savings.accounts
+// projects `masked_account_number`, never `account_number`).
 pub fn persisted_output(inputs: &[NodeInput], output: Value) -> Value {
-    if inputs
+    let sensitive_fields: Vec<&str> = inputs
         .iter()
-        .any(|input| matches!(input.source, BindingSource::ExactSensitiveInput))
-    {
-        json!({ "typed_output": output.get("typed_output").cloned().unwrap_or(Value::Null) })
-    } else {
+        .filter(|input| matches!(input.source, BindingSource::ExactSensitiveInput))
+        .map(|input| input.parameter.as_str())
+        .collect();
+    if sensitive_fields.is_empty() {
         output
+    } else {
+        redact_fields(output, &sensitive_fields)
     }
+}
+
+fn redact_fields(mut value: Value, fields: &[&str]) -> Value {
+    match &mut value {
+        Value::Object(map) => {
+            for field in fields {
+                map.remove(*field);
+            }
+            for nested in map.values_mut() {
+                *nested = redact_fields(std::mem::take(nested), fields);
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                *item = redact_fields(std::mem::take(item), fields);
+            }
+        }
+        _ => {}
+    }
+    value
 }
 
 #[derive(FromRow)]
@@ -668,5 +701,38 @@ mod tests {
         );
         assert_eq!(persisted, json!({"typed_output": {"masked": "***"}}));
         assert!(!persisted.to_string().contains("secret"));
+    }
+
+    /// The real payload shape: `untrusted_tool_output` survives redaction (so
+    /// `workflow_response::terminal_output` can still find it) because the
+    /// approved query result never projects a field named `account_number` —
+    /// only the sensitive field itself is stripped, wherever it is nested.
+    #[test]
+    fn exact_sensitive_input_redaction_preserves_the_rest_of_the_output() {
+        let persisted = persisted_output(
+            &[NodeInput {
+                parameter: "account_number".into(),
+                kind: ParameterType::String,
+                source: BindingSource::ExactSensitiveInput,
+            }],
+            json!({
+                "untrusted_tool_output": {
+                    "rows": [
+                        {"masked_account_number": "****1234", "client_display_name": "Tony", "account_number": "0001234"}
+                    ]
+                }
+            }),
+        );
+        assert_eq!(
+            persisted,
+            json!({
+                "untrusted_tool_output": {
+                    "rows": [
+                        {"masked_account_number": "****1234", "client_display_name": "Tony"}
+                    ]
+                }
+            })
+        );
+        assert!(!persisted.to_string().contains("0001234"));
     }
 }

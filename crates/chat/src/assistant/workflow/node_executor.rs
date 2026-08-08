@@ -688,19 +688,21 @@ mod tests {
         );
 
         // (b) `node.inputs` declares `account_number` as `ExactSensitiveInput`,
-        // so `persisted_output` (state.rs) redacts the *entire* executor
-        // output down to `{"typed_output": null}` before it is written to
-        // `chat_workflow_node_runs.output_json` — the untrusted rows (and
-        // therefore the raw account number) never reach durable storage at
-        // all, not merely "the raw string happens to be absent".
+        // so `persisted_output` (state.rs) redacts any field literally named
+        // `account_number` out of the executor output before it is written to
+        // `chat_workflow_node_runs.output_json`. The approved projection never
+        // returns a field named `account_number` (only `masked_account_number`
+        // — see `knowledge/capabilities/savings/account_identity_lookup.yaml`),
+        // so `untrusted_tool_output` itself survives redaction and
+        // `workflow_response` can still read it; only the raw account number
+        // never reaches durable storage.
         let output = query_run
             .output_json
             .as_ref()
             .expect("completed node persists output");
-        assert_eq!(
-            output.get("untrusted_tool_output"),
-            None,
-            "ExactSensitiveInput node output must be redacted before persistence"
+        assert!(
+            output.get("untrusted_tool_output").is_some(),
+            "the query result itself is not the sensitive value and must survive redaction"
         );
         let persisted = serde_json::to_string(&query_run).expect("serialize persisted run");
         assert!(
