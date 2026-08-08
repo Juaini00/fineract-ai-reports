@@ -31,14 +31,14 @@ use crate::assistant::workflow::WorkflowStateRepository;
 use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
 use crate::assistant::{
-    AssistantConstraints, AssistantDomain, AssistantEntityType, AssistantIntent,
-    AssistantIntentKind, AssistantLanguage, AssistantResponse, CanonicalStateRepository,
-    ClarificationFacts, ClarificationOption, ClarificationOutcome, ClarificationPayload,
-    ClarificationPlanResult, ClarificationPlanner, ClarificationResolver, ConstraintField,
-    ContextReference, ContextWarningCode, ContextWindow, DeterministicExtraction,
-    ExtractionProvenance, FactSourceKind, GraphState, GraphTransition, JobMemory, LimitMode,
-    OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
-    Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot, TerminalState, TypedFactValue,
+    AssistantDomain, AssistantEntityType, AssistantIntent, AssistantIntentKind, AssistantLanguage,
+    AssistantResponse, CanonicalStateRepository, ClarificationFacts, ClarificationOption,
+    ClarificationOutcome, ClarificationPayload, ClarificationPlanResult, ClarificationPlanner,
+    ClarificationResolver, ConstraintField, ContextReference, ContextWarningCode, ContextWindow,
+    DeterministicExtraction, ExtractionProvenance, FactSourceKind, GraphState, GraphTransition,
+    JobMemory, LimitMode, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
+    PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
+    TerminalState, TypedFactValue,
     evidence::{Evidence, RetrievalPlan},
     executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
@@ -341,22 +341,9 @@ pub async fn run_with_router(
             _ => {}
         }
     }
-    if let Some((intent_kind, response)) = deterministic_simple_response(message) {
-        memory.intent = Some(deterministic_intent(intent_kind.clone(), message));
-        return graph_result(
-            memory,
-            TerminalState::Completed,
-            match intent_kind {
-                AssistantIntentKind::Greeting => "greeting",
-                AssistantIntentKind::Help => "help",
-                _ => "simple_intent",
-            },
-            response,
-            context.recent_messages.len(),
-            None,
-            simple_intent_transitions(TerminalState::Completed, "simple_intent"),
-        );
-    }
+    // Greeting/help/out-of-domain/unsafe are classified by the understanding
+    // boundary (SemanticRouter) and terminated in `complete_semantic_route`,
+    // not by a keyword shortcut (issue-012 inventory item #6).
     let Some(router) = router else {
         return graph_result(
             memory,

@@ -436,30 +436,6 @@ async fn semantic_router_unavailable_fails_closed() {
 }
 
 #[tokio::test]
-async fn greeting_completes_without_router() {
-    let result = run_with_router(
-        empty_memory(),
-        empty_context(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "Hi",
-    )
-    .await;
-
-    assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
-    assert_eq!(
-        result.memory.structured_response.unwrap().title.as_deref(),
-        Some("Hello")
-    );
-}
-
-#[tokio::test]
 async fn exact_pending_option_id_resolves_before_router() {
     let memory = JobMemory {
         job_id: Uuid::nil(),
