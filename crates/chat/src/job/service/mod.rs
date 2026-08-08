@@ -23,11 +23,10 @@ use crate::assistant::workflow::{
     NodeId, ResumeOutcome, WorkflowResumeRequest, WorkflowStateRepository,
 };
 use crate::assistant::{
-    AssistantGraphTopology, CanonicalStateRepository, ContextBuilder, ContextWindowPolicy,
-    DeterministicExtraction, EffectiveConstraints, ExtractionProvenance, FactSourceKind, JobMemory,
-    MarkdownRenderer, OriginalIntent, PlannerInputSnapshot, PrincipalProjection, ResponseRenderer,
-    RuntimeUserInput, SemanticRouter, TerminalState, deterministic_observations,
-    executable_constraint_contracts,
+    CanonicalStateRepository, ContextBuilder, ContextWindowPolicy, DeterministicExtraction,
+    EffectiveConstraints, ExtractionProvenance, FactSourceKind, JobMemory, MarkdownRenderer,
+    OriginalIntent, PlannerInputSnapshot, PrincipalProjection, ResponseRenderer, RuntimeUserInput,
+    SemanticRouter, TerminalState, deterministic_observations, executable_constraint_contracts,
     llm::{
         SharedLlmClient,
         provider::LlmProvider,

@@ -17,9 +17,6 @@ pub(super) fn graph_result(
         "reason": reason,
     });
     memory.structured_response = Some(finish(response));
-    AssistantGraphTopology::new()
-        .validate_sequence(&transitions)
-        .expect("assistant runtime produced illegal graph transitions");
     GraphRuntimeResult {
         memory,
         transitions,

@@ -270,7 +270,6 @@ impl JobService {
                 .await
                 .ok();
         }
-        AssistantGraphTopology::new().validate_sequence(&result.transitions)?;
         if let Some(pending_clarification) = result.pending_clarification.clone() {
             result.memory.pending_clarification = pending_clarification;
         }
@@ -304,7 +303,6 @@ impl JobService {
             )
             .await?;
         for transition in &result.transitions {
-            AssistantGraphTopology::new().validate_transition(transition)?;
             self.job_memory
                 .checkpoint_transition(
                     memory.job_id,

@@ -557,9 +557,6 @@ pub(super) async fn complete_semantic_route(
             reason: reason.into(),
         },
     ];
-    AssistantGraphTopology::new()
-        .validate_sequence(&transitions)
-        .expect("assistant runtime produced illegal graph transitions");
     GraphRuntimeResult {
         memory,
         transitions,

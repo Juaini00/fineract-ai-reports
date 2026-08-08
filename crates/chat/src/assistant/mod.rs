@@ -66,9 +66,7 @@ pub use reranker::{LlmReranker, RerankerDecision, RerankerVerdict};
 pub use response::{AssistantResponse, AssistantResponseType, EvidenceReference};
 pub use retrieval::RetrievalEngine;
 pub use runtime::{GraphRuntimeResult, RuntimeUserInput, run_with_router};
-pub use state::graph::{
-    AssistantGraphTopology, GraphState, GraphTransition, TerminalState, TransitionRule,
-};
+pub use state::graph::{GraphState, GraphTransition, TerminalState};
 pub use understanding::clarification_resolver::ClarificationResolver;
 pub use understanding::extraction::{
     DeterministicExtraction, PayloadCandidate, PayloadField, PayloadSource, PayloadTrust,
