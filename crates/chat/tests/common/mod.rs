@@ -17,8 +17,8 @@ use std::net::SocketAddr;
 use app_core::api::AppState;
 use app_core::auth::{api_key, token::TokenService};
 use app_core::config::{
-    AppConfig, AuthConfig, CanonicalGatewayMode, CatalogConfig, LlmConfig, QueryConfig,
-    RedisConfig, ServerConfig, VoyageAiConfig,
+    AppConfig, AuthConfig, CatalogConfig, LlmConfig, QueryConfig, RedisConfig, ServerConfig,
+    VoyageAiConfig,
 };
 use app_core::db::DatabasePools;
 use chrono::{Duration, Utc};
@@ -370,21 +370,14 @@ where
 
 /// Spin up a fresh app DB, run migrations, boot axum on `127.0.0.1:0`.
 pub async fn spawn_app() -> TestApp {
-    spawn_app_with_canonical_mode(CanonicalGatewayMode::Disabled).await
-}
-
-pub async fn spawn_app_with_canonical_mode(mode: CanonicalGatewayMode) -> TestApp {
-    spawn_app_with_options("__ai_report_test_llm__", mode).await
+    spawn_app_with_options("__ai_report_test_llm__").await
 }
 
 pub async fn spawn_app_with_llm_api_key(llm_api_key: &str) -> TestApp {
-    spawn_app_with_options(llm_api_key, CanonicalGatewayMode::Disabled).await
+    spawn_app_with_options(llm_api_key).await
 }
 
-async fn spawn_app_with_options(
-    llm_api_key: &str,
-    canonical_gateway_mode: CanonicalGatewayMode,
-) -> TestApp {
+async fn spawn_app_with_options(llm_api_key: &str) -> TestApp {
     let admin_db_url = std::env::var("TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://root:password@127.0.0.1:5432/postgres".into());
     let fineract_db_url = std::env::var("TEST_FINERACT_DATABASE_URL").unwrap_or_else(|_| {
@@ -495,7 +488,6 @@ async fn spawn_app_with_options(
         },
         chat_features: app_core::config::ChatFeatureConfig {
             lqr_enabled: false,
-            canonical_gateway_mode,
             context_soft_token_limit: 6000,
             context_hard_token_limit: 8000,
             context_max_recent_messages: 12,

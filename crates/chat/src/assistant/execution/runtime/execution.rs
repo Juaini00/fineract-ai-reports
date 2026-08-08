@@ -26,9 +26,7 @@ pub(super) async fn execute_selected_capability(
         );
     };
     let intent = memory.intent.clone();
-    if intent.is_none()
-        && canonical.is_none_or(|context| context.mode != CanonicalGatewayMode::Authoritative)
-    {
+    if intent.is_none() {
         return graph_result(
             memory,
             TerminalState::WaitingForUserInput,
@@ -107,112 +105,80 @@ pub(super) async fn execute_selected_capability(
             execution_transitions(TerminalState::WaitingForUserInput, "invalid_temporal_input"),
         );
     }
-    let authoritative =
-        canonical.filter(|context| context.mode == CanonicalGatewayMode::Authoritative);
-    let authoritative_plan = match authoritative {
-        Some(context) => {
-            authoritative_plan(context, &mut memory, catalog, client, &capability_id).await
-        }
-        None => Ok(None),
-    };
-    let (plan, execution_client) = match authoritative_plan {
-        Ok(Some((plan, principal))) => (plan, principal),
-        Ok(None) => {
-            let intent = intent.as_ref().expect("legacy path checked intent");
-            let deterministic_extraction = memory
-                .current_user_message_metadata
-                .get("deterministic_extraction")
-                .cloned()
-                .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok());
-            let eval_ctx =
-                canonical.map(
-                    |c| crate::knowledge::catalog::parameter_policy::EvaluationContext {
-                        business_today: c.business_today,
-                        wall_today: chrono::Utc::now().date_naive(),
-                        authorized_office_ids: client.office_ids.clone(),
-                    },
-                );
-            match crate::assistant::plan_selected_capability_verified(
-                catalog,
-                &capability_id,
-                intent,
-                deterministic_extraction.as_ref(),
-                eval_ctx.as_ref(),
-                Some(source_message),
-            ) {
-                Ok(plan) => (plan, client.clone()),
-                Err(error) => {
-                    tracing::warn!(
-                        target: "assistant::execute_selected_capability",
-                        capability_id = %capability_id,
-                        error = %error,
-                        "clarification-reply plan_selected_capability_verified failed; \
-                         re-clarifying instead of executing"
-                    );
-                    let payload = match planned_clarification(
-                        catalog,
-                        std::slice::from_ref(&capability_id),
-                        Some(intent),
-                        &Default::default(),
-                        Some(source_intent_snapshot(intent, &intent.reason)),
-                        active_payload,
-                    ) {
-                        ClarificationPlanResult::Clarify { mut payload, .. } => {
-                            payload.question = error.to_string();
-                            if let Some(active_payload) = active_payload {
-                                payload.attempt = active_payload.attempt.saturating_add(1);
-                            }
-                            payload
-                        }
-                        ClarificationPlanResult::Complete { .. } => {
-                            tracing::error!(target: "assistant::execute_selected_capability", capability_id = %capability_id, "planner reported complete after missing parameters");
-                            return graph_result(
-                                memory,
-                                TerminalState::FailedOperational,
-                                "planning_inconsistent",
-                                ResponseBuilder::error(),
-                                recent_message_count,
-                                pending_clarification,
-                                execution_transitions(
-                                    TerminalState::FailedOperational,
-                                    "planning_inconsistent",
-                                ),
-                            );
-                        }
-                    };
-                    return graph_result(
-                        memory,
-                        TerminalState::WaitingForUserInput,
-                        "missing_execution_parameters",
-                        ResponseBuilder::clarification(payload.clone()),
-                        recent_message_count,
-                        Some(Some(payload)),
-                        execution_transitions(
-                            TerminalState::WaitingForUserInput,
-                            "missing_execution_parameters",
-                        ),
-                    );
-                }
-            }
-        }
+    // One planner (spec §13.1): parameters are derived by the verified planner.
+    // The canonical-gateway mode selector and its authoritative-snapshot
+    // planning alternative were deleted in Phase 7 (V-L8).
+    let intent_ref = intent.as_ref().expect("execution path checked intent");
+    let deterministic_extraction = memory
+        .current_user_message_metadata
+        .get("deterministic_extraction")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<DeterministicExtraction>(value).ok());
+    let eval_ctx =
+        canonical.map(
+            |c| crate::knowledge::catalog::parameter_policy::EvaluationContext {
+                business_today: c.business_today,
+                wall_today: chrono::Utc::now().date_naive(),
+                authorized_office_ids: client.office_ids.clone(),
+            },
+        );
+    let (plan, execution_client) = match crate::assistant::plan_selected_capability_verified(
+        catalog,
+        &capability_id,
+        intent_ref,
+        deterministic_extraction.as_ref(),
+        eval_ctx.as_ref(),
+        Some(source_message),
+    ) {
+        Ok(plan) => (plan, client.clone()),
         Err(error) => {
             tracing::warn!(
                 target: "assistant::execute_selected_capability",
                 capability_id = %capability_id,
                 error = %error,
-                "clarification-reply authoritative_plan failed; returning routing error"
+                "plan_selected_capability_verified failed; re-clarifying instead of executing"
             );
-            memory.warnings = json!([{ "message": error.to_string() }]);
+            let payload = match planned_clarification(
+                catalog,
+                std::slice::from_ref(&capability_id),
+                Some(intent_ref),
+                &Default::default(),
+                Some(source_intent_snapshot(intent_ref, &intent_ref.reason)),
+                active_payload,
+            ) {
+                ClarificationPlanResult::Clarify { mut payload, .. } => {
+                    payload.question = error.to_string();
+                    if let Some(active_payload) = active_payload {
+                        payload.attempt = active_payload.attempt.saturating_add(1);
+                    }
+                    payload
+                }
+                ClarificationPlanResult::Complete { .. } => {
+                    tracing::error!(target: "assistant::execute_selected_capability", capability_id = %capability_id, "planner reported complete after missing parameters");
+                    return graph_result(
+                        memory,
+                        TerminalState::FailedOperational,
+                        "planning_inconsistent",
+                        ResponseBuilder::error(),
+                        recent_message_count,
+                        pending_clarification,
+                        execution_transitions(
+                            TerminalState::FailedOperational,
+                            "planning_inconsistent",
+                        ),
+                    );
+                }
+            };
             return graph_result(
                 memory,
-                TerminalState::FailedOperational,
-                "canonical_snapshot_invalid",
-                ResponseBuilder::error(),
+                TerminalState::WaitingForUserInput,
+                "missing_execution_parameters",
+                ResponseBuilder::clarification(payload.clone()),
                 recent_message_count,
-                pending_clarification,
+                Some(Some(payload)),
                 execution_transitions(
-                    TerminalState::FailedOperational,
-                    "canonical_snapshot_invalid",
+                    TerminalState::WaitingForUserInput,
+                    "missing_execution_parameters",
                 ),
             );
         }

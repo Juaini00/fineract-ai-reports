@@ -10,7 +10,6 @@ mod transition;
 use clarification::*;
 use execution::*;
 use extraction::*;
-use planning::authoritative_plan;
 pub use planning::build_retrieval_trace;
 use semantic::complete_semantic_route;
 use transition::*;
@@ -19,7 +18,6 @@ use serde_json::json;
 use std::sync::Arc;
 
 use app_core::auth::model::PrincipalContext;
-use app_core::config::CanonicalGatewayMode;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -28,25 +26,21 @@ use crate::assistant::temporal::BusinessDateSource;
 use crate::assistant::understanding::extraction::SensitiveIdentifier;
 use crate::assistant::workflow::WorkflowStateRepository;
 
-use super::tool::{normalize_effective_parameters, plan_from_snapshot};
 use crate::assistant::execution::plan::PolicyDecisionStatus;
 use crate::assistant::{
     AssistantDomain, AssistantEntityType, AssistantIntent, AssistantIntentKind, AssistantLanguage,
     AssistantResponse, CanonicalStateRepository, ClarificationFacts, ClarificationOption,
     ClarificationOutcome, ClarificationPayload, ClarificationPlanResult, ClarificationPlanner,
     ClarificationResolver, ConstraintField, ContextReference, ContextWarningCode, ContextWindow,
-    DeterministicExtraction, ExtractionProvenance, FactSourceKind, GraphState, GraphTransition,
-    JobMemory, LimitMode, OTHER_CLARIFICATION_OPTION_ID, OriginalIntent, PlannerInputSnapshot,
-    PrincipalProjection, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
+    DeterministicExtraction, GraphState, GraphTransition, JobMemory, LimitMode,
+    OTHER_CLARIFICATION_OPTION_ID, Quantity, ResponseBuilder, SemanticRouter, SourceIntentSnapshot,
     TerminalState, TypedFactValue,
     evidence::{Evidence, RetrievalPlan},
-    executable_constraint_contracts, extract_message_facts, extract_message_facts_at,
+    extract_message_facts, extract_message_facts_at,
     llm::SharedLlmClient,
-    merge_observations, original_request_observations,
     presentation::builder::finish,
     reranker::{LlmReranker, RerankerDecision, RerankerVerdict},
     retrieval::RetrievalEngine,
-    stable_uuid,
 };
 use crate::knowledge::index::repository::KnowledgeRepository;
 use crate::knowledge::model::KnowledgeCatalog;
@@ -76,7 +70,6 @@ pub struct RuntimeUserInput {
 
 #[derive(Clone)]
 pub struct CanonicalRuntimeContext {
-    pub mode: CanonicalGatewayMode,
     pub repository: CanonicalStateRepository,
     pub catalog_version: Option<Uuid>,
     pub message_id: Uuid,

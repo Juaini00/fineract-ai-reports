@@ -207,21 +207,17 @@ impl JobService {
         let router = runtime_llm
             .as_ref()
             .map(|llm| SemanticRouter::new(llm.clone()));
-        let catalog_version = if self.canonical_mode == CanonicalGatewayMode::Authoritative {
-            self.knowledge
-                .latest_embedded_catalog()
-                .await?
-                .map(|version| version.id)
-        } else {
-            None
-        };
+        let catalog_version = self
+            .knowledge
+            .latest_embedded_catalog()
+            .await?
+            .map(|version| version.id);
         let today = self
             .business_date
             .today()
             .await
             .map_err(|error| anyhow::anyhow!("business_date resolution failed: {error}"))?;
         let canonical = CanonicalRuntimeContext {
-            mode: self.canonical_mode,
             repository: self.canonical_state.clone(),
             catalog_version,
             message_id: canonical_turn.message_id,
@@ -251,18 +247,6 @@ impl JobService {
             input,
         )
         .await;
-        if self.canonical_mode == CanonicalGatewayMode::Shadow
-            && let Err(_error) = self
-                .shadow_write(
-                    &mut result.memory,
-                    client,
-                    canonical_turn,
-                    expected_revision,
-                )
-                .await
-        {
-            warn!(job_id = %job_id, "canonical shadow write failed");
-        }
         // Best-effort audit trace (issue 06): never fail the request on this write.
         if let Some(trace) = result.retrieval_trace.clone() {
             self.jobs

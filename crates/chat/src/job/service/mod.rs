@@ -1,14 +1,8 @@
-use std::{
-    collections::BTreeMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
-use app_core::config::{
-    CanonicalGatewayMode, ChatFeatureConfig, EmbeddingConfig, LlmConfig, QueryConfig,
-};
+use app_core::config::{ChatFeatureConfig, EmbeddingConfig, LlmConfig, QueryConfig};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -23,16 +17,14 @@ use crate::assistant::workflow::{
     NodeId, ResumeOutcome, WorkflowResumeRequest, WorkflowStateRepository,
 };
 use crate::assistant::{
-    CanonicalStateRepository, ContextBuilder, ContextWindowPolicy, DeterministicExtraction,
-    EffectiveConstraints, ExtractionProvenance, FactSourceKind, JobMemory, MarkdownRenderer,
-    OriginalIntent, PlannerInputSnapshot, PrincipalProjection, ResponseRenderer, RuntimeUserInput,
-    SemanticRouter, TerminalState, deterministic_observations, executable_constraint_contracts,
+    CanonicalStateRepository, ContextBuilder, ContextWindowPolicy, MarkdownRenderer,
+    ResponseRenderer, RuntimeUserInput, SemanticRouter, TerminalState,
     llm::{
         SharedLlmClient,
         provider::LlmProvider,
         traced_client::{LlmTraceContext, TracedLlmClient},
     },
-    merge_observations, original_request_observations, run_with_router, stable_uuid,
+    run_with_router,
 };
 use crate::audit::{AuditEvent, AuditHandle, llm_trace_repository::LlmTraceRepository};
 use crate::conversation::model::ChatMessage;
@@ -56,7 +48,6 @@ use clarification_response::validate_submission;
 pub mod clarification_response;
 mod events;
 mod run;
-mod shadow;
 mod test_llm;
 
 use run::CanonicalTurn;
@@ -69,7 +60,6 @@ pub struct JobService {
     messages: MessageRepository,
     job_memory: JobMemoryRepository,
     canonical_state: CanonicalStateRepository,
-    canonical_mode: CanonicalGatewayMode,
     query_config: QueryConfig,
     session_memory: SessionMemoryRepository,
     context_builder: ContextBuilder,
@@ -155,7 +145,6 @@ impl JobService {
             messages: messages.clone(),
             job_memory: JobMemoryRepository::new(app_pool.clone()),
             canonical_state: CanonicalStateRepository::new(app_pool.clone()),
-            canonical_mode: chat_features.canonical_gateway_mode,
             query_config,
             session_memory: SessionMemoryRepository::new(app_pool.clone()),
             context_builder: ContextBuilder::new(
