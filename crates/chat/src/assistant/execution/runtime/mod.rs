@@ -118,28 +118,6 @@ impl From<String> for RuntimeUserInput {
     }
 }
 
-/// Minimal fact projection for the pre-execution required-input gate. Only
-/// fields that back a defaultless required parameter matter today (person name
-/// for `search`); dates/limits are handled by policy defaults, not asked.
-pub(super) fn clarification_facts_from_intent(
-    intent: Option<&AssistantIntent>,
-) -> ClarificationFacts {
-    let mut values = std::collections::BTreeMap::new();
-    if let Some(intent) = intent
-        && let Some(entity) = intent
-            .entities
-            .iter()
-            .find(|e| e.entity_type == AssistantEntityType::PersonName)
-        && !entity.value.trim().is_empty()
-    {
-        values.insert(
-            ConstraintField::PersonName,
-            TypedFactValue::PersonName(entity.value.trim().to_string()),
-        );
-    }
-    ClarificationFacts { values }
-}
-
 pub async fn run_with_router(
     mut memory: JobMemory,
     context: ContextWindow,

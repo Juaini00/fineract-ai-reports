@@ -396,8 +396,9 @@ fn acquisition_source(
     // inputs entirely — no `Null` placeholder, no `plan.params` entry) and
     // `state::persisted_output` redacts it from the durable node-run ledger
     // (SI-7). Emit a satisfied (non-clarify) binding unconditionally — the
-    // caller's `defaultless_missing_fields` gate already guaranteed the value
-    // is present by the time compilation runs.
+    // caller's verified plan (`plan_selected_capability_verified`, which bails
+    // on a missing required parameter) already guaranteed the value is present
+    // by the time compilation runs.
     if is_exact_identifier_param(capability, &parameter_policy.name, catalog) {
         return Ok(BindingSource::ExactSensitiveInput);
     }

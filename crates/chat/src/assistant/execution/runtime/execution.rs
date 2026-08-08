@@ -39,46 +39,12 @@ pub(super) async fn execute_selected_capability(
             execution_transitions(TerminalState::WaitingForUserInput, "missing_intent"),
         );
     }
-    let clarification_facts = super::clarification_facts_from_intent(intent.as_ref());
-    let missing_fields =
-        crate::assistant::context::clarification_planner::defaultless_missing_fields(
-            catalog,
-            &capability_id,
-            &clarification_facts,
-        );
-    if !missing_fields.is_empty() {
-        let payload = ClarificationPayload {
-            version: crate::assistant::clarification::CLARIFICATION_VERSION_1,
-            id: uuid::Uuid::new_v4(),
-            revision: 0,
-            kind: crate::assistant::clarification::ClarificationKind::CollectFields,
-            question: "What details should I use for this report?".into(),
-            options: Vec::new(),
-            fields: missing_fields,
-            attempt: active_payload.map_or(0, |p| p.attempt.saturating_add(1)),
-            source_intent: intent
-                .as_ref()
-                .map(|intent| source_intent_snapshot(intent, &intent.reason)),
-            allow_free_text: false,
-            is_missing_execution_parameters: true,
-            workflow_id: None,
-            node_id: None,
-            resume_node_id: None,
-            entity_kind: None,
-        };
-        return graph_result(
-            memory,
-            TerminalState::WaitingForUserInput,
-            "missing_execution_parameters",
-            ResponseBuilder::clarification(payload.clone()),
-            recent_message_count,
-            Some(Some(payload)),
-            execution_transitions(
-                TerminalState::WaitingForUserInput,
-                "missing_execution_parameters",
-            ),
-        );
-    }
+    // No pre-query missing-parameter gate here (issue-012 inventory item #2):
+    // it ignored acquisition strategy. Missing required parameters are caught by
+    // `plan_selected_capability_verified` below (`params_from_verified` bails on
+    // a missing required param), whose `Err` fallback re-clarifies through the
+    // acquisition-aware `planned_clarification` — carrying the same stable field
+    // metadata a `CollectFields` payload needs.
     if let Some(error) = memory
         .current_user_message_metadata
         .get("deterministic_extraction")
