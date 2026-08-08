@@ -177,12 +177,12 @@ impl ResponseBuilder {
         }
     }
 
-    pub fn selected(capability_id: String) -> AssistantResponse {
+    pub fn selected(capability: String) -> AssistantResponse {
         AssistantResponse {
             response_type: AssistantResponseType::Summary,
             title: Some("Report capability selected".into()),
             message: format!(
-                "I found strong evidence for `{capability_id}`, but execution is unavailable in this context."
+                "I found strong evidence for `{capability}`, but execution is unavailable in this context."
             ),
             sections: Vec::new(),
             table: None,

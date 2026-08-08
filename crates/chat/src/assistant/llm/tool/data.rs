@@ -102,7 +102,7 @@ impl<E: ApprovedDataExecutor> GuardedDataTools<E> {
             NodeKind::ExecuteQuery(node) => node.capability_id.as_deref(),
             _ => node.policy.required_capability.as_deref(),
         };
-        if declared_capability != Some(request.capability_id.as_str())
+        if declared_capability != Some(request.capability_id.as_ref())
             || !catalog.capabilities.iter().any(|capability| {
                 capability.id == request.capability_id && capability.status == "approved_mvp"
             })

@@ -136,7 +136,7 @@ fn sanitize(
             .capabilities
             .iter()
             .any(|capability| capability.id == candidate.capability_id)
-            && principal_allows(principal, candidate.capability_id.as_str())
+            && principal_allows(principal, candidate.capability_id.as_ref())
     });
     let dropped_candidates = before_candidates - extraction.candidates.len();
     if dropped_candidates > 0 {

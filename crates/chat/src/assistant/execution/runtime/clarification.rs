@@ -365,7 +365,7 @@ pub(super) fn clarification_payload_for(
     }
     let by_id: std::collections::HashMap<&str, &Evidence> = evidence
         .iter()
-        .map(|e| (e.capability_id.as_str(), e))
+        .map(|e| (e.capability_id.as_ref(), e))
         .collect();
     let mut options: Vec<ClarificationOption> = alternatives
         .iter()

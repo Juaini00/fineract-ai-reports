@@ -985,8 +985,8 @@ fn bilingual_covered_inventory_rows_rank_first_and_clear_policy_thresholds() {
                 let top_score = top.map_or(0.0, |candidate| candidate.score);
                 let second = evidence.get(1);
                 let second_score = second.map_or(0.0, |candidate| candidate.score);
-                let top_id = top.map(|candidate| candidate.capability_id.as_str());
-                let second_id = second.map(|candidate| candidate.capability_id.as_str());
+                let top_id = top.map(|candidate| &*candidate.capability_id);
+                let second_id = second.map(|candidate| &*candidate.capability_id);
                 let passes = top_id == Some(case.capability_id)
                     && top_score >= catalog.classification.min_floor
                     && top_score - second_score >= catalog.classification.min_gap;

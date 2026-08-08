@@ -230,7 +230,7 @@ mod tests {
         );
         let survivor_ids: Vec<&str> = survivors
             .iter()
-            .map(|item| item.capability_id.as_str())
+            .map(|item| item.capability_id.as_ref())
             .collect();
         assert_eq!(
             survivor_ids, honours,

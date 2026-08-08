@@ -222,7 +222,8 @@ pub async fn run_with_router(
         record_source_extraction_metadata(&mut memory, payload, canonical, &input.source_message);
         match outcome {
             ClarificationOutcome::SelectedOption { option_id, .. } => {
-                memory.selected_capability = Some(option_id.clone());
+                let selected_capability = option_id.clone();
+                memory.selected_capability = Some(selected_capability);
                 memory.source_intent = payload
                     .source_intent
                     .as_ref()

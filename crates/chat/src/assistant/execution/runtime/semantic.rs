@@ -205,7 +205,8 @@ pub(super) async fn complete_semantic_route(
                             canonical,
                             &input.source_message,
                         );
-                        memory.selected_capability = Some(option_id.clone());
+                        let selected_capability = option_id.clone();
+                        memory.selected_capability = Some(selected_capability);
                         memory.source_intent = payload
                             .source_intent
                             .as_ref()

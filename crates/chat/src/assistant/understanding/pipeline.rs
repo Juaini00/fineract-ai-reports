@@ -83,7 +83,7 @@ pub async fn run(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let scores: Vec<f32> = sorted.iter().map(|c| c.confidence).collect();
-    let capability_ids: Vec<&str> = sorted.iter().map(|c| c.capability_id.as_str()).collect();
+    let capability_ids: Vec<&str> = sorted.iter().map(|c| c.capability_id.as_ref()).collect();
     let classification = decide_from_scores(&catalog.classification, &scores, &capability_ids);
     let top_capability = capability_ids.first().and_then(|top_id| {
         catalog

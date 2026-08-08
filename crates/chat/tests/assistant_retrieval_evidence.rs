@@ -239,7 +239,7 @@ async fn shape_mismatch_no_longer_empties_random_clients_but_still_narrows_offic
         "expected organization_office_savings_summary among {:?}",
         evidence
             .iter()
-            .map(|item| item.capability_id.as_str())
+            .map(|item| &*item.capability_id)
             .collect::<Vec<_>>()
     );
 }
