@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::assistant::context::canonical_state::ConstraintField;
 use crate::knowledge::{
     catalog::parameter_policy::{ParameterPolicy, ParameterType, ResolutionStrategy},
-    dataset::model::{FilterOperator, ShapeRole},
+    dataset::model::{FilterInputPolicy, FilterOperator, ShapeRole},
     model::{CapabilityKnowledge, KnowledgeCatalog, Sensitivity},
 };
 
@@ -363,7 +363,15 @@ fn acquisition_inputs(
         policy.name != "office_ids"
             && (policy.required || query_required.contains(policy.name.as_str()))
     }) {
-        let source = acquisition_source(policy_item, facts, nodes, edges, execute, catalog)?;
+        let source = acquisition_source(
+            capability,
+            policy_item,
+            facts,
+            nodes,
+            edges,
+            execute,
+            catalog,
+        )?;
         inputs.push(NodeInput {
             parameter: policy_item.name.clone(),
             kind: policy_item.kind,
@@ -373,6 +381,7 @@ fn acquisition_inputs(
     Ok(inputs)
 }
 fn acquisition_source(
+    capability: &CapabilityKnowledge,
     parameter_policy: &ParameterPolicy,
     facts: &AcquisitionFacts,
     nodes: &mut Vec<WorkflowNode>,
@@ -380,6 +389,22 @@ fn acquisition_source(
     execute: &NodeId,
     catalog: &KnowledgeCatalog,
 ) -> Result<BindingSource, CompileError> {
+    // Exact-identifier dataset filters (e.g. savings `account_number`) are
+    // transient, equality-only, and never a normal SQL bind: the value reaches
+    // approved SQL out-of-band via `FineractDataExecutor`'s sensitive
+    // identifier, so the compiled binding stays `Null` and is never persisted
+    // raw. Emit a satisfied (non-clarify) binding unconditionally — the caller's
+    // `defaultless_missing_fields` gate already guaranteed the value is present
+    // by the time compilation runs, and there is no ConstraintField fact to
+    // consult (the raw value is deliberately kept out of `plan.params`).
+    if is_exact_identifier_param(capability, &parameter_policy.name, catalog) {
+        let field = catalog
+            .binding_fields(&parameter_policy.name)
+            .first()
+            .cloned()
+            .ok_or(CompileError::Unsupported)?;
+        return Ok(BindingSource::DeterministicExtraction { field });
+    }
     let strategies = if parameter_policy.resolution.is_empty() {
         vec![
             ResolutionStrategy::AuthorizedScope,
@@ -403,15 +428,26 @@ fn acquisition_source(
                 return Ok(BindingSource::CatalogDefault);
             }
             ResolutionStrategy::DeterministicExtraction => {
-                if let Some(field) = constraint_for(&parameter_policy.name)
-                    .filter(|field| facts.deterministic.contains(field))
+                // The authoritative parameter->constraint mapping lives in
+                // `knowledge/parameter-bindings/` (catalog `binding_fields`),
+                // not a Rust match — a param like `search` binds `person_name`,
+                // which the old local `constraint_for` never knew, so a
+                // provided value fell through to the `Clarify` arm.
+                if let Some(field) = catalog
+                    .binding_fields(&parameter_policy.name)
+                    .iter()
+                    .find(|field| facts.deterministic.contains(field))
+                    .cloned()
                 {
                     return Ok(BindingSource::DeterministicExtraction { field });
                 }
             }
             ResolutionStrategy::VerifiedUserText => {
-                if let Some(field) = constraint_for(&parameter_policy.name)
-                    .filter(|field| facts.verified_user.contains(field))
+                if let Some(field) = catalog
+                    .binding_fields(&parameter_policy.name)
+                    .iter()
+                    .find(|field| facts.verified_user.contains(field))
+                    .cloned()
                 {
                     return Ok(BindingSource::VerifiedUserText { field });
                 }
@@ -529,6 +565,33 @@ fn acquisition_source(
     }
     Err(CompileError::Unsupported)
 }
+/// True when `name` maps to a dataset-recipe filter whose dataset filter slot
+/// declares `input_policy: exact_identifier` (a transient sensitive identifier,
+/// e.g. savings `account_number`).
+fn is_exact_identifier_param(
+    capability: &CapabilityKnowledge,
+    name: &str,
+    catalog: &KnowledgeCatalog,
+) -> bool {
+    let Some(recipe) = capability.dataset_recipe.as_ref() else {
+        return false;
+    };
+    let Some(dataset) = catalog
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == recipe.dataset_id)
+    else {
+        return false;
+    };
+    recipe.filters.iter().any(|mapping| {
+        mapping.parameter.as_deref() == Some(name)
+            && dataset.filters.iter().any(|slot| {
+                slot.id == mapping.filter_id
+                    && slot.input_policy == FilterInputPolicy::ExactIdentifier
+            })
+    })
+}
+
 fn resolve_proposal_resources(
     proposal: &WorkflowProposal,
     catalog: &KnowledgeCatalog,

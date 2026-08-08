@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -20,6 +21,14 @@ pub struct FineractDataExecutor {
     policy: PolicyDecision,
     limits: ExecutionLimits,
     sensitive_identifier: Option<SensitiveIdentifier>,
+    // Already-resolved parameter values (from the verified plan the caller
+    // built) threaded out-of-band, exactly like `sensitive_identifier`. The
+    // compiled workflow's non-scope bindings are intentionally `Null`
+    // (`run.rs::bindings_for` never invents an untrusted value), so these fill
+    // those `Null` slots at execution time only — they are never persisted to
+    // the durable node-run ledger. Excludes `transient_sensitive_input`
+    // parameters, which flow solely via `sensitive_identifier`.
+    resolved_params: BTreeMap<String, Value>,
 }
 
 impl FineractDataExecutor {
@@ -27,14 +36,13 @@ impl FineractDataExecutor {
     // `assistant::understanding::extraction`, so a `pub fn` taking it by
     // value would leak a more-private type through a public interface
     // (rustc E0446 / clippy deny).
-    // ponytail: unused until Task 5 wires this into execute_selected_capability.
-    #[allow(dead_code)]
     pub(crate) fn new(
         pool: PgPool,
         catalog: Arc<KnowledgeCatalog>,
         policy: PolicyDecision,
         limits: ExecutionLimits,
         sensitive_identifier: Option<SensitiveIdentifier>,
+        resolved_params: BTreeMap<String, Value>,
     ) -> Self {
         Self {
             pool,
@@ -42,6 +50,7 @@ impl FineractDataExecutor {
             policy,
             limits,
             sensitive_identifier,
+            resolved_params,
         }
     }
 }
@@ -60,6 +69,7 @@ impl FineractDataExecutor {
 pub(super) fn build_execution_plan(
     request: &DataToolRequest,
     catalog: &KnowledgeCatalog,
+    resolved_params: &BTreeMap<String, Value>,
 ) -> Result<ExecutionPlan> {
     let capability = catalog
         .capabilities
@@ -67,7 +77,20 @@ pub(super) fn build_execution_plan(
         .find(|capability| capability.id == request.capability_id)
         .with_context(|| format!("capability {} not found in catalog", request.capability_id))?;
 
-    let params = json!(request.parameters);
+    // Fill only the `Null` bindings the runner left for the compiler-resolved
+    // sources (deterministic/verified/catalog-default). Non-null bindings
+    // (authorized office scope, prior-step outputs) are the runner's own
+    // trusted values and are never overwritten; keys absent from the declared
+    // bindings are never introduced (provenance was already checked upstream).
+    let mut parameters = request.parameters.clone();
+    for (name, value) in parameters.iter_mut() {
+        if value.is_null()
+            && let Some(resolved) = resolved_params.get(name)
+        {
+            *value = resolved.clone();
+        }
+    }
+    let params = json!(parameters);
     let dataset_selection = capability
         .dataset_recipe
         .as_ref()
@@ -103,7 +126,7 @@ pub(super) fn build_execution_plan(
 #[async_trait]
 impl ApprovedDataExecutor for FineractDataExecutor {
     async fn execute_approved(&self, request: &DataToolRequest) -> Result<Value> {
-        let plan = build_execution_plan(request, &self.catalog)?;
+        let plan = build_execution_plan(request, &self.catalog, &self.resolved_params)?;
         execute_plan_with_sensitive(
             &self.pool,
             &self.catalog,
@@ -134,8 +157,9 @@ mod tests {
             row_cap: 50,
         };
         let catalog = catalog();
-        let plan = super::build_execution_plan(&request, &catalog)
-            .expect("client_name_lookup is in the sample catalog");
+        let plan =
+            super::build_execution_plan(&request, &catalog, &std::collections::BTreeMap::new())
+                .expect("client_name_lookup is in the sample catalog");
         assert_eq!(plan.capability, "client_name_lookup");
         assert_eq!(plan.params["person_name"], serde_json::json!("Alex"));
     }

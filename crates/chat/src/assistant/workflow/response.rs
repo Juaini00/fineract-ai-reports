@@ -496,6 +496,7 @@ mod tests {
             allowed_policy(),
             ExecutionLimits::default(),
             None,
+            std::collections::BTreeMap::new(),
         );
         let node_executor = CapabilityNodeExecutor::new(
             executor,

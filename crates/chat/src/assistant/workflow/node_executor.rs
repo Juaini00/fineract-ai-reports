@@ -470,6 +470,7 @@ mod tests {
             allowed_policy(),
             ExecutionLimits::default(),
             None,
+            std::collections::BTreeMap::new(),
         );
         let node_executor = CapabilityNodeExecutor::new(
             executor,
@@ -653,6 +654,7 @@ mod tests {
             allowed_policy(),
             ExecutionLimits::default(),
             Some(sensitive_identifier),
+            std::collections::BTreeMap::new(),
         );
         let node_executor = CapabilityNodeExecutor::new(
             executor,
@@ -734,6 +736,7 @@ mod tests {
             allowed_policy(),
             ExecutionLimits::default(),
             None,
+            std::collections::BTreeMap::new(),
         );
         let node_executor = CapabilityNodeExecutor::new(
             executor,
@@ -761,6 +764,107 @@ mod tests {
             .expect("query node has a run row");
         assert_eq!(query_run.status, NodeRunStatus::Completed);
         assert!(query_run.rows_returned >= 0);
+
+        db.drop_database().await;
+    }
+
+    /// Regression for the Phase 7 final-review CRITICAL: `compile()` (not
+    /// `compile_with_facts()`) forwarded an empty `AcquisitionFacts`, so every
+    /// `approved_mvp` capability with a required user parameter (e.g.
+    /// `client_name_lookup`'s `search`) got a `ClarificationInterrupt` inserted
+    /// and paused on the first run even though the value was already resolved.
+    /// Drives the real compiler (`propose_workflow` + `compile_with_facts`) the
+    /// same way `execute_selected_capability` now does — facts and
+    /// `resolved_params` built from an already-resolved value, exactly as it
+    /// would be from `plan_selected_capability_verified` — and asserts the
+    /// workflow reaches `Completed`, not `WaitingForUserInput`.
+    #[tokio::test]
+    async fn compiled_capability_with_resolved_search_param_completes_without_clarifying() {
+        let Some(fineract) = fineract_pool().await else {
+            return;
+        };
+        let db = spawn_db().await;
+        let user_id = db.insert_user().await;
+        let job_id = insert_job(&db.pool, user_id).await;
+        let state = WorkflowStateRepository::new(db.pool.clone());
+
+        let catalog = Arc::new(catalog());
+        let capability_id = "client_name_lookup";
+        let proposal =
+            crate::assistant::llm::tool::propose_workflow(&catalog, vec![capability_id.into()])
+                .expect("client_name_lookup is in the sample catalog");
+
+        let mut resolved_params = std::collections::BTreeMap::new();
+        resolved_params.insert(
+            "search".to_string(),
+            serde_json::json!("no-such-client-zzz-9f3c"),
+        );
+        let mut facts = crate::assistant::workflow::compile::AcquisitionFacts::default();
+        for field in catalog.binding_fields("search") {
+            if !facts.deterministic.contains(field) {
+                facts.deterministic.push(field.clone());
+            }
+        }
+
+        let workflow = crate::assistant::workflow::compile::compile_with_facts(
+            proposal,
+            &catalog,
+            Uuid::nil(),
+            WorkflowBudgets {
+                shared_timeout_ms: 30_000,
+                shared_row_cap: 1_000,
+                max_query_count: 5,
+                max_parallel_queries: 1,
+                max_model_turns: 2,
+                max_node_retries: 0,
+            },
+            &facts,
+        )
+        .expect("compiles with the resolved search fact present");
+        assert!(
+            workflow
+                .nodes
+                .iter()
+                .all(|node| !matches!(node.kind, NodeKind::ClarificationInterrupt(_))),
+            "search is already resolved; compilation must not gate on clarification"
+        );
+
+        state
+            .install_workflow(job_id, user_id, &workflow)
+            .await
+            .expect("install workflow");
+
+        let principal = PrincipalContext {
+            user_id,
+            role: "admin".into(),
+            capability_ids: vec![capability_id.into()],
+            office_ids: vec![1],
+            can_view_pii: true,
+            legacy_api_key_id: None,
+        };
+        let executor = FineractDataExecutor::new(
+            fineract,
+            catalog.clone(),
+            allowed_policy(),
+            ExecutionLimits::default(),
+            None,
+            resolved_params,
+        );
+        let node_executor = CapabilityNodeExecutor::new(
+            executor,
+            principal.clone(),
+            catalog.clone(),
+            state.clone(),
+            job_id,
+            workflow.clone(),
+        );
+        let runner = WorkflowRunner::new(state, node_executor, catalog);
+
+        let outcome = runner
+            .run(job_id, user_id, &principal, &workflow)
+            .await
+            .expect("workflow runs to completion instead of pausing for clarification");
+        assert_eq!(outcome, WorkflowRunOutcome::Completed);
 
         db.drop_database().await;
     }

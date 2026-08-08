@@ -346,11 +346,38 @@ pub(super) async fn execute_selected_capability(
         max_model_turns: 2,
         max_node_retries: 0,
     };
-    let workflow = match crate::assistant::workflow::compile::compile(
+    // Feed the already-resolved plan into compilation and execution. The
+    // verified plan (`plan_selected_capability_verified`) is the source of
+    // truth for parameter values; without it the compiler forwards empty facts
+    // and inserts a `ClarificationInterrupt` for every required user parameter
+    // (e.g. `search`) even though the value is already in hand. `facts` opens
+    // the acquisition gate (bind, don't clarify); `resolved_params` carries the
+    // concrete values out-of-band into `FineractDataExecutor` (the runner's
+    // bindings stay `Null` and are never persisted). Note `plan.params` already
+    // excludes `transient_sensitive_input` parameters (e.g. `account_number`),
+    // which flow only via `sensitive_identifier`.
+    let mut facts = crate::assistant::workflow::compile::AcquisitionFacts::default();
+    let mut resolved_params: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    if let Some(params) = plan.params.as_object() {
+        for (key, value) in params {
+            if value.is_null() {
+                continue;
+            }
+            resolved_params.insert(key.clone(), value.clone());
+            for field in catalog.binding_fields(key) {
+                if !facts.deterministic.contains(field) {
+                    facts.deterministic.push(field.clone());
+                }
+            }
+        }
+    }
+    let workflow = match crate::assistant::workflow::compile::compile_with_facts(
         proposal,
         catalog,
         catalog_version,
         budgets,
+        &facts,
     ) {
         Ok(workflow) => workflow,
         Err(error) => {
@@ -404,6 +431,7 @@ pub(super) async fn execute_selected_capability(
         policy.clone(),
         limits,
         sensitive_identifier.cloned(),
+        resolved_params,
     );
     let node_executor = crate::assistant::workflow::CapabilityNodeExecutor::new(
         executor,
