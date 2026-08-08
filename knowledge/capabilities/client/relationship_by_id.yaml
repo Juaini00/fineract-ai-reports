@@ -10,12 +10,23 @@ metrics: [client.relationship_lookup]
 output_mode: list
 request_shape: { operation: lookup, subject: client, grouping: none, output: list, pii: client_identity }
 examples: [Continue with the selected client.]
-# Only reachable after a SelectEntity clarification supplies client_id; there is
-# no first-turn phrasing that could bind it.
+# Continuation semantics preserved for classifier selection, but `client_id`
+# now also self-resolves via an authorized data probe: when this capability is
+# compiled, the probe emits a ResolveEntity(client.identity) step that binds
+# client_id from office-scoped candidates, instead of falling through to a
+# clarification. A SelectEntity answer still supplies it when the probe is
+# ambiguous.
 continuation: true
 guards:
   require_office_scope: true
   pii: { returns_pii: true, never_return: [account_no, external_id, mobile_no, email] }
 parameters:
   office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }
-  client_id: { type: integer, required: true }
+  client_id:
+    type: integer
+    required: true
+    resolution: [authorized_data_probe]
+    probe:
+      dataset_id: client.identity
+      shape_id: identity_candidates
+      output_slot: client_id

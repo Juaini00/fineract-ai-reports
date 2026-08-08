@@ -127,23 +127,50 @@ impl WorkflowNodeExecutor for CapabilityNodeExecutor {
 
         let runs = self.state.node_runs(self.job_id, self.workflow.id).await?;
 
-        match self
-            .guard
-            .execute_approved_capability(
-                &self.workflow,
-                &runs,
-                &self.principal,
-                &self.catalog,
-                request,
-            )
-            .await
-        {
-            Ok(output) => {
+        // A `ResolveEntity` node is a bounded resolver probe, not a terminal
+        // capability query — the guard requires the probe entrypoint
+        // (`data.rs` membership check `(ResolveEntity, true)`), so route it
+        // there. `ExecuteQuery` stays on the capability entrypoint.
+        let is_probe = matches!(node.kind, NodeKind::ResolveEntity(_));
+        let guarded = if is_probe {
+            self.guard
+                .execute_approved_probe(
+                    &self.workflow,
+                    &runs,
+                    &self.principal,
+                    &self.catalog,
+                    request,
+                )
+                .await
+        } else {
+            self.guard
+                .execute_approved_capability(
+                    &self.workflow,
+                    &runs,
+                    &self.principal,
+                    &self.catalog,
+                    request,
+                )
+                .await
+        };
+
+        match guarded {
+            Ok(mut output) => {
                 let rows_returned = output
                     .get("untrusted_tool_output")
                     .and_then(|value| value.get("rows"))
                     .and_then(Value::as_array)
                     .map_or(0, |rows| rows.len() as i32);
+                // Project an unambiguous resolver result into top-level slots so
+                // a downstream `AuthorizedDataProbe` binding can read the id via
+                // `run.rs::output_slot` (which looks at `output_json[slot]`, not
+                // inside `untrusted_tool_output.rows`). Only when exactly one
+                // candidate resolves — zero or many is not a scalar and is left
+                // absent so the downstream bind fails safe (a CardinalityBranch,
+                // added separately, routes those cases instead).
+                if is_probe && rows_returned == 1 {
+                    project_resolved_slots(node, &mut output);
+                }
                 Ok(NodeExecution::Completed {
                     output,
                     rows_returned,
@@ -157,6 +184,31 @@ impl WorkflowNodeExecutor for CapabilityNodeExecutor {
                 );
                 Ok(NodeExecution::Failed)
             }
+        }
+    }
+}
+
+/// Copies each declared output slot of a resolver node from the single
+/// resolved row up to the top level of the node output, so a downstream
+/// `AuthorizedDataProbe` binding reads a scalar (`output_json[slot]`) rather
+/// than having to reach into `untrusted_tool_output.rows`. Caller guarantees
+/// exactly one row.
+fn project_resolved_slots(node: &WorkflowNode, output: &mut Value) {
+    let Some(row) = output
+        .get("untrusted_tool_output")
+        .and_then(|value| value.get("rows"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+    else {
+        return;
+    };
+    let Some(object) = output.as_object_mut() else {
+        return;
+    };
+    for slot in &node.outputs {
+        if let Some(value) = row.get(&slot.name) {
+            object.insert(slot.name.clone(), value.clone());
         }
     }
 }
@@ -1071,6 +1123,201 @@ mod tests {
             .await
             .expect("workflow runs to completion instead of pausing for clarification");
         assert_eq!(outcome, WorkflowRunOutcome::Completed);
+
+        db.drop_database().await;
+    }
+
+    // --- Task 1: probe-before-clarify (AuthorizedDataProbe resolves a client) ---
+
+    const PILOT_CAPABILITY_ID: &str = "client_relationship_by_id";
+    const RESOLVER_CAPABILITY_ID: &str = "client_identity_resolve";
+
+    fn probe_budgets() -> WorkflowBudgets {
+        WorkflowBudgets {
+            shared_timeout_ms: 30_000,
+            shared_row_cap: 1_000,
+            max_query_count: 5,
+            max_parallel_queries: 1,
+            max_model_turns: 2,
+            max_node_retries: 0,
+        }
+    }
+
+    fn pilot_principal(user_id: Uuid, office_ids: Vec<i64>) -> PrincipalContext {
+        PrincipalContext {
+            user_id,
+            role: "admin".into(),
+            capability_ids: vec![PILOT_CAPABILITY_ID.into(), RESOLVER_CAPABILITY_ID.into()],
+            office_ids,
+            can_view_pii: true,
+            legacy_api_key_id: None,
+        }
+    }
+
+    fn compile_pilot(catalog: &KnowledgeCatalog) -> ExecutionWorkflow {
+        use crate::assistant::workflow::compile::{AcquisitionFacts, compile_with_facts};
+        use crate::assistant::workflow::contract::WorkflowProposal;
+        compile_with_facts(
+            WorkflowProposal {
+                capability_ids: vec![PILOT_CAPABILITY_ID.into()],
+                nodes: vec![],
+                edges: vec![],
+            },
+            catalog,
+            Uuid::nil(),
+            probe_budgets(),
+            &AcquisitionFacts::default(),
+        )
+        .expect("probe-backed capability compiles")
+    }
+
+    /// The compiler turns a `client_id` parameter carrying an
+    /// `authorized_data_probe` into a `ResolveEntity` step feeding the
+    /// `ExecuteQuery` — a Sequential (resolve -> execute) shape — instead of a
+    /// `ClarificationInterrupt`. No database needed: this is a pure compile +
+    /// verify assertion.
+    #[test]
+    fn probe_backed_param_compiles_to_resolve_entity_not_clarification() {
+        let catalog = catalog();
+        let workflow = compile_pilot(&catalog);
+        assert!(
+            workflow
+                .nodes
+                .iter()
+                .any(|node| matches!(node.kind, NodeKind::ResolveEntity(_))),
+            "client_id probe must compile to a ResolveEntity step"
+        );
+        assert!(
+            workflow
+                .nodes
+                .iter()
+                .any(|node| matches!(node.kind, NodeKind::ExecuteQuery(_))),
+            "the resolved client must feed an ExecuteQuery step"
+        );
+        assert!(
+            !workflow
+                .nodes
+                .iter()
+                .any(|node| matches!(node.kind, NodeKind::ClarificationInterrupt(_))),
+            "a probe-resolvable client_id must not fall through to a clarification"
+        );
+        let resolve = workflow
+            .nodes
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::ResolveEntity(_)))
+            .expect("resolve node present");
+        assert_eq!(
+            resolve.policy.required_capability.as_deref(),
+            Some(RESOLVER_CAPABILITY_ID),
+            "the resolver node must carry its backing capability id for the guarded probe"
+        );
+        crate::assistant::workflow::verify::verify(
+            workflow,
+            &pilot_principal(Uuid::nil(), vec![1]),
+            &catalog,
+        )
+        .expect("compiled probe workflow verifies (V3/V9/V10)");
+    }
+
+    /// End-to-end against live Fineract: an office holding exactly one client
+    /// resolves via the office-scoped probe (cardinality one) and the pilot
+    /// capability executes with `client_id` bound from the resolver slot — never
+    /// asked. Proves the AuthorizedDataProbe branch fires in production shape.
+    #[tokio::test]
+    async fn probe_resolves_single_client_and_executes_without_clarifying() {
+        let Some(fineract) = fineract_pool().await else {
+            return;
+        };
+        let Some(office_id) = sqlx::query_scalar::<_, i64>(
+            "SELECT office_id FROM m_client GROUP BY office_id HAVING COUNT(*) = 1 LIMIT 1",
+        )
+        .fetch_optional(&fineract)
+        .await
+        .expect("query fineract for a single-client office") else {
+            eprintln!("skipping: no office with exactly one client in fixture data");
+            return;
+        };
+
+        let catalog = Arc::new(catalog());
+        let workflow = compile_pilot(&catalog);
+        assert!(
+            workflow
+                .nodes
+                .iter()
+                .any(|node| matches!(node.kind, NodeKind::ResolveEntity(_)))
+                && !workflow
+                    .nodes
+                    .iter()
+                    .any(|node| matches!(node.kind, NodeKind::ClarificationInterrupt(_))),
+            "compiled pilot is a resolve->execute Sequential shape"
+        );
+
+        let db = spawn_db().await;
+        let user_id = db.insert_user().await;
+        let job_id = insert_job(&db.pool, user_id).await;
+        let state = WorkflowStateRepository::new(db.pool.clone());
+        let inspect_state = WorkflowStateRepository::new(db.pool.clone());
+        state
+            .install_workflow(job_id, user_id, &workflow)
+            .await
+            .expect("install workflow");
+
+        let principal = pilot_principal(user_id, vec![office_id]);
+        let policy = PolicyDecision {
+            status: PolicyDecisionStatus::Allowed,
+            reason: None,
+            office_ids: vec![office_id],
+            can_view_pii: true,
+        };
+        let executor = FineractDataExecutor::new(
+            fineract,
+            catalog.clone(),
+            policy,
+            ExecutionLimits::default(),
+            None,
+            std::collections::BTreeMap::new(),
+        );
+        let node_executor = CapabilityNodeExecutor::new(
+            executor,
+            principal.clone(),
+            catalog.clone(),
+            state.clone(),
+            job_id,
+            workflow.clone(),
+        );
+        let runner = WorkflowRunner::new(state, node_executor, catalog);
+
+        let outcome = runner
+            .run(job_id, user_id, &principal, &workflow)
+            .await
+            .expect("probe workflow runs");
+        assert_eq!(
+            outcome,
+            WorkflowRunOutcome::Completed,
+            "a single-client office resolves and executes without clarifying"
+        );
+
+        let runs = inspect_state
+            .node_runs(job_id, workflow.id)
+            .await
+            .expect("node runs");
+        let resolve_run = runs
+            .iter()
+            .find(|run| {
+                run.node_id.as_str() == "resolve_client_id"
+                    && run.status == NodeRunStatus::Completed
+            })
+            .expect("resolve_client_id node completed");
+        assert_eq!(
+            resolve_run.rows_returned, 1,
+            "office-scoped probe resolved exactly one client"
+        );
+        assert!(
+            runs.iter().any(|run| {
+                run.node_id.as_str() == "execute_query" && run.status == NodeRunStatus::Completed
+            }),
+            "the pilot query executed with client_id bound from the resolver slot"
+        );
 
         db.drop_database().await;
     }

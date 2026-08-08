@@ -1,0 +1,22 @@
+id: client.identity_resolve
+database: fineract
+# Reuses the client.identity dataset source: this query only exists so an
+# approved capability can back the `identity_candidates` resolver shape (the
+# guard/executor drive SQL off a capability's dataset_recipe, so a resolver
+# shape needs a capability + query wrapper). At runtime the recipe's
+# dataset_selection composes the shape SQL; this file is what the loader/runtime
+# validators prepare, and its columns match the source SELECT.
+sql_file: queries/datasets/client/identity.source.sql
+data_areas: [client_foundation, organization_foundation]
+tables: [m_client, m_office]
+metrics: [client.relationship_lookup]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+output_fields:
+  - { name: client_id, type: bigint, sensitivity: public_business }
+  - { name: client_display_name, type: string, sensitivity: pii }
+  - { name: office_id, type: bigint, sensitivity: public_business }
+  - { name: office_name, type: string, sensitivity: public_business }
+  - { name: client_status_enum, type: bigint, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

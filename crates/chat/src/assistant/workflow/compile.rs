@@ -484,6 +484,24 @@ fn acquisition_source(
                         .iter()
                         .find(|slot| slot.slot == probe.output_slot)
                         .ok_or(CompileError::InvalidProposal)?;
+                    // The guard/executor drive resolver SQL off an approved
+                    // capability's `dataset_recipe` (`data.rs`/`data_executor.rs`),
+                    // so a resolver node must carry the id of the approved
+                    // capability backing this shape — otherwise `node_executor`
+                    // has no capability id to declare and the guarded probe is
+                    // rejected. Match the capability whose recipe selects exactly
+                    // this dataset+shape.
+                    let backing = catalog
+                        .capabilities
+                        .iter()
+                        .find(|capability| {
+                            capability.status == "approved_mvp"
+                                && capability.dataset_recipe.as_ref().is_some_and(|recipe| {
+                                    recipe.dataset_id == probe.dataset_id
+                                        && recipe.shape_id == probe.shape_id
+                                })
+                        })
+                        .ok_or(CompileError::InvalidProposal)?;
                     nodes.push(WorkflowNode {
                         id: id.clone(),
                         kind: NodeKind::ResolveEntity(ResolveEntityNode {
@@ -507,7 +525,7 @@ fn acquisition_source(
                             sensitivity: output.sensitivity,
                             cardinality: map_cardinality(output.cardinality),
                         }],
-                        policy: policy(None),
+                        policy: policy(Some(backing.id.clone())),
                         budget: NodeBudget {
                             timeout_ms: dataset.timeout_ms.unwrap_or(5_000),
                             row_cap: shape.row_cap.unwrap_or(25),
