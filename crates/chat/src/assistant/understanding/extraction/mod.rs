@@ -248,11 +248,9 @@ fn conflict(
     }
 }
 
-/// Bundle 12 Task 7.2: the deterministic extractor is now a `pub(crate)`
-/// verification helper — the LLM gateway pipeline is the primary extraction
-/// path when the runtime opts in (`AI_REPORT_GATEWAY_PIPELINE=on`). Kept
-/// crate-visible so runtime/extraction still calls it on the legacy path and
-/// so it can serve as a sanity-check for the LLM's `entities` / phrase spans.
+/// The deterministic extractor is a `pub(crate)` verification helper: the
+/// runtime grounds the LLM's advisory facts against it, and it serves as a
+/// sanity-check for the LLM's `entities` / phrase spans.
 pub(crate) fn extract_message_facts(message: &str) -> DeterministicExtraction {
     let now = Utc::now();
     extract_message_facts_at(message, now, now.date_naive(), 366)
