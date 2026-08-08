@@ -346,6 +346,28 @@ impl Drop for TestApp {
     }
 }
 
+/// Run an async test body on a runtime whose worker threads have a 16 MB stack.
+///
+/// The chat execution pipeline's future is deep: `JobMemory`, `ExecutionWorkflow`,
+/// and large JSON all live in linear (non-recursive) async poll frames, overflowing
+/// tokio's default 2 MB worker stack whenever a request actually executes a
+/// workflow. `main.rs` builds the production runtime with a 16 MB stack for this
+/// reason; `#[tokio::test]` does not inherit that, so execution-path integration
+/// tests must run through this helper instead of the attribute macro.
+/// ponytail: 16 MB mirrors main.rs; bump both together if a deeper path appears.
+pub fn block_on_big_stack<F>(fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("build big-stack test runtime")
+        .block_on(fut)
+}
+
 /// Spin up a fresh app DB, run migrations, boot axum on `127.0.0.1:0`.
 pub async fn spawn_app() -> TestApp {
     spawn_app_with_canonical_mode(CanonicalGatewayMode::Disabled).await

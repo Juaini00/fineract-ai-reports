@@ -713,6 +713,210 @@ mod tests {
         db.drop_database().await;
     }
 
+    /// A2 (plan Task 8.1): office + portfolio. The grouped office summary
+    /// answers with a SINGLE approved query (`query_cost == 1`, exactly one
+    /// `ExecuteQuery` node run) — the anti-N+1 contract — and loan coverage is
+    /// honestly unsupported: no approved loan capability exists in the catalog,
+    /// so nothing can substitute savings data for a loan ask.
+    #[tokio::test]
+    async fn a2_office_portfolio_uses_one_grouped_query_and_loans_stay_unsupported() {
+        let Some(fineract) = fineract_pool().await else {
+            return;
+        };
+        let db = spawn_db().await;
+        let user_id = db.insert_user().await;
+        let job_id = insert_job(&db.pool, user_id).await;
+        let state = WorkflowStateRepository::new(db.pool.clone());
+        let inspect_state = WorkflowStateRepository::new(db.pool.clone());
+
+        let workflow = query_workflow();
+        // Contract: exactly one query-bearing node, and its cost is 1.
+        let query_nodes: Vec<_> = workflow
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::ExecuteQuery(_)))
+            .collect();
+        assert_eq!(query_nodes.len(), 1, "grouped summary is a single query");
+        assert_eq!(
+            query_nodes[0].budget.query_cost, 1,
+            "grouped counts cost one query, never N+1"
+        );
+
+        state
+            .install_workflow(job_id, user_id, &workflow)
+            .await
+            .expect("install workflow");
+        let catalog = Arc::new(catalog());
+        let principal = admin_principal(user_id);
+        let executor = FineractDataExecutor::new(
+            fineract,
+            catalog.clone(),
+            allowed_policy(),
+            ExecutionLimits::default(),
+            None,
+            std::collections::BTreeMap::new(),
+        );
+        let node_executor = CapabilityNodeExecutor::new(
+            executor,
+            principal.clone(),
+            catalog.clone(),
+            state.clone(),
+            job_id,
+            workflow.clone(),
+        );
+        let runner = WorkflowRunner::new(state, node_executor, catalog.clone());
+        let outcome = runner
+            .run(job_id, user_id, &principal, &workflow)
+            .await
+            .expect("workflow runs");
+        assert_eq!(outcome, WorkflowRunOutcome::Completed);
+
+        let runs = inspect_state
+            .node_runs(job_id, workflow.id)
+            .await
+            .expect("node runs");
+        let query_runs = runs
+            .iter()
+            .filter(|r| r.node_id.as_str() == "query" && r.status == NodeRunStatus::Completed)
+            .count();
+        assert_eq!(query_runs, 1, "exactly one grouped query executed");
+
+        // Loans are deferred: no approved loan capability exists to substitute.
+        let loan_caps = catalog
+            .capabilities
+            .iter()
+            .filter(|c| c.status == "approved_mvp" && c.domain == "loan")
+            .count();
+        assert_eq!(
+            loan_caps, 0,
+            "loan coverage must be honestly unsupported, not substituted"
+        );
+
+        db.drop_database().await;
+    }
+
+    /// A5 (plan Task 8.1): sensitive account lookup. An unauthorized office and
+    /// a nonexistent account produce the SAME terminal shape (completed, zero
+    /// rows) — indistinguishable — the exact identifier is transient-only, and
+    /// the raw value never lands in any persisted JSON.
+    #[tokio::test]
+    async fn a5_sensitive_account_unauthorized_and_nonexistent_are_indistinguishable() {
+        let Some(fineract) = fineract_pool().await else {
+            return;
+        };
+        let Some(real_account_no) =
+            sqlx::query_scalar::<_, String>("SELECT account_no FROM m_savings_account LIMIT 1")
+                .fetch_optional(&fineract)
+                .await
+                .expect("query fineract for a savings account fixture")
+        else {
+            eprintln!("skipping: no savings accounts in Fineract fixture data");
+            return;
+        };
+
+        // Case A: a REAL account, but the principal's office scope excludes it
+        // (office 999 999 has no accounts) — office scope is bound INSIDE the
+        // SQL, so the row is filtered out server-side.
+        let unauthorized_rows =
+            run_sensitive_lookup(&fineract, &real_account_no, vec![999_999]).await;
+        // Case B: a well-formed but NONEXISTENT account within an authorized
+        // office (must still parse as a sensitive identifier, so it is numeric).
+        let nonexistent_rows = run_sensitive_lookup(&fineract, "999999999999", vec![1]).await;
+
+        assert_eq!(
+            unauthorized_rows, 0,
+            "an out-of-scope account returns no rows (office scope bound in SQL)"
+        );
+        assert_eq!(nonexistent_rows, 0, "a nonexistent account returns no rows");
+        assert_eq!(
+            unauthorized_rows, nonexistent_rows,
+            "unauthorized and nonexistent lookups are indistinguishable"
+        );
+    }
+
+    /// Runs the single-node sensitive `ExecuteQuery` workflow and returns the
+    /// query node's `rows_returned`, asserting the raw account number never
+    /// reaches the persisted node-run JSON.
+    async fn run_sensitive_lookup(
+        fineract: &PgPool,
+        account_no: &str,
+        office_ids: Vec<i64>,
+    ) -> i32 {
+        let db = spawn_db().await;
+        let user_id = db.insert_user().await;
+        let job_id = insert_job(&db.pool, user_id).await;
+        let state = WorkflowStateRepository::new(db.pool.clone());
+        let inspect_state = WorkflowStateRepository::new(db.pool.clone());
+
+        let workflow = sensitive_lookup_workflow();
+        state
+            .install_workflow(job_id, user_id, &workflow)
+            .await
+            .expect("install workflow");
+
+        let catalog = Arc::new(catalog());
+        let mut principal = sensitive_lookup_principal(user_id);
+        principal.office_ids = office_ids.clone();
+        let policy = PolicyDecision {
+            status: PolicyDecisionStatus::Allowed,
+            reason: None,
+            office_ids,
+            can_view_pii: true,
+        };
+
+        let (_, sensitive_identifier) =
+            crate::assistant::understanding::extraction::identifier_intake(&format!(
+                "savings account number {account_no}"
+            ))
+            .into_parts();
+        let sensitive_identifier =
+            sensitive_identifier.expect("marker parses the account number back out");
+
+        let executor = FineractDataExecutor::new(
+            fineract.clone(),
+            catalog.clone(),
+            policy,
+            ExecutionLimits::default(),
+            Some(sensitive_identifier),
+            std::collections::BTreeMap::new(),
+        );
+        let node_executor = CapabilityNodeExecutor::new(
+            executor,
+            principal.clone(),
+            catalog.clone(),
+            state.clone(),
+            job_id,
+            workflow.clone(),
+        );
+        let runner = WorkflowRunner::new(state, node_executor, catalog);
+        let outcome = runner
+            .run(job_id, user_id, &principal, &workflow)
+            .await
+            .expect("workflow runs to completion");
+        assert_eq!(
+            outcome,
+            WorkflowRunOutcome::Completed,
+            "a safe empty result is a completed run, not an error that leaks existence"
+        );
+
+        let runs = inspect_state
+            .node_runs(job_id, workflow.id)
+            .await
+            .expect("node runs");
+        let query_run = runs
+            .iter()
+            .find(|r| r.node_id.as_str() == "query")
+            .expect("query node run");
+        let persisted = serde_json::to_string(&query_run).expect("serialize run");
+        assert!(
+            !persisted.contains(account_no) || account_no.len() < 4,
+            "raw sensitive account number must never be persisted"
+        );
+        let rows = query_run.rows_returned;
+        db.drop_database().await;
+        rows
+    }
+
     #[tokio::test]
     async fn capability_node_executor_completes_a_real_approved_capability() {
         let Some(fineract) = fineract_pool().await else {
