@@ -492,6 +492,32 @@ fn runnable(
         })
 }
 
+/// Whether `node`'s incoming dependencies are satisfied given the completed
+/// runs: the same condition-aware predicate the scheduler uses (OR over
+/// incoming edges, with `Cardinality` arms matched against the branch source),
+/// minus the "not already started" exclusion. The guard (`data.rs`) uses this
+/// so its workflow-step membership check agrees with the scheduler on
+/// OR-convergence — a `CardinalityBranch` `one` arm and a `select -> execute`
+/// resume edge both feed the shared execute node, and only one path completes,
+/// so an all-parents-completed rule would wrongly reject the running arm.
+pub(crate) fn dependencies_satisfied(
+    node: &WorkflowNode,
+    workflow: &ExecutionWorkflow,
+    runs: &[WorkflowNodeRun],
+) -> bool {
+    let completed = completed_ids(runs);
+    let incoming = workflow
+        .edges
+        .iter()
+        .filter(|edge| edge.to == node.id)
+        .collect::<Vec<_>>();
+    incoming.is_empty()
+        || incoming.iter().any(|edge| {
+            completed.contains(&edge.from)
+                && edge_condition_matches(&edge.condition, &edge.from, runs)
+        })
+}
+
 fn edge_condition_matches(
     condition: &EdgeCondition,
     source: &NodeId,

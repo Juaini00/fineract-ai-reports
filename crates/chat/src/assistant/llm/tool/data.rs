@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
@@ -6,9 +6,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::assistant::workflow::contract::{BindingSource, NodeKind};
-use crate::assistant::workflow::{
-    ExecutionWorkflow, NodeId, NodeRunStatus, WorkflowGraph, WorkflowNodeRun,
-};
+use crate::assistant::workflow::{ExecutionWorkflow, NodeId, NodeRunStatus, WorkflowNodeRun};
 use crate::knowledge::model::KnowledgeCatalog;
 use crate::policy::authorization::{
     effective_office_scope, ensure_capability_allowed, ensure_pii_allowed,
@@ -152,18 +150,20 @@ fn runnable_member<'a>(
     runs: &[WorkflowNodeRun],
     node_id: &NodeId,
 ) -> Option<&'a crate::assistant::workflow::WorkflowNode> {
-    let completed: HashSet<_> = runs
+    let already_completed = runs
         .iter()
-        .filter(|run| run.status == NodeRunStatus::Completed)
-        .map(|run| run.node_id.clone())
-        .collect();
-    if !WorkflowGraph::new(workflow)
-        .runnable(&completed)
-        .contains(node_id)
-    {
+        .any(|run| &run.node_id == node_id && run.status == NodeRunStatus::Completed);
+    if already_completed {
         return None;
     }
-    workflow.nodes.iter().find(|node| &node.id == node_id)
+    let node = workflow.nodes.iter().find(|node| &node.id == node_id)?;
+    // Condition-aware (matches the scheduler in `run.rs`): a node is a runnable
+    // member when ANY incoming edge's source has completed and its edge
+    // condition holds — not when ALL parents have completed. A cardinality
+    // branch's `one` arm feeds the execute node while the `many -> select`
+    // resume edge never fires, so an all-parents rule would reject the arm the
+    // runner legitimately scheduled.
+    crate::assistant::workflow::run::dependencies_satisfied(node, workflow, runs).then_some(node)
 }
 fn parameters_have_declared_provenance(
     node: &crate::assistant::workflow::WorkflowNode,

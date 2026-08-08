@@ -274,7 +274,13 @@ pub(super) async fn execute_selected_capability(
         shared_timeout_ms: 30_000,
         shared_row_cap: 1_000,
         max_query_count: 5,
-        max_parallel_queries: 1,
+        // A probe that emits a CardinalityBranch has a static runnable width of
+        // 2 (`max_runnable_width` is cardinality-blind: the not-found terminal
+        // and the SelectEntity clarification both look ready once the branch
+        // completes, even though only one arm ever fires at runtime). Budget 2
+        // so such graphs verify; runtime concurrency is still bounded by the
+        // matched edge condition and per-node budgets.
+        max_parallel_queries: 2,
         max_model_turns: 2,
         max_node_retries: 0,
     };

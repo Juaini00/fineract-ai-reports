@@ -534,10 +534,91 @@ fn acquisition_source(
                         idempotency: Idempotency::ExecuteOnce,
                         retry: RetryPolicy { max_attempts: 0 },
                     });
+                    // Branch on the resolved cardinality instead of resolving
+                    // straight into the execute node (which binds correctly
+                    // only for exactly one candidate): zero -> not-found
+                    // terminal, one -> execute (id bound from the resolver
+                    // slot), many -> SelectEntity clarification over the probe's
+                    // safe labels. ponytail: one probe per compile — a second
+                    // probe-backed param would add a second branch whose `one`
+                    // arm also targets `execute`, and `runnable` fires on ANY
+                    // satisfied incoming edge; no capability declares two today.
+                    let branch_id = NodeId::new(format!("branch_{}", parameter_policy.name))
+                        .map_err(|_| CompileError::InvalidProposal)?;
+                    let not_found_id = NodeId::new(format!("not_found_{}", parameter_policy.name))
+                        .map_err(|_| CompileError::InvalidProposal)?;
+                    let select_id = NodeId::new(format!("select_{}", parameter_policy.name))
+                        .map_err(|_| CompileError::InvalidProposal)?;
+                    let terminal_budget = NodeBudget {
+                        timeout_ms: 0,
+                        row_cap: 0,
+                        query_cost: 0,
+                    };
+                    nodes.push(WorkflowNode {
+                        id: branch_id.clone(),
+                        kind: NodeKind::CardinalityBranch(CardinalityBranchNode {
+                            source: id.clone(),
+                            zero: not_found_id.clone(),
+                            one: execute.clone(),
+                            many: select_id.clone(),
+                        }),
+                        inputs: vec![],
+                        outputs: vec![],
+                        policy: policy(None),
+                        budget: terminal_budget.clone(),
+                        idempotency: Idempotency::Pure,
+                        retry: RetryPolicy { max_attempts: 0 },
+                    });
+                    nodes.push(WorkflowNode {
+                        id: not_found_id.clone(),
+                        kind: NodeKind::Complete(CompleteNode {
+                            terminal: TerminalState::NotFound,
+                        }),
+                        inputs: vec![],
+                        outputs: vec![],
+                        policy: policy(None),
+                        budget: terminal_budget.clone(),
+                        idempotency: Idempotency::Pure,
+                        retry: RetryPolicy { max_attempts: 0 },
+                    });
+                    nodes.push(WorkflowNode {
+                        id: select_id.clone(),
+                        kind: NodeKind::ClarificationInterrupt(ClarificationInterruptNode {
+                            clarification_kind: "select_entity".into(),
+                            option_source: id.clone(),
+                            resume: execute.clone(),
+                        }),
+                        inputs: vec![],
+                        outputs: vec![],
+                        policy: policy(None),
+                        budget: terminal_budget,
+                        idempotency: Idempotency::Replayable,
+                        retry: RetryPolicy { max_attempts: 0 },
+                    });
                     edges.push(WorkflowEdge {
                         from: id.clone(),
-                        to: execute.clone(),
+                        to: branch_id.clone(),
                         condition: EdgeCondition::Always,
+                    });
+                    edges.push(WorkflowEdge {
+                        from: branch_id.clone(),
+                        to: not_found_id,
+                        condition: EdgeCondition::Cardinality(Cardinality::Zero),
+                    });
+                    edges.push(WorkflowEdge {
+                        from: branch_id.clone(),
+                        to: execute.clone(),
+                        condition: EdgeCondition::Cardinality(Cardinality::One),
+                    });
+                    edges.push(WorkflowEdge {
+                        from: branch_id,
+                        to: select_id.clone(),
+                        condition: EdgeCondition::Cardinality(Cardinality::Many),
+                    });
+                    edges.push(WorkflowEdge {
+                        from: select_id,
+                        to: execute.clone(),
+                        condition: EdgeCondition::ClarificationAnswered,
                     });
                     return Ok(BindingSource::AuthorizedDataProbe {
                         node: id,

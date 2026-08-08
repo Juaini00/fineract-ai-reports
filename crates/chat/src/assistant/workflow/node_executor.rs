@@ -16,7 +16,7 @@
 //! `execute()` call so budget/membership checks always see the latest
 //! completed set, including runs completed earlier in the same `run()` loop.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -27,12 +27,14 @@ use uuid::Uuid;
 
 use crate::assistant::llm::tool::data::{DataToolRequest, GuardedDataTools};
 use crate::assistant::llm::tool::data_executor::FineractDataExecutor;
-use crate::assistant::{CLARIFICATION_VERSION_1, ClarificationKind, ClarificationPayload};
+use crate::assistant::{
+    CLARIFICATION_VERSION_1, ClarificationKind, ClarificationOption, ClarificationPayload,
+};
 use crate::knowledge::model::KnowledgeCatalog;
 
-use super::contract::{ExecutionWorkflow, NodeKind, WorkflowNode};
+use super::contract::{ExecutionWorkflow, NodeId, NodeKind, WorkflowNode};
 use super::run::{NodeExecution, WorkflowNodeExecutor};
-use super::state::WorkflowStateRepository;
+use super::state::{NodeRunStatus, WorkflowNodeRun, WorkflowStateRepository};
 
 pub struct CapabilityNodeExecutor {
     guard: GuardedDataTools<FineractDataExecutor>,
@@ -73,21 +75,35 @@ impl WorkflowNodeExecutor for CapabilityNodeExecutor {
         // `WorkflowRunner::resolve_execution` handles `CardinalityBranch`,
         // `Complete`, and `ComposeResult` inline, and routes everything else
         // (`ExecuteQuery`, `ResolveEntity`, `ClarificationInterrupt`) here.
-        if matches!(node.kind, NodeKind::ClarificationInterrupt(_)) {
+        if let NodeKind::ClarificationInterrupt(interrupt) = &node.kind {
             // The caller (`WorkflowRunner::execute_node`) overwrites
             // `workflow_id`/`node_id`/`entity_kind`/`resume_node_id` on the
             // returned payload from the node/graph itself, so only the
-            // user-facing question content needs to be filled in here.
-            let kind = match &node.kind {
-                NodeKind::ClarificationInterrupt(interrupt) => {
-                    match interrupt.clarification_kind.as_str() {
-                        "select_option" => ClarificationKind::SelectOption,
-                        "select_entity" => ClarificationKind::SelectEntity,
-                        "free_text" => ClarificationKind::FreeText,
-                        _ => ClarificationKind::CollectFields,
-                    }
-                }
-                _ => unreachable!(),
+            // user-facing question content and options need to be filled here.
+            let kind = match interrupt.clarification_kind.as_str() {
+                "select_option" => ClarificationKind::SelectOption,
+                "select_entity" => ClarificationKind::SelectEntity,
+                "free_text" => ClarificationKind::FreeText,
+                _ => ClarificationKind::CollectFields,
+            };
+            // A SelectEntity interrupt raised by the "many" arm of a resolver
+            // probe (its `option_source` is the ResolveEntity node) offers the
+            // resolved candidates as safe, PII-aware options so the user can
+            // disambiguate — never a raw id, and names hidden without PII.
+            let options = if matches!(kind, ClarificationKind::SelectEntity) {
+                let runs = self.state.node_runs(self.job_id, self.workflow.id).await?;
+                resolver_entity_options(
+                    &runs,
+                    &interrupt.option_source,
+                    self.principal.can_view_pii,
+                )
+            } else {
+                vec![]
+            };
+            let question = if options.is_empty() {
+                "Additional information is needed to continue.".to_string()
+            } else {
+                "Which one did you mean?".to_string()
             };
             return Ok(NodeExecution::Waiting {
                 clarification: Box::new(ClarificationPayload {
@@ -95,8 +111,8 @@ impl WorkflowNodeExecutor for CapabilityNodeExecutor {
                     id: Uuid::new_v4(),
                     revision: 0,
                     kind,
-                    question: "Additional information is needed to continue.".into(),
-                    options: vec![],
+                    question,
+                    options,
                     fields: vec![],
                     attempt: 0,
                     source_intent: None,
@@ -211,6 +227,57 @@ fn project_resolved_slots(node: &WorkflowNode, output: &mut Value) {
             object.insert(slot.name.clone(), value.clone());
         }
     }
+}
+
+/// Builds safe SelectEntity options from a resolver node's candidate rows.
+/// The id is a stable reference (`client:<id>`), the label is the display name
+/// only when the caller may view PII (otherwise a neutral `Client <id>`
+/// fallback), and the description carries the non-PII office name — no raw
+/// identifiers or unmasked fields are ever exposed. ponytail: keyed to the
+/// client resolver's field names (`client_id`/`client_display_name`/
+/// `office_name`), the only probe-backed resolver today.
+fn resolver_entity_options(
+    runs: &[WorkflowNodeRun],
+    source: &NodeId,
+    can_view_pii: bool,
+) -> Vec<ClarificationOption> {
+    let Some(rows) = runs
+        .iter()
+        .rev()
+        .find(|run| &run.node_id == source && run.status == NodeRunStatus::Completed)
+        .and_then(|run| run.output_json.as_ref())
+        .and_then(|output| output.get("untrusted_tool_output"))
+        .and_then(|output| output.get("rows"))
+        .and_then(Value::as_array)
+    else {
+        return vec![];
+    };
+    let mut seen = HashSet::new();
+    rows.iter()
+        .filter_map(|row| {
+            let client_id = row.get("client_id")?.as_i64()?;
+            if !seen.insert(client_id) {
+                return None;
+            }
+            let label = if can_view_pii {
+                row.get("client_display_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("Client {client_id}"))
+            } else {
+                format!("Client {client_id}")
+            };
+            Some(ClarificationOption {
+                id: format!("client:{client_id}"),
+                label,
+                description: row
+                    .get("office_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                fields: vec![],
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1137,7 +1204,9 @@ mod tests {
             shared_timeout_ms: 30_000,
             shared_row_cap: 1_000,
             max_query_count: 5,
-            max_parallel_queries: 1,
+            // A probe workflow's CardinalityBranch has a static runnable width
+            // of 2 (mirrors the production budget in execution.rs).
+            max_parallel_queries: 2,
             max_model_turns: 2,
             max_node_retries: 0,
         }
@@ -1172,45 +1241,72 @@ mod tests {
     }
 
     /// The compiler turns a `client_id` parameter carrying an
-    /// `authorized_data_probe` into a `ResolveEntity` step feeding the
-    /// `ExecuteQuery` — a Sequential (resolve -> execute) shape — instead of a
-    /// `ClarificationInterrupt`. No database needed: this is a pure compile +
-    /// verify assertion.
+    /// `authorized_data_probe` into `ResolveEntity -> CardinalityBranch ->
+    /// {zero: NotFound, one: ExecuteQuery, many: SelectEntity}` — the
+    /// data-aware Conditional shape — never a straight-to-clarify. No database
+    /// needed: this is a pure compile + verify assertion.
     #[test]
-    fn probe_backed_param_compiles_to_resolve_entity_not_clarification() {
+    fn probe_backed_param_compiles_to_resolve_branch_conditional() {
+        use crate::assistant::workflow::contract::{CompleteNode, TerminalState};
         let catalog = catalog();
         let workflow = compile_pilot(&catalog);
-        assert!(
-            workflow
-                .nodes
-                .iter()
-                .any(|node| matches!(node.kind, NodeKind::ResolveEntity(_))),
-            "client_id probe must compile to a ResolveEntity step"
-        );
-        assert!(
-            workflow
-                .nodes
-                .iter()
-                .any(|node| matches!(node.kind, NodeKind::ExecuteQuery(_))),
-            "the resolved client must feed an ExecuteQuery step"
-        );
-        assert!(
-            !workflow
-                .nodes
-                .iter()
-                .any(|node| matches!(node.kind, NodeKind::ClarificationInterrupt(_))),
-            "a probe-resolvable client_id must not fall through to a clarification"
-        );
+
         let resolve = workflow
             .nodes
             .iter()
             .find(|node| matches!(node.kind, NodeKind::ResolveEntity(_)))
-            .expect("resolve node present");
+            .expect("client_id probe compiles to a ResolveEntity step");
         assert_eq!(
             resolve.policy.required_capability.as_deref(),
             Some(RESOLVER_CAPABILITY_ID),
             "the resolver node must carry its backing capability id for the guarded probe"
         );
+
+        let branch = workflow
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                NodeKind::CardinalityBranch(branch) => Some(branch),
+                _ => None,
+            })
+            .expect("the resolver feeds a CardinalityBranch");
+        assert_eq!(
+            &branch.source, &resolve.id,
+            "the branch decides on the probe"
+        );
+
+        let node = |id: &NodeId| workflow.nodes.iter().find(|node| &node.id == id).unwrap();
+        // zero -> not-found terminal
+        assert!(
+            matches!(
+                node(&branch.zero).kind,
+                NodeKind::Complete(CompleteNode {
+                    terminal: TerminalState::NotFound
+                })
+            ),
+            "zero candidates ends in a NotFound terminal"
+        );
+        // one -> the execute query
+        assert!(
+            matches!(node(&branch.one).kind, NodeKind::ExecuteQuery(_)),
+            "one candidate auto-continues to the ExecuteQuery"
+        );
+        // many -> a SelectEntity clarification sourced from the probe
+        match &node(&branch.many).kind {
+            NodeKind::ClarificationInterrupt(interrupt) => {
+                assert_eq!(interrupt.clarification_kind, "select_entity");
+                assert_eq!(
+                    &interrupt.option_source, &resolve.id,
+                    "SelectEntity options come from the probe candidates"
+                );
+                assert_eq!(
+                    &interrupt.resume, &branch.one,
+                    "answering the clarification resumes into the execute query"
+                );
+            }
+            other => panic!("many arm must be a SelectEntity clarification, got {other:?}"),
+        }
+
         crate::assistant::workflow::verify::verify(
             workflow,
             &pilot_principal(Uuid::nil(), vec![1]),
@@ -1245,11 +1341,11 @@ mod tests {
                 .nodes
                 .iter()
                 .any(|node| matches!(node.kind, NodeKind::ResolveEntity(_)))
-                && !workflow
+                && workflow
                     .nodes
                     .iter()
-                    .any(|node| matches!(node.kind, NodeKind::ClarificationInterrupt(_))),
-            "compiled pilot is a resolve->execute Sequential shape"
+                    .any(|node| matches!(node.kind, NodeKind::CardinalityBranch(_))),
+            "compiled pilot is a resolve -> branch -> execute conditional shape"
         );
 
         let db = spawn_db().await;
@@ -1317,6 +1413,114 @@ mod tests {
                 run.node_id.as_str() == "execute_query" && run.status == NodeRunStatus::Completed
             }),
             "the pilot query executed with client_id bound from the resolver slot"
+        );
+
+        db.drop_database().await;
+    }
+
+    /// End-to-end against live Fineract: an office holding several clients
+    /// drives the probe to the "many" arm — the bounded probe runs first, then
+    /// the run pauses on a SelectEntity clarification whose options are safe
+    /// (no PII leak: with `can_view_pii=false` every label is the neutral
+    /// `Client <id>` fallback, never a display name).
+    #[tokio::test]
+    async fn probe_with_many_candidates_clarifies_with_safe_labels() {
+        let Some(fineract) = fineract_pool().await else {
+            return;
+        };
+        let Some(office_id) = sqlx::query_scalar::<_, i64>(
+            "SELECT office_id FROM m_client GROUP BY office_id HAVING COUNT(*) >= 2 LIMIT 1",
+        )
+        .fetch_optional(&fineract)
+        .await
+        .expect("query fineract for a multi-client office") else {
+            eprintln!("skipping: no office with two or more clients in fixture data");
+            return;
+        };
+
+        let catalog = Arc::new(catalog());
+        let workflow = compile_pilot(&catalog);
+        let db = spawn_db().await;
+        let user_id = db.insert_user().await;
+        let job_id = insert_job(&db.pool, user_id).await;
+        let state = WorkflowStateRepository::new(db.pool.clone());
+        let inspect_state = WorkflowStateRepository::new(db.pool.clone());
+        state
+            .install_workflow(job_id, user_id, &workflow)
+            .await
+            .expect("install workflow");
+
+        // can_view_pii = false: the SelectEntity labels must not leak names.
+        let mut principal = pilot_principal(user_id, vec![office_id]);
+        principal.can_view_pii = false;
+        let policy = PolicyDecision {
+            status: PolicyDecisionStatus::Allowed,
+            reason: None,
+            office_ids: vec![office_id],
+            can_view_pii: false,
+        };
+        let executor = FineractDataExecutor::new(
+            fineract,
+            catalog.clone(),
+            policy,
+            ExecutionLimits::default(),
+            None,
+            std::collections::BTreeMap::new(),
+        );
+        let node_executor = CapabilityNodeExecutor::new(
+            executor,
+            principal.clone(),
+            catalog.clone(),
+            state.clone(),
+            job_id,
+            workflow.clone(),
+        );
+        let runner = WorkflowRunner::new(state, node_executor, catalog);
+
+        let outcome = runner
+            .run(job_id, user_id, &principal, &workflow)
+            .await
+            .expect("probe workflow runs");
+        assert!(
+            matches!(outcome, WorkflowRunOutcome::WaitingForUserInput { .. }),
+            "several clients in scope -> SelectEntity clarification, got {outcome:?}"
+        );
+
+        let runs = inspect_state
+            .node_runs(job_id, workflow.id)
+            .await
+            .expect("node runs");
+        let resolve_run = runs
+            .iter()
+            .find(|run| {
+                run.node_id.as_str() == "resolve_client_id"
+                    && run.status == NodeRunStatus::Completed
+            })
+            .expect("the bounded probe ran before clarifying");
+        assert!(
+            resolve_run.rows_returned >= 2,
+            "the office holds several candidate clients"
+        );
+
+        let payload = inspect_state
+            .load_pending_clarification(job_id)
+            .await
+            .expect("load clarification")
+            .expect("a clarification is pending");
+        assert_eq!(
+            payload.kind,
+            crate::assistant::ClarificationKind::SelectEntity
+        );
+        assert!(
+            payload.options.len() >= 2,
+            "each candidate client is offered as an option"
+        );
+        assert!(
+            payload
+                .options
+                .iter()
+                .all(|option| option.label.starts_with("Client ")),
+            "without PII, labels must be the neutral Client <id> fallback, never a display name"
         );
 
         db.drop_database().await;
