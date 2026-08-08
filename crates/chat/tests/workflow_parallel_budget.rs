@@ -451,3 +451,133 @@ async fn budget_exhaustion_stops_the_run_before_the_over_budget_node_executes() 
     );
     db.drop_database().await;
 }
+
+/// SI-10 (shared row budget): a node whose declared `row_cap` exceeds the
+/// workflow's `shared_row_cap` terminates the run before it executes. Together
+/// with `budget_exhaustion_...` (query count) and the timeout test below, this
+/// covers the three-dimensional shared-budget `would_exceed` guard.
+#[tokio::test]
+async fn si10_shared_row_budget_terminates_the_run_before_execution() {
+    let db = spawn_db().await;
+    let user_id = db.insert_user().await;
+    let job_id = insert_job(&db.pool, user_id).await;
+    let state = WorkflowStateRepository::new(db.pool.clone());
+
+    let mut greedy = query_node("greedy", 0);
+    greedy.budget.row_cap = 100; // declared far above the shared cap
+    let mut budgets = workflow_budgets(1, 10);
+    budgets.shared_row_cap = 10;
+    let workflow = build_workflow(
+        vec![greedy, complete_node("finish")],
+        vec![edge("greedy", "finish")],
+        budgets,
+    );
+    state
+        .install_workflow(job_id, user_id, &workflow)
+        .await
+        .expect("install workflow");
+
+    let invoked = Arc::new(Mutex::new(Vec::new()));
+    let executor = LoggingExecutor {
+        invoked: invoked.clone(),
+    };
+    let principal = admin_principal(user_id);
+    let runner = WorkflowRunner::new(state, executor, Arc::new(catalog()));
+    let outcome = runner
+        .run(job_id, user_id, &principal, &workflow)
+        .await
+        .expect("run executes");
+    assert_eq!(outcome, WorkflowRunOutcome::Failed);
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "an over-row-budget node must never reach the executor"
+    );
+    db.drop_database().await;
+}
+
+/// SI-10 (shared timeout budget): a node whose declared `timeout_ms` exceeds
+/// the workflow's `shared_timeout_ms` terminates the run before it executes.
+#[tokio::test]
+async fn si10_shared_timeout_budget_terminates_the_run_before_execution() {
+    let db = spawn_db().await;
+    let user_id = db.insert_user().await;
+    let job_id = insert_job(&db.pool, user_id).await;
+    let state = WorkflowStateRepository::new(db.pool.clone());
+
+    let mut slow = query_node("slow", 0);
+    slow.budget.timeout_ms = 100_000; // declared far above the shared budget
+    let mut budgets = workflow_budgets(1, 10);
+    budgets.shared_timeout_ms = 10;
+    let workflow = build_workflow(
+        vec![slow, complete_node("finish")],
+        vec![edge("slow", "finish")],
+        budgets,
+    );
+    state
+        .install_workflow(job_id, user_id, &workflow)
+        .await
+        .expect("install workflow");
+
+    let invoked = Arc::new(Mutex::new(Vec::new()));
+    let executor = LoggingExecutor {
+        invoked: invoked.clone(),
+    };
+    let principal = admin_principal(user_id);
+    let runner = WorkflowRunner::new(state, executor, Arc::new(catalog()));
+    let outcome = runner
+        .run(job_id, user_id, &principal, &workflow)
+        .await
+        .expect("run executes");
+    assert_eq!(outcome, WorkflowRunOutcome::Failed);
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "an over-timeout-budget node must never reach the executor"
+    );
+    db.drop_database().await;
+}
+
+/// SI-6: every workflow node independently passes policy — a batch preflight
+/// cannot substitute for per-node enforcement. The first node runs; the second
+/// node, whose policy requires a capability this principal lacks, is blocked
+/// before it reaches the executor (proving the check is per-node, not a
+/// one-shot preflight that would have let both through or neither).
+#[tokio::test]
+async fn si6_per_node_policy_blocks_the_second_node_after_the_first_runs() {
+    let db = spawn_db().await;
+    let user_id = db.insert_user().await;
+    let job_id = insert_job(&db.pool, user_id).await;
+    let state = WorkflowStateRepository::new(db.pool.clone());
+
+    // `second` requires an approved capability the principal is not granted.
+    let mut second = query_node("second", 0);
+    second.policy.required_capability = Some("client_name_lookup".into());
+    let workflow = build_workflow(
+        vec![query_node("first", 0), second, complete_node("finish")],
+        vec![edge("first", "second"), edge("second", "finish")],
+        workflow_budgets(1, 10),
+    );
+    state
+        .install_workflow(job_id, user_id, &workflow)
+        .await
+        .expect("install workflow");
+
+    let invoked = Arc::new(Mutex::new(Vec::new()));
+    let executor = LoggingExecutor {
+        invoked: invoked.clone(),
+    };
+    let mut principal = admin_principal(user_id);
+    principal.capability_ids = vec![]; // lacks client_name_lookup
+    let runner = WorkflowRunner::new(state, executor, Arc::new(catalog()));
+    let result = runner.run(job_id, user_id, &principal, &workflow).await;
+
+    assert!(
+        result.is_err(),
+        "the second node's per-node policy check must block the run"
+    );
+    assert_eq!(
+        *invoked.lock().unwrap(),
+        vec!["first".to_string()],
+        "the first node runs; the disallowed second node never reaches the executor"
+    );
+    db.drop_database().await;
+}

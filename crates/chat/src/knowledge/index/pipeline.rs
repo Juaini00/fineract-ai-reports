@@ -154,3 +154,34 @@ fn dedup(docs: Vec<CatalogDocument>) -> Vec<CatalogDocument> {
         .filter(|doc| seen.insert(format!("{}:{}", doc.source_type, doc.body)))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// SI-9: Fineract transactional rows are never indexed into vector storage.
+    /// `reject_client_rows` refuses any path that looks like a client-row or
+    /// export dump, while ordinary catalog knowledge paths pass through.
+    #[test]
+    fn reject_client_rows_refuses_fineract_row_and_export_paths() {
+        for forbidden in [
+            "knowledge/fineract_rows/clients.yaml",
+            "data/export/clients.csv",
+            "dump/client_data.json",
+            "tmp/row_data.parquet",
+        ] {
+            assert!(
+                reject_client_rows(Path::new(forbidden)).is_err(),
+                "must reject Fineract row/export path: {forbidden}"
+            );
+        }
+        // A normal catalog knowledge path is accepted.
+        assert!(
+            reject_client_rows(Path::new(
+                "knowledge/capabilities/savings/activity_list.yaml"
+            ))
+            .is_ok()
+        );
+    }
+}
