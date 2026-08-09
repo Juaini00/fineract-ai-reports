@@ -8,3 +8,6 @@ CLAUDE.md
 .worktrees/
 .pi
 .pi-subagents
+.mcp.json
+prompt.txt
+.ssh_script.sh

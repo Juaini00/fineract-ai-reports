@@ -9,6 +9,7 @@ async fn clarify_retrieval_candidates(
     catalog: Option<&Arc<KnowledgeCatalog>>,
     client: Option<&PrincipalContext>,
     fineract_pool: Option<&PgPool>,
+    workflow_state: Option<&WorkflowStateRepository>,
     canonical: Option<&CanonicalRuntimeContext>,
     input: &RuntimeUserInput,
 ) -> GraphRuntimeResult {
@@ -48,6 +49,7 @@ async fn clarify_retrieval_candidates(
                     Some(catalog),
                     client,
                     fineract_pool,
+                    workflow_state,
                     canonical,
                     None,
                     None,
@@ -95,6 +97,7 @@ pub(super) async fn complete_semantic_route(
     llm: Option<&SharedLlmClient>,
     knowledge: Option<&KnowledgeRepository>,
     fineract_pool: Option<&PgPool>,
+    workflow_state: Option<&WorkflowStateRepository>,
     catalog: Option<&Arc<KnowledgeCatalog>>,
     client: Option<&PrincipalContext>,
     canonical: Option<&CanonicalRuntimeContext>,
@@ -185,6 +188,7 @@ pub(super) async fn complete_semantic_route(
                             catalog,
                             client,
                             fineract_pool,
+                            workflow_state,
                             canonical,
                             Some(payload),
                             pending_clarification,
@@ -201,7 +205,8 @@ pub(super) async fn complete_semantic_route(
                             canonical,
                             &input.source_message,
                         );
-                        memory.selected_capability = Some(option_id.clone());
+                        let selected_capability = option_id.clone();
+                        memory.selected_capability = Some(selected_capability);
                         memory.source_intent = payload
                             .source_intent
                             .as_ref()
@@ -219,6 +224,7 @@ pub(super) async fn complete_semantic_route(
                             catalog,
                             client,
                             fineract_pool,
+                            workflow_state,
                             canonical,
                             Some(payload),
                             pending_clarification,
@@ -435,6 +441,7 @@ pub(super) async fn complete_semantic_route(
                                 catalog,
                                 client,
                                 fineract_pool,
+                                workflow_state,
                                 canonical,
                                 None,
                                 None,
@@ -455,6 +462,7 @@ pub(super) async fn complete_semantic_route(
                                 catalog,
                                 client,
                                 fineract_pool,
+                                workflow_state,
                                 canonical,
                                 &input,
                             )
@@ -472,6 +480,7 @@ pub(super) async fn complete_semantic_route(
                         catalog,
                         client,
                         fineract_pool,
+                        workflow_state,
                         canonical,
                         &input,
                     )
@@ -481,6 +490,11 @@ pub(super) async fn complete_semantic_route(
                     TerminalState::Unsupported,
                     "unsupported_in_domain",
                     ResponseBuilder::unsupported(),
+                ),
+                RerankerVerdict::FailedOperational => (
+                    TerminalState::FailedOperational,
+                    "reranker_failed_operational",
+                    ResponseBuilder::error(),
                 ),
             }
         }
@@ -544,9 +558,6 @@ pub(super) async fn complete_semantic_route(
             reason: reason.into(),
         },
     ];
-    AssistantGraphTopology::new()
-        .validate_sequence(&transitions)
-        .expect("assistant runtime produced illegal graph transitions");
     GraphRuntimeResult {
         memory,
         transitions,

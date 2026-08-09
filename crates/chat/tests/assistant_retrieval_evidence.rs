@@ -138,6 +138,8 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
             query_id: "q".into(),
             dataset_recipe: None,
             output_mode: "single".into(),
+            kind: Default::default(),
+            member_capability_ids: vec![],
             request_shape: RequestShape::default(),
             display_name: Some("Savings deposit total".into()),
             description: Some("deposit total".into()),
@@ -237,7 +239,7 @@ async fn shape_mismatch_no_longer_empties_random_clients_but_still_narrows_offic
         "expected organization_office_savings_summary among {:?}",
         evidence
             .iter()
-            .map(|item| item.capability_id.as_str())
+            .map(|item| &*item.capability_id)
             .collect::<Vec<_>>()
     );
 }

@@ -73,8 +73,11 @@ pub fn resolve_recipe(
             (None, Some(value)) => value,
             _ => unreachable!("validated exactly one recipe value source"),
         };
-        if !valid_filter_value(&slot.kind, mapping.operator, value) {
-            bail!("dataset filter {} has invalid value type", slot.id);
+        if !valid_filter_value(&slot.kind, mapping.operator, value, shape.row_cap) {
+            bail!(
+                "dataset filter {} has invalid value type or exceeds the shape row cap",
+                slot.id
+            );
         }
         filters.push(DatasetFilterSelection {
             filter_id: slot.id.clone(),
@@ -102,13 +105,25 @@ pub fn resolve_recipe(
     })
 }
 
-fn valid_filter_value(kind: &str, operator: FilterOperator, value: &Value) -> bool {
-    if operator == FilterOperator::Between {
-        return value.as_array().is_some_and(|values| {
+fn valid_filter_value(
+    kind: &str,
+    operator: FilterOperator,
+    value: &Value,
+    row_cap: Option<u32>,
+) -> bool {
+    match operator {
+        FilterOperator::Between => value.as_array().is_some_and(|values| {
             values.len() == 2 && values.iter().all(|value| valid_scalar(kind, value))
-        });
+        }),
+        FilterOperator::In => row_cap.is_some_and(|cap| {
+            value.as_array().is_some_and(|values| {
+                !values.is_empty()
+                    && values.len() <= cap as usize
+                    && values.iter().all(|value| valid_scalar(kind, value))
+            })
+        }),
+        _ => valid_scalar(kind, value),
     }
-    valid_scalar(kind, value)
 }
 
 fn valid_scalar(kind: &str, value: &Value) -> bool {
@@ -148,6 +163,7 @@ mod tests {
                 input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             }],
+            entity: None,
             filters_exempt: Vec::new(),
             shapes: vec![ShapeOption {
                 id: "account_match".into(),
@@ -158,6 +174,11 @@ mod tests {
                     output: RequestOutput::Lookup,
                     pii: RequestPii::ClientIdentity,
                 },
+                role: Default::default(),
+                expected_cardinality: None,
+                row_cap: None,
+                grouped_by: None,
+                produces: Vec::new(),
                 fragment: Some("queries/datasets/savings/account_activity.frag.sql".into()),
                 order_by: vec![],
                 output_fields: Vec::new(),
@@ -232,5 +253,29 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn bounds_in_filter_values_by_the_shape_row_cap() {
+        let mut dataset = dataset();
+        dataset.filters[0].kind = "integer".into();
+        dataset.filters[0].operators = vec![FilterOperator::In];
+        dataset.shapes[0].row_cap = Some(2);
+        let mut recipe = recipe();
+        recipe.filters[0].operator = FilterOperator::In;
+
+        let accepted = resolve_recipe(
+            &dataset,
+            &recipe,
+            &serde_json::json!({"latest_transaction_amount": [1, 2]}),
+        );
+        assert!(accepted.is_ok());
+
+        let oversized = resolve_recipe(
+            &dataset,
+            &recipe,
+            &serde_json::json!({"latest_transaction_amount": [1, 2, 3]}),
+        );
+        assert!(oversized.is_err());
     }
 }

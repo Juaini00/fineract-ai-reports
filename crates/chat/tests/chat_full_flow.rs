@@ -20,8 +20,7 @@
 
 mod common;
 
-use app_core::config::CanonicalGatewayMode;
-use common::{TestApp, spawn_app, spawn_app_with_canonical_mode};
+use common::{TestApp, spawn_app};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -41,7 +40,7 @@ const CAPS: &[&str] = &[
 
 #[tokio::test(flavor = "multi_thread")]
 async fn canonical_shadow_writes_job_scoped_baseline_without_changing_response() {
-    let app = spawn_app_with_canonical_mode(CanonicalGatewayMode::Shadow).await;
+    let app = spawn_app().await;
     let key = app.provision_wildcard_api_key(true).await;
     let session_id = create_session(&app, &key.raw, "canonical shadow").await;
     let job_id = create_job(

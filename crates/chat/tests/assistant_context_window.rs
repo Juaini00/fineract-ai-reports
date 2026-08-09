@@ -122,5 +122,9 @@ fn pending_clarification(id: Uuid) -> ClarificationPayload {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }

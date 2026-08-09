@@ -82,6 +82,15 @@ pub struct ClarificationView {
     pub fields: Vec<ClarificationField>,
     #[serde(default)]
     pub allow_free_text: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub workflow_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_kind: Option<String>,
 }
 
 impl ClarificationView {
@@ -176,6 +185,15 @@ pub struct ClarificationPayload {
     pub allow_free_text: bool,
     #[serde(default)]
     pub is_missing_execution_parameters: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub workflow_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_kind: Option<String>,
 }
 
 impl ClarificationPayload {
@@ -198,6 +216,10 @@ impl ClarificationPayload {
                 .collect(),
             fields: self.fields.clone(),
             allow_free_text: self.allow_free_text,
+            workflow_id: self.workflow_id,
+            node_id: self.node_id.clone(),
+            resume_node_id: self.resume_node_id.clone(),
+            entity_kind: self.entity_kind.clone(),
         }
     }
 }

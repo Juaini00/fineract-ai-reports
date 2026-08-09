@@ -4,9 +4,7 @@ use anyhow::{Context, ensure};
 use app_core::config::AppConfig;
 use chat::assistant::{
     AssistantIntentKind, ContextWindow, LlmTraceRepository, SemanticRouter,
-    llm::{
-        rig_client::RigLlmClient, traced_client::LlmTraceContext, traced_client::TracedLlmClient,
-    },
+    llm::{provider::LlmProvider, traced_client::LlmTraceContext, traced_client::TracedLlmClient},
 };
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions, types::Json};
@@ -25,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     upsert_test_api_key(&pool).await?;
 
-    let llm = Arc::new(RigLlmClient::new(&config.llm, Some(&config.embedding))?);
+    let llm = Arc::new(LlmProvider::new(&config.llm, Some(&config.embedding))?);
     let traced = Arc::new(TracedLlmClient::new(
         llm,
         LlmTraceRepository::new(pool.clone()),

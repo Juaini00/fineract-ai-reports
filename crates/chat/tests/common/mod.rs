@@ -17,8 +17,8 @@ use std::net::SocketAddr;
 use app_core::api::AppState;
 use app_core::auth::{api_key, token::TokenService};
 use app_core::config::{
-    AppConfig, AuthConfig, CanonicalGatewayMode, CatalogConfig, LlmConfig, QueryConfig,
-    RedisConfig, ServerConfig, VoyageAiConfig,
+    AppConfig, AuthConfig, CatalogConfig, LlmConfig, QueryConfig, RedisConfig, ServerConfig,
+    VoyageAiConfig,
 };
 use app_core::db::DatabasePools;
 use chrono::{Duration, Utc};
@@ -346,29 +346,57 @@ impl Drop for TestApp {
     }
 }
 
-/// Spin up a fresh app DB, run migrations, boot axum on `127.0.0.1:0`.
-pub async fn spawn_app() -> TestApp {
-    spawn_app_with_canonical_mode(CanonicalGatewayMode::Disabled).await
+/// Run an async test body on a runtime whose worker threads have a 16 MB stack.
+///
+/// The chat execution pipeline's future is deep: `JobMemory`, `ExecutionWorkflow`,
+/// and large JSON all live in linear (non-recursive) async poll frames, overflowing
+/// tokio's default 2 MB worker stack whenever a request actually executes a
+/// workflow. `main.rs` builds the production runtime with a 16 MB stack for this
+/// reason; `#[tokio::test]` does not inherit that, so execution-path integration
+/// tests must run through this helper instead of the attribute macro.
+/// ponytail: 16 MB mirrors main.rs; bump both together if a deeper path appears.
+pub fn block_on_big_stack<F>(fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("build big-stack test runtime")
+        .block_on(fut)
 }
 
-pub async fn spawn_app_with_canonical_mode(mode: CanonicalGatewayMode) -> TestApp {
-    spawn_app_with_options("__ai_report_test_llm__", mode).await
+/// Spin up a fresh app DB, run migrations, boot axum on `127.0.0.1:0`.
+pub async fn spawn_app() -> TestApp {
+    spawn_app_with_options("__ai_report_test_llm__").await
 }
 
 pub async fn spawn_app_with_llm_api_key(llm_api_key: &str) -> TestApp {
-    spawn_app_with_options(llm_api_key, CanonicalGatewayMode::Disabled).await
+    spawn_app_with_options(llm_api_key).await
 }
 
-async fn spawn_app_with_options(
-    llm_api_key: &str,
-    canonical_gateway_mode: CanonicalGatewayMode,
-) -> TestApp {
+async fn spawn_app_with_options(llm_api_key: &str) -> TestApp {
     let admin_db_url = std::env::var("TEST_ADMIN_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://root:password@127.0.0.1:5432/postgres".into());
     let fineract_db_url = std::env::var("TEST_FINERACT_DATABASE_URL").unwrap_or_else(|_| {
         std::env::var("FINERACT_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://root:password@127.0.0.1:5432/fineract_default".into())
     });
+
+    // Real embedding retrieval requires a Voyage key. When `VOYAGEAI_API_KEY`
+    // is set in the environment, wire the live client so full-stack tests can
+    // bootstrap `ChatAppState` (which syncs the vector index on boot). When it
+    // is absent (default CI), keep the empty key + unreachable URL — the same
+    // behaviour these tests had before, so nothing that ran without a key
+    // starts requiring one.
+    let voyage_api_key = std::env::var("VOYAGEAI_API_KEY").unwrap_or_default();
+    let voyage_base_url = if voyage_api_key.is_empty() {
+        "https://example.invalid".to_string()
+    } else {
+        std::env::var("VOYAGEAI_BASE_URL").unwrap_or_else(|_| "https://api.voyageai.com/v1".into())
+    };
 
     // Create per-test app DB
     let db_name = format!("ai_report_test_{}", Uuid::new_v4().simple());
@@ -446,8 +474,8 @@ async fn spawn_app_with_options(
             dimensions: 1024,
         },
         voyage_ai: VoyageAiConfig {
-            api_key: String::new(),
-            base_url: "https://example.invalid".into(),
+            api_key: voyage_api_key.clone(),
+            base_url: voyage_base_url.clone(),
             embedding_model: "voyage-3-large".into(),
             timeout_ms: 5000,
             embedding_dimensions: 1024,
@@ -460,7 +488,6 @@ async fn spawn_app_with_options(
         },
         chat_features: app_core::config::ChatFeatureConfig {
             lqr_enabled: false,
-            canonical_gateway_mode,
             context_soft_token_limit: 6000,
             context_hard_token_limit: 8000,
             context_max_recent_messages: 12,

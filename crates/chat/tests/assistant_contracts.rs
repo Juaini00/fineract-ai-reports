@@ -100,6 +100,10 @@ fn assistant_contracts_representative_round_trip() {
             source_intent: Some(source.clone()),
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         },
         source_intent: Some(source),
         created_at: None,
@@ -144,6 +148,7 @@ fn assistant_contracts_representative_round_trip() {
             label: None,
         }],
         rendered_markdown: Some("|Name|".into()),
+        workflow: None,
     };
     assert!(
         serde_json::to_string(&response)
@@ -223,6 +228,10 @@ fn clarification_view_select_option_round_trips_conditional_fields() {
         }],
         fields: Vec::new(),
         allow_free_text: true,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
     let parsed: ClarificationView =
         serde_json::from_value(serde_json::to_value(&view).unwrap()).unwrap();
@@ -242,6 +251,45 @@ fn old_assistant_response_json_deserializes_without_clarification() {
 }
 
 #[test]
+fn assistant_response_workflow_field_is_absent_when_none_and_additive_when_present() {
+    let response = AssistantResponse {
+        response_type: AssistantResponseType::Table,
+        title: None,
+        message: "Report".into(),
+        sections: Vec::new(),
+        table: None,
+        cards: Vec::new(),
+        options: Vec::new(),
+        clarification: None,
+        warnings: Vec::new(),
+        actions: Vec::new(),
+        evidence_refs: Vec::new(),
+        rendered_markdown: None,
+        workflow: None,
+    };
+    // Gate 6: FE response snapshot unchanged with workflow fields absent. A
+    // legacy pre-migration client sees no `workflow` key at all, not `null`.
+    let serialized = serde_json::to_value(&response).unwrap();
+    assert!(serialized.as_object().unwrap().get("workflow").is_none());
+    let round_tripped: AssistantResponse = serde_json::from_value(serialized).unwrap();
+    assert_eq!(round_tripped, response);
+
+    let with_workflow = AssistantResponse {
+        workflow: Some(WorkflowResponseMeta {
+            id: Uuid::nil(),
+            node_id: "compose".into(),
+            steps_executed: 3,
+            partial: false,
+        }),
+        ..response
+    };
+    let serialized = serde_json::to_value(&with_workflow).unwrap();
+    assert!(serialized.as_object().unwrap().contains_key("workflow"));
+    let round_tripped: AssistantResponse = serde_json::from_value(serialized).unwrap();
+    assert_eq!(round_tripped, with_workflow);
+}
+
+#[test]
 fn clarification_view_validation_rejects_invalid_shapes() {
     let base = ClarificationView {
         version: CLARIFICATION_VERSION_1,
@@ -252,6 +300,10 @@ fn clarification_view_validation_rejects_invalid_shapes() {
         options: Vec::new(),
         fields: Vec::new(),
         allow_free_text: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
     assert!(base.validate().is_err());
     let collect = ClarificationView {

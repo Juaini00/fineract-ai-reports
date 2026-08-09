@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use crate::{
     assistant::{
         AssistantIntent, DeterministicExtraction, PlannerInputSnapshot,
-        execution::plan::{EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan},
+        execution::plan::{EvidenceEvaluation, ExecutionPlan, RetrievalPlan},
     },
     knowledge::{catalog::parameter_policy::EvaluationContext, model::KnowledgeCatalog},
 };
@@ -81,7 +81,6 @@ pub(super) fn plan_selected_capability_verified(
         .transpose()?;
 
     Ok(ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: capability.id.clone(),
         query_id: query.id.clone(),
@@ -137,7 +136,6 @@ pub(super) fn plan_from_snapshot(
         })
         .transpose()?;
     Ok(ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: capability.id.clone(),
         query_id: query.id.clone(),

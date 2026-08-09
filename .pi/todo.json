@@ -49,7 +49,17 @@
 			"createdAt": "2026-07-23T08:56:25.306Z",
 			"updatedAt": "2026-07-23T08:57:07.942Z",
 			"blockedBy": null
+		},
+		{
+			"id": "T-006",
+			"text": "Phase 7: delete superseded legacy runtime paths, atomic planner, state/presentation code, then update tests/docs and pass deletion gates",
+			"status": "in_progress",
+			"priority": "high",
+			"assignee": "senior-dev",
+			"createdAt": "2026-08-05T09:08:00.000Z",
+			"updatedAt": "2026-08-05T09:16:00.000Z",
+			"blockedBy": null
 		}
 	],
-	"counter": 5
+	"counter": 6
 }

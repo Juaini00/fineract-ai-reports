@@ -1,6 +1,6 @@
 //! End-to-end pipeline: Layer 1 gateway → Layer 2 resolver → Layer 3 decider.
 //!
-//! Ready to be dropped into `AssistantGraphRuntime` (spec §7 Task 7.1); the
+//! Consumed by the workflow runtime entry (run_with_router); the
 //! runtime wiring is a separate step deliberately kept out of this bundle so
 //! Bundle 12's layers are reviewable in isolation.
 //!
@@ -83,7 +83,7 @@ pub async fn run(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let scores: Vec<f32> = sorted.iter().map(|c| c.confidence).collect();
-    let capability_ids: Vec<&str> = sorted.iter().map(|c| c.capability_id.as_str()).collect();
+    let capability_ids: Vec<&str> = sorted.iter().map(|c| c.capability_id.as_ref()).collect();
     let classification = decide_from_scores(&catalog.classification, &scores, &capability_ids);
     let top_capability = capability_ids.first().and_then(|top_id| {
         catalog

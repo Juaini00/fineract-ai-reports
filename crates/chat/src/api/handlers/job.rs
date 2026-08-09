@@ -316,6 +316,9 @@ pub async fn respond(
             job_id,
             clarification_id: request.clarification_id,
             clarification_revision: request.clarification_revision,
+            workflow_id: request.workflow_id,
+            node_id: request.node_id,
+            workflow_revision: request.workflow_revision,
             selected_option_id: request.option_id,
             source_message: request.message,
             answers: request.answers,
@@ -323,6 +326,14 @@ pub async fn respond(
         .await
         .map_err(ApiError::internal)?;
     let message = match outcome {
+        RespondToChatJobOutcome::WorkflowResumed => {
+            info!(job_id = %job_id, "workflow response accepted");
+            return Ok(response::success(
+                StatusCode::CREATED,
+                serde_json::json!({ "status": "queued" }),
+            )
+            .into_response());
+        }
         RespondToChatJobOutcome::Inserted(message) => message,
         RespondToChatJobOutcome::NotFound => return Err(ApiError::not_found("chat job not found")),
         RespondToChatJobOutcome::NotActive => {

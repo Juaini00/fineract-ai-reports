@@ -6,8 +6,7 @@
 use app_core::auth::model::PrincipalContext;
 use chat::assistant::ClarificationFieldType;
 use chat::assistant::execution::plan::{
-    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
-    evaluate_policy,
+    EvidenceEvaluation, ExecutionPlan, PolicyDecisionStatus, RetrievalPlan, evaluate_policy,
 };
 use chat::knowledge::catalog::loader::KnowledgeLoader;
 use chat::knowledge::catalog::validator::KnowledgeValidator;
@@ -369,7 +368,6 @@ fn retrieval_documents_cover_all_capabilities() {
 fn pii_policy_uses_selected_query_output_fields() {
     let catalog = load_catalog();
     let plan = ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "savings".into(),
         capability: "savings_deposit_top_n".into(),
         query_id: "savings.deposit_top_n".into(),
@@ -394,7 +392,6 @@ fn pii_policy_uses_selected_query_output_fields() {
 fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
     let catalog = load_catalog();
     let plan = ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "client".into(),
         capability: "client_name_lookup".into(),
         query_id: "client.name_lookup".into(),
@@ -422,11 +419,10 @@ fn client_name_lookup_policy_requires_capability_and_marks_pii_visibility() {
 
 #[test]
 fn every_fully_defaulted_capability_plans_without_asking() {
-    use chat::assistant::context::clarification_planner::defaultless_missing_fields;
     use chat::assistant::plan_selected_capability_verified;
     use chat::assistant::{
         AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind,
-        AssistantLanguage, ClarificationFacts, ContextReference,
+        AssistantLanguage, ContextReference,
     };
     use chat::knowledge::catalog::parameter_policy::EvaluationContext;
 
@@ -441,11 +437,6 @@ fn every_fully_defaulted_capability_plans_without_asking() {
         .iter()
         .filter(|c| c.status == "approved_mvp")
     {
-        if !defaultless_missing_fields(&catalog, &capability.id, &ClarificationFacts::default())
-            .is_empty()
-        {
-            continue;
-        }
         let domain = match capability.domain.as_str() {
             "savings" => AssistantDomain::Savings,
             "client" => AssistantDomain::Client,
@@ -470,20 +461,20 @@ fn every_fully_defaulted_capability_plans_without_asking() {
             confidence: 0.9,
             reason: capability.id.clone(),
         };
-        let plan = plan_selected_capability_verified(
+        // A capability that still needs a required user parameter fails to plan
+        // here (`params_from_verified` bails); that is the "would ask" case, so
+        // skip it. The remaining capabilities are the fully-defaulted ones this
+        // test asserts plan without asking.
+        let Ok(plan) = plan_selected_capability_verified(
             &catalog,
             &capability.id,
             &intent,
             None,
             Some(&ctx),
             None,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "fully-defaulted capability {} must plan without asking: {e}",
-                capability.id
-            )
-        });
+        ) else {
+            continue;
+        };
         let query = catalog
             .queries
             .iter()

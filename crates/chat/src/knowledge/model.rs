@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::assistant::intent::RequestShape;
 use crate::assistant::{ClarificationFieldType, ClarificationValidation, ConstraintField};
@@ -286,6 +287,16 @@ pub struct CapabilityGuards {
     pub max_date_range_days: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityKind {
+    #[default]
+    Terminal,
+    Resolver,
+    Probe,
+    Composite,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CapabilityKnowledge {
     pub id: String,
@@ -294,6 +305,14 @@ pub struct CapabilityKnowledge {
     pub query_id: String,
     pub output_mode: String,
     pub request_shape: RequestShape,
+
+    #[serde(default)]
+    pub kind: CapabilityKind,
+
+    /// Component capability ids for a composite workflow. Ignored for all
+    /// non-composite kinds.
+    #[serde(default, rename = "members")]
+    pub member_capability_ids: Vec<String>,
 
     #[serde(default)]
     pub display_name: Option<String>,
@@ -395,7 +414,7 @@ pub struct QueryParameter {
     pub source: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Sensitivity {
     PublicBusiness,

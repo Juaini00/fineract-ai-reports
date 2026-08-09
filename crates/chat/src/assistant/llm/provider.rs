@@ -1,16 +1,25 @@
-use std::time::{Duration, Instant};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use app_core::config::{EmbeddingConfig, LlmConfig, llm_pricing};
 use async_trait::async_trait;
-use serde::Deserialize;
+use rig_core::{
+    client::{CompletionClient, EmbeddingsClient},
+    completion::Prompt,
+    embeddings::EmbeddingModel,
+    providers::openai,
+};
+use schemars::Schema;
 use serde_json::{Value, json};
 
 use super::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage};
 
 /// First backoff step; doubles per attempt.
 const RETRY_BASE_DELAY_MS: u64 = 500;
-/// Ceiling for a single wait, including a provider-supplied `Retry-After`.
+/// Ceiling for a single wait.
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(8);
 /// Ceiling for all waiting inside one call, so a struggling provider cannot
 /// stretch a background job into minutes of sleeping.
@@ -19,20 +28,25 @@ const RETRY_BUDGET: Duration = Duration::from_secs(45);
 /// lockstep and re-overload the provider.
 const RETRY_JITTER_RATIO: f64 = 0.25;
 
-pub struct RigLlmClient {
-    http: reqwest::Client,
+/// The project LLM provider adapter.
+///
+/// Rig owns the OpenAI-compatible client, structured-output request, and agent
+/// turn loop. This adapter owns application configuration, bounded retries,
+/// pricing, and the sanitized `LlmClient` boundary used by the rest of chat.
+pub struct LlmProvider {
     llm: LlmConfig,
     embedding: Option<EmbeddingConfig>,
 }
 
-impl RigLlmClient {
+struct ProviderStructuredResponse {
+    content: String,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+impl LlmProvider {
     pub fn new(llm: &LlmConfig, embedding: Option<&EmbeddingConfig>) -> Result<Self> {
-        let _ = std::mem::size_of::<rig_core::providers::openai::Client>();
         Ok(Self {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_millis(llm.timeout_ms))
-                .build()
-                .context("build LLM HTTP client")?,
             llm: llm.clone(),
             embedding: embedding.cloned(),
         })
@@ -42,67 +56,123 @@ impl RigLlmClient {
         !self.llm.api_key.trim().is_empty()
     }
 
-    /// Sends `build()` and retries it while the failure looks transient.
-    ///
-    /// Returns the last response even when it is an error status: the callers
-    /// own the "what does a bad status mean" decision (the 400 branch below
-    /// still needs to see its 400), this only decides *whether to try again*.
-    async fn send_with_retry<F>(
+    fn chat_base_url(&self) -> String {
+        let url = if self.llm.chat_completions_url.trim().is_empty() {
+            self.llm.base_url.trim()
+        } else {
+            self.llm.chat_completions_url.trim()
+        };
+        url.strip_suffix("/chat/completions")
+            .unwrap_or(url)
+            .trim_end_matches('/')
+            .to_string()
+    }
+
+    fn openai_client(api_key: &str, base_url: &str) -> Result<openai::CompletionsClient> {
+        openai::CompletionsClient::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .build()
+            .context("build Rig OpenAI-compatible client")
+    }
+
+    async fn send_with_retry<F, Fut, T>(
         &self,
         max_retries: u32,
         label: &'static str,
-        build: F,
-    ) -> Result<reqwest::Response>
+        send: F,
+    ) -> Result<T>
     where
-        F: Fn() -> reqwest::RequestBuilder,
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T>>,
     {
         let deadline = Instant::now() + RETRY_BUDGET;
         let mut attempt = 0u32;
         loop {
-            let outcome = build().send().await;
-            let retryable = match &outcome {
-                Ok(response) => {
-                    is_transient_status(response.status().as_u16()).then(|| retry_after(response))
+            match send().await {
+                Ok(response) => return Ok(response),
+                Err(error) if is_transient_error(&error) && attempt < max_retries => {
+                    let delay = retry_delay(attempt, None, rand::random::<f64>());
+                    if Instant::now() + delay > deadline {
+                        return Err(anyhow!("{label}: {error}"));
+                    }
+                    tracing::warn!(
+                        label,
+                        attempt = attempt + 1,
+                        max_retries,
+                        delay_ms = delay.as_millis() as u64,
+                        reason = %error,
+                        "retrying transient LLM failure"
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
                 }
-                Err(error) => (error.is_timeout() || error.is_connect()).then_some(None),
-            };
-            let Some(retry_after) = retryable else {
-                return outcome.context(label);
-            };
-            let delay = retry_delay(attempt, retry_after, rand::random::<f64>());
-            if attempt >= max_retries || Instant::now() + delay > deadline {
-                return outcome.context(label);
+                Err(error) => return Err(anyhow!("{label}: {error}")),
             }
-            let reason = match &outcome {
-                Ok(response) => response.status().to_string(),
-                Err(error) => error.to_string(),
-            };
-            tracing::warn!(
-                label,
-                attempt = attempt + 1,
-                max_retries,
-                delay_ms = delay.as_millis() as u64,
-                reason,
-                "retrying transient LLM failure"
-            );
-            tokio::time::sleep(delay).await;
-            attempt += 1;
         }
     }
 
-    fn chat_url(&self) -> String {
-        if !self.llm.chat_completions_url.trim().is_empty() {
-            return self.llm.chat_completions_url.clone();
+    async fn send_structured(
+        &self,
+        system: &str,
+        user: &str,
+        schema: Option<Schema>,
+    ) -> Result<ProviderStructuredResponse> {
+        let client = Self::openai_client(&self.llm.api_key, &self.chat_base_url())?;
+        let mut agent = client
+            .agent(self.llm.model.clone())
+            .preamble(system)
+            .temperature(f64::from(self.llm.temperature))
+            .max_tokens(self.llm.max_output_tokens as u64);
+        if let Some(schema) = schema {
+            agent = agent.output_schema_raw(schema);
         }
-        format!(
-            "{}/chat/completions",
-            self.llm.base_url.trim_end_matches('/')
+        let response = tokio::time::timeout(
+            Duration::from_millis(self.llm.timeout_ms),
+            agent.build().prompt(user).max_turns(1).extended_details(),
         )
+        .await
+        .map_err(|_| anyhow!("LLM request timed out"))??;
+        Ok(ProviderStructuredResponse {
+            content: response.output,
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+        })
+    }
+
+    async fn send_json_object_fallback(
+        &self,
+        system: &str,
+        user: &str,
+        schema: &Value,
+    ) -> Result<ProviderStructuredResponse> {
+        let fallback_system = json_object_system(system, schema);
+        let client = Self::openai_client(&self.llm.api_key, &self.chat_base_url())?;
+        let response = tokio::time::timeout(
+            Duration::from_millis(self.llm.timeout_ms),
+            client
+                .agent(self.llm.model.clone())
+                .preamble(&fallback_system)
+                .temperature(f64::from(self.llm.temperature))
+                .max_tokens(self.llm.max_output_tokens as u64)
+                .additional_params(json!({"response_format": {"type": "json_object"}}))
+                .build()
+                .prompt(user)
+                .max_turns(1)
+                .extended_details(),
+        )
+        .await
+        .map_err(|_| anyhow!("LLM request timed out"))??;
+        Ok(ProviderStructuredResponse {
+            content: response.output,
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+        })
     }
 }
 
 #[async_trait]
-impl LlmClient for RigLlmClient {
+impl LlmClient for LlmProvider {
     async fn structured_value(
         &self,
         _purpose: LlmPurpose,
@@ -114,65 +184,27 @@ impl LlmClient for RigLlmClient {
             bail!("LLM_API_KEY is required for semantic routing");
         }
         let started = Instant::now();
-        let body = |response_format: Value, system: &str| {
-            json!({
-                "model": self.llm.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user}
-                ],
-                "temperature": self.llm.temperature,
-                "max_tokens": self.llm.max_output_tokens,
-                "response_format": response_format
-            })
-        };
-        // RigLlmClient owns the project LLM boundary; this OpenAI-compatible transport preserves custom provider URLs.
-        let schema_format = json!({"type":"json_schema","json_schema":{"name":"assistant_structured_response","schema":schema,"strict":true}});
-        let mut response = self
+        let rig_schema: Schema =
+            serde_json::from_value(schema.clone()).context("parse LLM JSON schema")?;
+        let response = match self
             .send_with_retry(self.llm.max_retries, "send structured LLM request", || {
-                self.http
-                    .post(self.chat_url())
-                    .bearer_auth(&self.llm.api_key)
-                    .json(&body(schema_format.clone(), system))
+                self.send_structured(system, user, Some(rig_schema.clone()))
             })
-            .await?;
-        if response.status().as_u16() == 400 {
-            let fallback_system = json_object_system(system, &schema);
-            response = self
-                .send_with_retry(
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if status_code(&error) == Some(400) => {
+                self.send_with_retry(
                     self.llm.max_retries,
                     "send structured LLM json_object fallback",
-                    || {
-                        self.http
-                            .post(self.chat_url())
-                            .bearer_auth(&self.llm.api_key)
-                            .json(&body(json!({"type":"json_object"}), &fallback_system))
-                    },
+                    || self.send_json_object_fallback(system, user, &schema),
                 )
-                .await?;
-        }
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("structured LLM request failed with status {status}: {body}");
-        }
-        let wire: ChatResponse = response
-            .json()
-            .await
-            .context("parse structured LLM response")?;
-        let content = wire
-            .choices
-            .first()
-            .and_then(|choice| choice.message.content.as_deref())
-            .context("LLM response missing message content")?;
-        let value = parse_structured_content(content)?;
-        let usage = match wire.usage {
-            Some(ChatUsage {
-                prompt_tokens: Some(input_tokens),
-                completion_tokens: Some(output_tokens),
-            }) => TokenUsage::provider_reported(input_tokens, output_tokens),
-            _ => TokenUsage::default(),
+                .await?
+            }
+            Err(error) => return Err(error),
         };
+        let value = parse_structured_content(&response.content)?;
+        let usage = token_usage(response.input_tokens, response.output_tokens);
         let cost_usd = usage.total_tokens().and_then(|_| {
             llm_pricing(&self.llm.provider, &self.llm.model).map(|price| {
                 (usage.input_tokens.unwrap_or_default() as f64 * price.input_usd_per_1m
@@ -198,33 +230,30 @@ impl LlmClient for RigLlmClient {
             bail!("EMBEDDING_API_KEY is required")
         }
         let started = Instant::now();
-        let response = self
-            .send_with_retry(config.max_retries, "send embedding request", || {
-                self.http
-                    .post(format!(
-                        "{}/embeddings",
-                        config.base_url.trim_end_matches('/')
-                    ))
-                    .bearer_auth(&config.api_key)
-                    .json(&json!({"model": config.model, "input": text}))
+        let client = Self::openai_client(&config.api_key, config.base_url.trim_end_matches('/'))?;
+        let response = tokio::time::timeout(
+            Duration::from_millis(config.timeout_ms),
+            client
+                .embedding_model(config.model.clone())
+                .embed_text_with_usage(text),
+        )
+        .await
+        .map_err(|_| anyhow!("embedding request timed out"))??;
+        let vector = response
+            .embeddings
+            .into_iter()
+            .next()
+            .map(|embedding| {
+                embedding
+                    .vec
+                    .into_iter()
+                    .map(|value| value as f32)
+                    .collect()
             })
-            .await?;
-        if !response.status().is_success() {
-            bail!("embedding request failed with status {}", response.status());
-        }
-        let wire: EmbeddingWire = response.json().await.context("parse embedding response")?;
-        let vector = wire
-            .data
-            .first()
-            .map(|item| item.embedding.clone())
             .unwrap_or_default();
         Ok(EmbeddingResponse {
             vector,
-            usage: wire
-                .usage
-                .and_then(|usage| usage.prompt_tokens)
-                .map(|input_tokens| TokenUsage::provider_reported(input_tokens, 0))
-                .unwrap_or_default(),
+            usage: token_usage(response.usage.input_tokens, response.usage.output_tokens),
             cost_usd: None,
             provider: config.provider.clone(),
             model: config.model.clone(),
@@ -244,15 +273,18 @@ impl LlmClient for RigLlmClient {
     }
 }
 
+fn token_usage(input_tokens: u64, output_tokens: u64) -> TokenUsage {
+    match (i32::try_from(input_tokens), i32::try_from(output_tokens)) {
+        (Ok(input_tokens), Ok(output_tokens)) if input_tokens > 0 || output_tokens > 0 => {
+            TokenUsage::provider_reported(input_tokens, output_tokens)
+        }
+        _ => TokenUsage::default(),
+    }
+}
+
 /// System prompt for the `json_object` fallback, used when a provider rejects
-/// `json_schema` (DeepSeek among them). Two things must be restated here that
-/// `json_schema` would have enforced on the wire:
-///
-/// 1. The literal word "JSON" — DeepSeek 400s on `json_object` without it.
-/// 2. The schema itself. `json_object` only constrains the reply to *some*
-///    JSON object, so without the schema the model omits fields at random.
-///    Omitted fields land on their serde defaults, which silently turns a real
-///    request into whichever variant happens to be `#[default]`.
+/// `json_schema` (DeepSeek among them). The literal word "JSON" and the schema
+/// are both required by providers that only support the object response mode.
 fn json_object_system(system: &str, schema: &Value) -> String {
     let schema = serde_json::to_string(schema).unwrap_or_default();
     format!(
@@ -261,38 +293,34 @@ It must conform to this JSON Schema, including every required field:\n{schema}"
     )
 }
 
+fn status_code(error: &anyhow::Error) -> Option<u16> {
+    for cause in error.chain() {
+        let message = cause.to_string();
+        if let Some(status) = message
+            .split(|character: char| !character.is_ascii_digit())
+            .find_map(|token| (token.len() == 3).then(|| token.parse().ok()).flatten())
+        {
+            return Some(status);
+        }
+    }
+    None
+}
+
+fn is_transient_error(error: &anyhow::Error) -> bool {
+    status_code(error).is_some_and(is_transient_status)
+        || error.to_string().to_ascii_lowercase().contains("timeout")
+        || error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("connection")
+}
+
 /// Statuses where the same request may well succeed on a second attempt: the
 /// provider is overloaded (429/503) or a gateway hiccuped (500/502/504).
-///
-/// Everything else is ours to fix, and retrying only delays and hides the real
-/// error: 401/403 are a bad or unauthorised key, 404 a wrong URL, 422 a bad
-/// payload. 400 is deliberately excluded — `structured_value` answers it with
-/// the `json_object` schema fallback, and retrying an identical rejected body
-/// would just burn the budget before that fallback runs.
 fn is_transient_status(status: u16) -> bool {
     matches!(status, 429 | 500 | 502 | 503 | 504)
 }
 
-/// ponytail: `Retry-After` in seconds only. The HTTP-date form is legal but no
-/// LLM provider sends it; that case falls back to our own backoff.
-fn retry_after(response: &reqwest::Response) -> Option<Duration> {
-    response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_secs)
-}
-
-/// Wait before retry `attempt` (0-based): a provider-supplied `Retry-After` if
-/// there is one, else exponential backoff from `RETRY_BASE_DELAY_MS`. Both are
-/// capped at `RETRY_MAX_DELAY` and stretched by up to `RETRY_JITTER_RATIO`.
-///
-/// Pure on purpose — `jitter` is passed in so the schedule can be asserted
-/// without sleeping.
 fn retry_delay(attempt: u32, retry_after: Option<Duration>, jitter: f64) -> Duration {
     let base =
         retry_after.unwrap_or_else(|| Duration::from_millis(RETRY_BASE_DELAY_MS << attempt.min(5)));
@@ -310,44 +338,6 @@ fn parse_structured_content(content: &str) -> Result<Value> {
     }
 }
 
-#[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
-    usage: Option<ChatUsage>,
-}
-
-#[derive(Deserialize)]
-struct ChatChoice {
-    message: ChatMessage,
-}
-
-#[derive(Deserialize)]
-struct ChatMessage {
-    content: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ChatUsage {
-    prompt_tokens: Option<i32>,
-    completion_tokens: Option<i32>,
-}
-
-#[derive(Deserialize)]
-struct EmbeddingWire {
-    data: Vec<EmbeddingData>,
-    usage: Option<EmbeddingUsage>,
-}
-
-#[derive(Deserialize)]
-struct EmbeddingData {
-    embedding: Vec<f32>,
-}
-
-#[derive(Deserialize)]
-struct EmbeddingUsage {
-    prompt_tokens: Option<i32>,
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -357,9 +347,6 @@ mod tests {
 
     use super::*;
 
-    /// One-shot HTTP server that replies with `script[i]` to request `i` (the
-    /// last entry repeats) and counts how many requests it received. Lets the
-    /// retry policy be observed end to end without a provider.
     async fn spawn_provider(script: Vec<String>) -> (String, Arc<AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/chat/completions", listener.local_addr().unwrap());
@@ -385,8 +372,8 @@ mod tests {
         )
     }
 
-    fn client(url: &str, max_retries: u32) -> RigLlmClient {
-        RigLlmClient::new(
+    fn client(url: &str, max_retries: u32) -> LlmProvider {
+        LlmProvider::new(
             &LlmConfig {
                 provider: "test".into(),
                 api_key: "test-key".into(),
@@ -403,37 +390,33 @@ mod tests {
         .unwrap()
     }
 
-    async fn route(client: &RigLlmClient) -> Result<LlmResponse<Value>> {
+    async fn route(client: &LlmProvider) -> Result<LlmResponse<Value>> {
         client
             .structured_value(LlmPurpose::Test, "system", "user", json!({"type":"object"}))
             .await
     }
 
-    /// `Retry-After: 0` keeps this test instant while proving the header is
-    /// what drives the wait — the exponential fallback is asserted purely
-    /// below, so nothing here has to sleep through it.
-    fn busy(seconds: &str) -> String {
+    fn busy() -> String {
         response(
             "503 Service Unavailable",
-            &format!("Retry-After: {seconds}\r\n"),
+            "",
             r#"{"error":{"message":"Service is too busy."}}"#,
         )
     }
 
     #[tokio::test]
     async fn a_transient_status_is_retried_until_the_configured_limit() {
-        let (url, requests) = spawn_provider(vec![busy("0")]).await;
+        let (url, requests) = spawn_provider(vec![busy()]).await;
 
         let error = route(&client(&url, 2)).await.unwrap_err();
 
-        // 1 initial attempt + LLM_MAX_RETRIES retries, then the original error.
         assert_eq!(requests.load(Ordering::SeqCst), 3);
         assert!(error.to_string().contains("503"), "{error}");
     }
 
     #[tokio::test]
     async fn the_retry_count_comes_from_config_not_a_constant() {
-        let (url, requests) = spawn_provider(vec![busy("0")]).await;
+        let (url, requests) = spawn_provider(vec![busy()]).await;
 
         route(&client(&url, 0)).await.unwrap_err();
         assert_eq!(requests.load(Ordering::SeqCst), 1, "0 retries = 1 attempt");
@@ -459,13 +442,12 @@ mod tests {
         let accepted = response(
             "200 OK",
             "",
-            r#"{"choices":[{"message":{"content":"{\"intent\":\"report\",\"confidence\":1}"}}]}"#,
+            r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"{\"intent\":\"report\",\"confidence\":1}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
         );
         let (url, requests) = spawn_provider(vec![rejected, accepted]).await;
 
         let response = route(&client(&url, 3)).await.unwrap();
 
-        // Exactly two: the json_schema attempt and the json_object fallback.
         assert_eq!(requests.load(Ordering::SeqCst), 2);
         assert_eq!(response.value["intent"], "report");
     }
@@ -475,7 +457,6 @@ mod tests {
         for status in [429, 500, 502, 503, 504] {
             assert!(is_transient_status(status), "{status} should be retried");
         }
-        // 400 has the schema fallback; the rest are our bug, not the provider's.
         for status in [200, 400, 401, 403, 404, 409, 422] {
             assert!(!is_transient_status(status), "{status} must not be retried");
         }
@@ -487,7 +468,6 @@ mod tests {
         assert_eq!(retry_delay(1, None, 0.0), Duration::from_millis(1_000));
         assert_eq!(retry_delay(2, None, 0.0), Duration::from_millis(2_000));
         assert_eq!(retry_delay(9, None, 0.0), RETRY_MAX_DELAY);
-        // Jitter only ever stretches, never past 1 + RETRY_JITTER_RATIO.
         assert_eq!(retry_delay(0, None, 1.0), Duration::from_millis(625));
     }
 
@@ -497,7 +477,6 @@ mod tests {
             retry_delay(0, Some(Duration::from_secs(3)), 0.0),
             Duration::from_secs(3)
         );
-        // A provider asking for a minute must not park a job for a minute.
         assert_eq!(
             retry_delay(0, Some(Duration::from_secs(60)), 0.0),
             RETRY_MAX_DELAY
@@ -508,9 +487,7 @@ mod tests {
     fn json_object_system_carries_the_word_json_and_the_schema() {
         let schema = json!({"required": ["intent"]});
         let prompt = json_object_system("Route the user request.", &schema);
-        // DeepSeek 400s on json_object without a literal "json" in the prompt.
         assert!(prompt.to_lowercase().contains("json"));
-        // Without the schema the model omits fields and serde defaults them.
         assert!(prompt.contains("\"required\":[\"intent\"]"));
         assert!(prompt.starts_with("Route the user request."));
     }

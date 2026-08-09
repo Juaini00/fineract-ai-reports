@@ -8,9 +8,10 @@
 //! accepted at runtime.
 
 use chrono::{Datelike, Months, NaiveDate};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ParameterType {
     Date,
@@ -35,6 +36,26 @@ pub enum DefaultExpr {
     LiteralDate(NaiveDate),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionStrategy {
+    AuthorizedScope,
+    CatalogDefault,
+    DeterministicExtraction,
+    VerifiedUserText,
+    SafePriorSelection,
+    PriorStep,
+    AuthorizedDataProbe,
+    Clarify,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeRef {
+    pub dataset_id: String,
+    pub shape_id: String,
+    pub output_slot: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParameterPolicy {
     pub name: String,
@@ -44,6 +65,11 @@ pub struct ParameterPolicy {
     pub fill_when_missing: bool,
     pub user_may_override: bool,
     pub hard_cap: Option<i64>,
+    pub user_required: bool,
+    /// Ordered acquisition sources. An empty authored list is rejected unless
+    /// a catalog default can fill the parameter.
+    pub resolution: Vec<ResolutionStrategy>,
+    pub probe: Option<ProbeRef>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -320,6 +346,9 @@ mod tests {
             fill_when_missing: false,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }
     }
 
@@ -332,6 +361,9 @@ mod tests {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         }
     }
 
@@ -371,6 +403,9 @@ mod tests {
             fill_when_missing: true,
             user_may_override: true,
             hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
         };
         p.user_may_override = true;
         assert_eq!(

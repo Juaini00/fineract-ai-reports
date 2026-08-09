@@ -19,7 +19,7 @@
 //!   floors are NOT asserted in this mode -- only that all 20 fixtures load,
 //!   the full call path runs without panicking, and per-bucket accuracy is
 //!   computed and printed.
-//! - real (`EVAL_USE_REAL_LLM=1`): `RigLlmClient` built from
+//! - real (`EVAL_USE_REAL_LLM=1`): `LlmProvider` built from
 //!   `LLM_API_KEY`/`DEEPSEEK_API_KEY`. This is the actual production
 //!   reranker, and the accuracy floors ARE asserted here. If no API key is
 //!   present the test prints a message and skips (infra unavailable is not
@@ -40,7 +40,7 @@ use chat::assistant::{
     evidence::RetrievalPlan,
     llm::{
         EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, SharedLlmClient, TokenUsage,
-        rig_client::RigLlmClient,
+        provider::LlmProvider,
     },
     reranker::{LlmReranker, RerankerVerdict},
     retrieval::RetrievalEngine,
@@ -429,7 +429,7 @@ async fn retrieval_eval_meets_accuracy_floor() {
             );
             return;
         }
-        Arc::new(RigLlmClient::new(&real_llm_config(api_key), None).expect("build real LLM client"))
+        Arc::new(LlmProvider::new(&real_llm_config(api_key), None).expect("build real LLM client"))
     } else {
         Arc::new(KeywordStubLlm)
     };
@@ -461,6 +461,7 @@ async fn retrieval_eval_meets_accuracy_floor() {
             RerankerVerdict::Select => "select",
             RerankerVerdict::Clarify => "clarify",
             RerankerVerdict::Unsupported => "unsupported",
+            RerankerVerdict::FailedOperational => "failed_operational",
         };
         let correct = decision_str == fixture.expected_decision
             && (fixture.expected_decision != "select"

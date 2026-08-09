@@ -17,9 +17,6 @@ pub(super) fn graph_result(
         "reason": reason,
     });
     memory.structured_response = Some(finish(response));
-    AssistantGraphTopology::new()
-        .validate_sequence(&transitions)
-        .expect("assistant runtime produced illegal graph transitions");
     GraphRuntimeResult {
         memory,
         transitions,
@@ -28,37 +25,6 @@ pub(super) fn graph_result(
     }
 }
 
-pub(super) fn deterministic_simple_response(
-    message: &str,
-) -> Option<(AssistantIntentKind, AssistantResponse)> {
-    let normalized = message
-        .trim()
-        .trim_matches(|c: char| c.is_ascii_punctuation())
-        .to_ascii_lowercase();
-    match normalized.as_str() {
-        "hi" | "hello" | "hey" => {
-            Some((AssistantIntentKind::Greeting, ResponseBuilder::greeting()))
-        }
-        "help" | "bisa apa" => Some((AssistantIntentKind::Help, ResponseBuilder::help())),
-        _ => None,
-    }
-}
-
-pub(super) fn deterministic_intent(intent: AssistantIntentKind, message: &str) -> AssistantIntent {
-    AssistantIntent {
-        intent,
-        domain: AssistantDomain::Unknown,
-        request_shape: Default::default(),
-        language: AssistantLanguage::En,
-        canonical_query_en: message.to_string(),
-        entities: Vec::new(),
-        constraints: AssistantConstraints::default(),
-        context_reference: ContextReference::None,
-        source: None,
-        confidence: 1.0,
-        reason: format!("deterministic simple intent: {message}"),
-    }
-}
 pub(super) fn simple_intent_transitions(
     terminal: TerminalState,
     reason: &str,

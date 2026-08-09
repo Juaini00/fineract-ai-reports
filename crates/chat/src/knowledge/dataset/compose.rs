@@ -16,6 +16,9 @@ pub struct FilterBind {
     pub operator: FilterOperator,
     /// 1-based positional placeholder index in the composed statement.
     pub placeholder: usize,
+    /// Maximum values accepted for an `in` bind, inherited from the selected
+    /// shape's row cap. Other operators have no array bound.
+    pub max_array_len: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +74,9 @@ pub fn compose(
                 filter_id: filter.id.clone(),
                 operator: *operator,
                 placeholder,
+                max_array_len: (operator == &FilterOperator::In)
+                    .then_some(shape.row_cap)
+                    .flatten(),
             });
             if matches!(operator, FilterOperator::Between) {
                 // BETWEEN consumes a second placeholder for the upper bound.
@@ -122,6 +128,9 @@ fn predicate(
         ));
     }
     Ok(match operator {
+        FilterOperator::In => format!(
+            "\n  AND (${placeholder}{cast}[] IS NULL OR {expr} = ANY(${placeholder}{cast}[]))"
+        ),
         FilterOperator::Between => format!(
             "\n  AND (${placeholder}{cast} IS NULL OR ${next}{cast} IS NULL OR {expr} BETWEEN ${placeholder} AND ${next})",
             next = placeholder + 1
@@ -165,6 +174,11 @@ mod tests {
                 output: RequestOutput::List,
                 pii: RequestPii::None,
             },
+            role: Default::default(),
+            expected_cardinality: None,
+            row_cap: None,
+            grouped_by: None,
+            produces: Vec::new(),
             fragment: fragment.map(str::to_string),
             order_by: order_by.into_iter().map(str::to_string).collect(),
             output_fields: Vec::new(),
@@ -179,6 +193,7 @@ mod tests {
             source_sql: "queries/test.sql".into(),
             tables: vec!["m_client".into()],
             filters,
+            entity: None,
             filters_exempt: Vec::new(),
             shapes,
             order_by: vec![OrderByOption {
@@ -305,6 +320,35 @@ mod tests {
         assert_eq!(composed.filter_binds[0].operator, FilterOperator::Eq);
         assert_eq!(composed.filter_binds[0].placeholder, 2);
         assert_eq!(composed.filter_binds[1].placeholder, 3);
+    }
+
+    #[test]
+    fn in_filter_uses_a_bound_array_without_interpolating_values() {
+        let filters = vec![FilterSlot {
+            id: "client_ids".into(),
+            expr: "client_id".into(),
+            kind: "integer".into(),
+            case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
+            operators: vec![FilterOperator::In],
+        }];
+        let mut data = dataset(filters, vec![shape("list", Some("f"), Vec::new())]);
+        data.shapes[0].row_cap = Some(25);
+
+        let composed = compose(
+            &data,
+            "list",
+            None,
+            "SELECT a FROM t WHERE x = $1",
+            Some("SELECT * FROM base"),
+        )
+        .unwrap();
+
+        assert!(composed.sql.contains("client_id = ANY($2::bigint[])"));
+        assert!(!composed.sql.contains("[42, 99]"));
+        assert_eq!(composed.filter_binds[0].operator, FilterOperator::In);
+        assert_eq!(composed.filter_binds[0].placeholder, 2);
+        assert_eq!(composed.filter_binds[0].max_array_len, Some(25));
     }
 
     #[test]

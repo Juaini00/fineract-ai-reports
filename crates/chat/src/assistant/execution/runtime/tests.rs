@@ -55,52 +55,6 @@ fn empty_context() -> ContextWindow {
 }
 
 #[test]
-fn traverses_three_state_skeleton() {
-    let memory = JobMemory {
-        job_id: Uuid::nil(),
-        graph_state: "receive_message".into(),
-        terminal_state: None,
-        current_user_message_metadata: json!({}),
-        intent: None,
-        source_intent: None,
-        retrieval_plan: json!({}),
-        retrieval_evidence: json!({}),
-        evidence_decision: json!({}),
-        selected_capability: None,
-        selected_tool: None,
-        tool_params: json!({}),
-        policy_decision: json!({}),
-        execution_summary: json!({}),
-        structured_response: None,
-        pending_clarification: None,
-        planner_snapshot_id: None,
-        warnings: json!([]),
-        revision: 0,
-    };
-    let result = AssistantGraphRuntime::run(
-        memory,
-        ContextWindow {
-            summary: None,
-            active_domain: None,
-            selected_entities: json!({}),
-            recent_messages: Vec::new(),
-            relevant_jobs: Vec::new(),
-            pending_clarification: None,
-            source_intent: None,
-            source_snippets: Vec::new(),
-            client_scope: json!({}),
-            warnings: Vec::new(),
-        },
-    );
-    assert_eq!(result.transitions.len(), 3);
-    assert_eq!(
-        result.memory.terminal_state,
-        Some(TerminalState::WaitingForUserInput)
-    );
-    assert!(result.memory.structured_response.is_some());
-}
-
-#[test]
 fn preserves_limit_from_pending_clarification_context() {
     let intent = pending_clarification_intent(&ContextWindow {
         summary: None,
@@ -169,6 +123,10 @@ fn preserves_limit_when_source_intent_quantity_defaults() {
         }),
         allow_free_text: false,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
 
     let intent = intent_from_source(&payload, &context, None);
@@ -392,11 +350,12 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
     let llm = Arc::new(FakeLlm) as SharedLlmClient;
     let router = SemanticRouter::new(llm.clone());
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
         Some(&router),
         Some(&llm),
+        None,
         None,
         None,
         None,
@@ -450,9 +409,10 @@ async fn semantic_router_unavailable_fails_closed() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -472,29 +432,6 @@ async fn semantic_router_unavailable_fails_closed() {
     assert_eq!(
         result.memory.structured_response.unwrap().response_type,
         AssistantResponseType::Error
-    );
-}
-
-#[tokio::test]
-async fn greeting_completes_without_router() {
-    let result = AssistantGraphRuntime::run_with_router(
-        empty_memory(),
-        empty_context(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "Hi",
-    )
-    .await;
-
-    assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
-    assert_eq!(
-        result.memory.structured_response.unwrap().title.as_deref(),
-        Some("Hello")
     );
 }
 
@@ -572,6 +509,10 @@ async fn exact_pending_option_id_resolves_before_router() {
             }),
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }),
         source_intent: None,
         source_snippets: Vec::new(),
@@ -579,9 +520,10 @@ async fn exact_pending_option_id_resolves_before_router() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -678,6 +620,10 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
             source_intent: None,
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }),
         source_intent: None,
         source_snippets: Vec::new(),
@@ -685,9 +631,10 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -729,9 +676,10 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
 
 #[tokio::test]
 async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(false, 3, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -781,9 +729,10 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
     };
     let message = "show 10 clients with the most savings accounts";
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -841,9 +790,10 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
     };
     let message = "Rank offices by savings transaction volume";
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -903,9 +853,10 @@ async fn defaultless_required_search_asks_and_runs_nothing() {
         legacy_api_key_id: None,
     };
     let message = "look up a client please";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -967,9 +918,10 @@ async fn fully_defaulted_capability_completes_without_asking() {
         legacy_api_key_id: None,
     };
     let message = "Rank offices by savings transaction volume this month";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -1209,6 +1161,10 @@ fn pending_context(missing_parameters: bool, attempt: u32, capability_id: &str) 
             }),
             allow_free_text: true,
             is_missing_execution_parameters: missing_parameters,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }),
         source_intent: None,
         source_snippets: Vec::new(),
@@ -1250,9 +1206,10 @@ fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
 #[tokio::test]
 async fn others_continues_missing_parameters_with_message_facts() {
     let message = "this month";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -1292,9 +1249,10 @@ async fn others_continues_missing_parameters_with_message_facts() {
 #[tokio::test]
 async fn long_message_continues_missing_parameters() {
     let message = "Please use every transaction from this current month for the report";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -1319,109 +1277,6 @@ async fn long_message_continues_missing_parameters() {
         Some("savings_deposit_top_n")
     );
     assert_eq!(result.pending_clarification, Some(None));
-}
-
-#[tokio::test]
-async fn gateway_pipeline_runtime_entry_maps_execute_to_completed() {
-    use crate::assistant::execution::runtime::run_via_gateway_pipeline;
-    use crate::assistant::llm::FakeLlmClient;
-    let fake = std::sync::Arc::new(FakeLlmClient::default());
-    fake.push_structured(serde_json::json!({
-        "intent_kind": "report_request",
-        "domain": "savings",
-        "language": "en",
-        "entities": [],
-        "candidates": [
-            { "capability_id": "savings_deposit_total", "confidence": 0.95, "why": "totals" }
-        ]
-    }));
-    let llm: crate::assistant::llm::SharedLlmClient = fake;
-    let catalog = runtime_test_catalog();
-    let client = PrincipalContext {
-        user_id: Uuid::nil(),
-        role: "admin".into(),
-        office_ids: vec![1],
-        capability_ids: vec!["savings_deposit_total".into()],
-        can_view_pii: true,
-        legacy_api_key_id: None,
-    };
-    let result = run_via_gateway_pipeline(
-        empty_memory(),
-        empty_context(),
-        llm,
-        &catalog,
-        &client,
-        chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
-        RuntimeUserInput {
-            message: "How much did we deposit?".into(),
-            source_message: "How much did we deposit?".into(),
-            sensitive_identifier: None,
-            selected_option_id: None,
-            clarification_id: None,
-            clarification_revision: None,
-            constraint_patch: Default::default(),
-        },
-    )
-    .await;
-    assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
-    assert_eq!(
-        result.memory.selected_capability.as_deref(),
-        Some("savings_deposit_total")
-    );
-}
-
-#[tokio::test]
-async fn gateway_pipeline_runtime_entry_maps_clarify_to_waiting() {
-    use crate::assistant::execution::runtime::run_via_gateway_pipeline;
-    use crate::assistant::llm::FakeLlmClient;
-    let fake = std::sync::Arc::new(FakeLlmClient::default());
-    fake.push_structured(serde_json::json!({
-        "intent_kind": "data_lookup",
-        "domain": "client",
-        "language": "en",
-        "entities": [],
-        "candidates": [
-            { "capability_id": "client_name_lookup", "confidence": 0.9, "why": "lookup" }
-        ]
-    }));
-    let llm: crate::assistant::llm::SharedLlmClient = fake;
-    let catalog = runtime_test_catalog();
-    let client = PrincipalContext {
-        user_id: Uuid::nil(),
-        role: "admin".into(),
-        office_ids: vec![1],
-        capability_ids: vec!["client_name_lookup".into()],
-        can_view_pii: true,
-        legacy_api_key_id: None,
-    };
-    let result = run_via_gateway_pipeline(
-        empty_memory(),
-        empty_context(),
-        llm,
-        &catalog,
-        &client,
-        chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
-        RuntimeUserInput {
-            message: "look up a client".into(),
-            source_message: "look up a client".into(),
-            sensitive_identifier: None,
-            selected_option_id: None,
-            clarification_id: None,
-            clarification_revision: None,
-            constraint_patch: Default::default(),
-        },
-    )
-    .await;
-    assert_eq!(
-        result.memory.terminal_state,
-        Some(TerminalState::WaitingForUserInput)
-    );
-    let payload = result
-        .pending_clarification
-        .as_ref()
-        .and_then(|p| p.as_ref())
-        .expect("clarification payload attached");
-    assert!(payload.fields.iter().any(|f| f.key == "search"));
 }
 
 /// The veto guard.
@@ -1528,11 +1383,12 @@ async fn router_verdict_cannot_veto_retrieval() {
         // assertion measures.
         let mut context = empty_context();
         context.client_scope = json!({ "allow_all_capabilities": true });
-        let result = AssistantGraphRuntime::run_with_router(
+        let result = run_with_router(
             empty_memory(),
             context,
             Some(&router),
             Some(&llm),
+            None,
             None,
             None,
             Some(&catalog),
@@ -1673,11 +1529,12 @@ async fn a_named_office_cannot_be_answered_by_an_office_blind_capability() {
         // Mirrors chat's admin projection, so the auth boundary in
         // `allowed_ids` is not what the assertion measures.
         context.client_scope = json!({ "allow_all_capabilities": true });
-        AssistantGraphRuntime::run_with_router(
+        run_with_router(
             empty_memory(),
             context,
             Some(&router),
             Some(llm),
+            None,
             None,
             None,
             Some(catalog),

@@ -12,6 +12,21 @@ const FILTER_TYPES: &[&str] = &["date", "integer", "boolean", "string", "decimal
 const OUTPUT_TYPES: &[&str] = &["bigint", "integer", "string", "date", "decimal", "boolean"];
 
 pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
+    if dataset
+        .filters
+        .iter()
+        .any(|filter| filter.operators.contains(&FilterOperator::In))
+        && dataset
+            .shapes
+            .iter()
+            .any(|shape| shape.row_cap.is_none_or(|cap| cap == 0))
+    {
+        bail!(
+            "dataset {} in filters require a non-zero row_cap on every shape",
+            dataset.id
+        );
+    }
+
     let mut filter_ids = HashSet::new();
     for filter in &dataset.filters {
         if !filter_ids.insert(filter.id.as_str()) {
@@ -226,6 +241,48 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
         }
     }
 
+    if let Some(entity) = &dataset.entity {
+        let fields: Vec<_> = dataset
+            .shapes
+            .iter()
+            .flat_map(|shape| shape.output_fields(dataset))
+            .collect();
+        let Some(id_field) = fields.iter().find(|field| field.name == entity.id_field) else {
+            bail!(
+                "dataset {} entity id_field {} is not an output field",
+                dataset.id,
+                entity.id_field
+            );
+        };
+        if id_field.kind != "bigint" || id_field.sensitivity != Sensitivity::PublicBusiness {
+            bail!(
+                "dataset {} entity id_field {} must be bigint public_business",
+                dataset.id,
+                entity.id_field
+            );
+        }
+        for label in &entity.label_fields {
+            if !fields.iter().any(|field| field.name == *label) {
+                bail!(
+                    "dataset {} entity label field {label} is not an output field",
+                    dataset.id
+                );
+            }
+        }
+    }
+
+    for shape in &dataset.shapes {
+        if shape.role == crate::knowledge::dataset::model::ShapeRole::Resolver
+            && shape.produces.is_empty()
+        {
+            bail!(
+                "dataset {} resolver shape {} must declare produces",
+                dataset.id,
+                shape.id
+            );
+        }
+    }
+
     // An exemption that no longer names a returned column is stale permission:
     // it silently keeps covering nothing while the column it excused moved on.
     for name in &dataset.filters_exempt {
@@ -271,6 +328,7 @@ mod tests {
                 input_policy: FilterInputPolicy::Ordinary,
                 operators: vec![FilterOperator::Eq],
             }],
+            entity: None,
             filters_exempt: Vec::new(),
             shapes: vec![ShapeOption {
                 id: "list".into(),
@@ -281,6 +339,11 @@ mod tests {
                     output: RequestOutput::List,
                     pii: RequestPii::None,
                 },
+                role: Default::default(),
+                expected_cardinality: None,
+                row_cap: None,
+                grouped_by: None,
+                produces: Vec::new(),
                 fragment: Some("queries/savings/account_charges.list.frag.sql".into()),
                 order_by: vec!["created_desc".into()],
                 output_fields: Vec::new(),
@@ -304,6 +367,56 @@ mod tests {
     #[test]
     fn accepts_a_well_formed_dataset() {
         assert!(validate_dataset(&valid()).is_ok());
+    }
+
+    #[test]
+    fn validates_entity_identity_labels_and_resolver_outputs() {
+        let mut dataset = valid();
+        dataset.entity = Some(crate::knowledge::dataset::model::EntityMetadata {
+            kind: "client".into(),
+            id_field: "savings_account_charge_id".into(),
+            label_fields: vec!["label".into()],
+            label_fallback: "Client {savings_account_charge_id}".into(),
+        });
+        dataset.output_fields.push(DatasetOutputField {
+            name: "label".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::Pii,
+            core: false,
+        });
+        dataset.shapes[0].role = crate::knowledge::dataset::model::ShapeRole::Resolver;
+        dataset.shapes[0].row_cap = Some(25);
+        dataset.shapes[0]
+            .produces
+            .push(crate::knowledge::dataset::model::ProducedSlot {
+                slot: "client_id".into(),
+                kind: "integer".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+                cardinality: crate::knowledge::dataset::model::Cardinality::Many,
+            });
+        assert!(validate_dataset(&dataset).is_ok());
+
+        let mut invalid_id = dataset.clone();
+        invalid_id.entity.as_mut().unwrap().id_field = "label".into();
+        assert!(validate_dataset(&invalid_id).is_err());
+
+        let mut missing_label = dataset.clone();
+        missing_label.entity.as_mut().unwrap().label_fields = vec!["missing".into()];
+        assert!(validate_dataset(&missing_label).is_err());
+
+        let mut no_produces = dataset;
+        no_produces.shapes[0].produces.clear();
+        assert!(validate_dataset(&no_produces).is_err());
+    }
+
+    #[test]
+    fn in_filters_require_a_shape_row_cap() {
+        let mut dataset = valid();
+        dataset.filters[0].operators = vec![FilterOperator::In];
+        assert!(validate_dataset(&dataset).is_err());
+
+        dataset.shapes[0].row_cap = Some(25);
+        assert!(validate_dataset(&dataset).is_ok());
     }
 
     #[test]

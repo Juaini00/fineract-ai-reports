@@ -136,7 +136,7 @@ fn sanitize(
             .capabilities
             .iter()
             .any(|capability| capability.id == candidate.capability_id)
-            && principal_allows(principal, candidate.capability_id.as_str())
+            && principal_allows(principal, candidate.capability_id.as_ref())
     });
     let dropped_candidates = before_candidates - extraction.candidates.len();
     if dropped_candidates > 0 {
@@ -176,6 +176,8 @@ mod tests {
                 dataset_recipe: None,
                 output_mode: "top_n".into(),
                 request_shape: Default::default(),
+                kind: Default::default(),
+                member_capability_ids: vec![],
                 display_name: None,
                 description: None,
                 data_areas: vec![],

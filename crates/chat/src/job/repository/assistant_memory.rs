@@ -2,10 +2,7 @@ use anyhow::Result;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::assistant::{
-    memory::JobMemory,
-    state::graph::{AssistantGraphTopology, GraphTransition},
-};
+use crate::assistant::{memory::JobMemory, state::graph::GraphTransition};
 
 #[derive(Clone)]
 pub struct JobMemoryRepository {
@@ -168,7 +165,6 @@ impl JobMemoryRepository {
         memory_revision: i64,
         state_json: serde_json::Value,
     ) -> Result<Uuid> {
-        AssistantGraphTopology::new().validate_transition(transition)?;
         let id = Uuid::new_v4();
         let graph_state = serde_json::to_value(transition.to.unwrap_or(transition.from))?
             .as_str()

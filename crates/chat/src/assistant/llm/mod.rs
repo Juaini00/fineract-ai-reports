@@ -8,10 +8,12 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+pub mod agent;
 pub mod planner_client;
-pub mod rig_client;
+pub mod provider;
 pub mod router;
 pub mod semantic;
+pub mod tool;
 pub mod traced_client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -23,6 +25,7 @@ pub enum LlmPurpose {
     ClarificationResolve,
     EvidenceRetrieval,
     ResponseBuild,
+    WorkflowPlanning,
     Test,
 }
 
@@ -35,6 +38,7 @@ impl std::fmt::Display for LlmPurpose {
             Self::ClarificationResolve => "clarification_resolve",
             Self::EvidenceRetrieval => "evidence_retrieval",
             Self::ResponseBuild => "response_build",
+            Self::WorkflowPlanning => "workflow_planning",
             Self::Test => "test",
         };
         f.write_str(value)

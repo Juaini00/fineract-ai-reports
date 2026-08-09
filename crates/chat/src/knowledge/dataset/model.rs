@@ -21,6 +21,10 @@ pub struct DatasetKnowledge {
     #[serde(default)]
     pub filters: Vec<FilterSlot>,
 
+    /// Entity identity and safe labels for resolver datasets.
+    #[serde(default)]
+    pub entity: Option<EntityMetadata>,
+
     /// Output field names that deliberately have no filter slot. Every string
     /// column a shape returns is narrowable by definition, so authoring one
     /// without a filter must be a stated decision rather than an oversight —
@@ -135,6 +139,7 @@ pub enum FilterInputPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum FilterOperator {
     Eq,
+    In,
     Lt,
     Lte,
     Gt,
@@ -147,6 +152,7 @@ impl FilterOperator {
     pub fn as_sql(self) -> &'static str {
         match self {
             Self::Eq => "=",
+            Self::In => "= ANY",
             Self::Lt => "<",
             Self::Lte => "<=",
             Self::Gt => ">",
@@ -156,10 +162,57 @@ impl FilterOperator {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct EntityMetadata {
+    pub kind: String,
+    pub id_field: String,
+    #[serde(default)]
+    pub label_fields: Vec<String>,
+    pub label_fallback: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeRole {
+    #[default]
+    Terminal,
+    Resolver,
+    Probe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cardinality {
+    Zero,
+    One,
+    Many,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ProducedSlot {
+    pub slot: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub sensitivity: Sensitivity,
+    pub cardinality: Cardinality,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ShapeOption {
     pub id: String,
     pub request_shape: RequestShape,
+    #[serde(default)]
+    pub role: ShapeRole,
+    #[serde(default)]
+    pub expected_cardinality: Option<Cardinality>,
+    #[serde(default)]
+    pub row_cap: Option<u32>,
+    /// Declared grouping key used by the workflow compiler to reject an N+1
+    /// expansion when this one reviewed shape can produce all groups at once.
+    #[serde(default)]
+    pub grouped_by: Option<String>,
+    #[serde(default)]
+    pub produces: Vec<ProducedSlot>,
     /// Path to the authored SQL fragment applied over the `base` CTE. `None`
     /// means degenerate passthrough: the source SQL is already complete.
     #[serde(default)]
@@ -268,6 +321,61 @@ parameters:
             dataset.order_by[0].expr,
             "sac.created_on_utc DESC, sac.id DESC"
         );
+    }
+
+    #[test]
+    fn parses_resolver_entity_and_shape_metadata_defaults() {
+        let dataset: DatasetKnowledge = serde_yaml::from_str(
+            r#"
+id: client.identity
+database: fineract
+source_sql: queries/datasets/client/identity.source.sql
+entity:
+  kind: client
+  id_field: client_id
+  label_fields: [display_name, office_name]
+  label_fallback: "Client {client_id}"
+shapes:
+  - id: identity_candidates
+    role: resolver
+    expected_cardinality: many
+    row_cap: 25
+    grouped_by: client_id
+    produces:
+      - slot: client_id
+        type: integer
+        sensitivity: public_business
+        cardinality: many
+    request_shape:
+      operation: lookup
+      subject: client
+      grouping: none
+      output: lookup
+"#,
+        )
+        .unwrap();
+
+        let entity = dataset.entity.unwrap();
+        assert_eq!(entity.kind, "client");
+        assert_eq!(entity.id_field, "client_id");
+        assert_eq!(entity.label_fields, ["display_name", "office_name"]);
+        assert_eq!(entity.label_fallback, "Client {client_id}");
+        assert_eq!(dataset.shapes[0].role, ShapeRole::Resolver);
+        assert_eq!(
+            dataset.shapes[0].expected_cardinality,
+            Some(Cardinality::Many)
+        );
+        assert_eq!(dataset.shapes[0].row_cap, Some(25));
+        assert_eq!(dataset.shapes[0].grouped_by.as_deref(), Some("client_id"));
+        assert_eq!(dataset.shapes[0].produces[0].slot, "client_id");
+
+        let legacy: DatasetKnowledge = serde_yaml::from_str(SAMPLE).unwrap();
+        assert!(legacy.entity.is_none());
+        assert_eq!(legacy.shapes[0].role, ShapeRole::Terminal);
+        assert!(legacy.shapes[0].expected_cardinality.is_none());
+        assert!(legacy.shapes[0].row_cap.is_none());
+        assert!(legacy.shapes[0].grouped_by.is_none());
+        assert!(legacy.shapes[0].produces.is_empty());
     }
 
     #[test]

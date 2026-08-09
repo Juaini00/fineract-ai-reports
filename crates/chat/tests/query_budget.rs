@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use chat::assistant::execution::plan::{
-    EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision, PolicyDecisionStatus,
-    RetrievalPlan,
+    EvidenceEvaluation, ExecutionPlan, PolicyDecision, PolicyDecisionStatus, RetrievalPlan,
 };
 use chat::assistant::{
     AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
@@ -114,7 +113,6 @@ fn catalog() -> chat::knowledge::model::KnowledgeCatalog {
 
 fn plan(limit: i64) -> ExecutionPlan {
     ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "savings".into(),
         capability: CAPABILITY_ID.into(),
         query_id: QUERY_ID.into(),

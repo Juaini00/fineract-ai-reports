@@ -143,6 +143,7 @@ impl ResponseBuilder {
                 })
                 .collect(),
             rendered_markdown: None,
+            workflow: None,
         })
     }
 
@@ -172,15 +173,16 @@ impl ResponseBuilder {
             }],
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
-    pub fn selected(capability_id: String) -> AssistantResponse {
+    pub fn selected(capability: String) -> AssistantResponse {
         AssistantResponse {
             response_type: AssistantResponseType::Summary,
             title: Some("Report capability selected".into()),
             message: format!(
-                "I found strong evidence for `{capability_id}`, but execution is unavailable in this context."
+                "I found strong evidence for `{capability}`, but execution is unavailable in this context."
             ),
             sections: Vec::new(),
             table: None,
@@ -191,6 +193,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -209,6 +212,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -226,6 +230,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -247,6 +252,7 @@ impl ResponseBuilder {
             }],
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -263,6 +269,10 @@ impl ResponseBuilder {
             source_intent: None,
             allow_free_text: true,
             is_missing_execution_parameters: true,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         })
     }
 
@@ -279,6 +289,10 @@ impl ResponseBuilder {
             source_intent: None,
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         })
     }
 
@@ -298,6 +312,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -315,6 +330,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -332,6 +348,7 @@ impl ResponseBuilder {
             actions: Vec::new(),
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -352,6 +369,7 @@ impl ResponseBuilder {
             }],
             evidence_refs: Vec::new(),
             rendered_markdown: None,
+            workflow: None,
         }
     }
 }
@@ -492,9 +510,7 @@ fn is_hidden(field: &QueryOutputField, can_view_pii: bool) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        assistant::execution::plan::{
-            EvidenceEvaluation, ExecutionPlanType, PolicyDecisionStatus, RetrievalPlan,
-        },
+        assistant::execution::plan::{EvidenceEvaluation, PolicyDecisionStatus, RetrievalPlan},
         assistant::{
             AssistantConstraints, AssistantDomain, AssistantIntentKind, AssistantLanguage,
             ContextReference,
@@ -751,7 +767,6 @@ mod tests {
 
     fn plan() -> ExecutionPlan {
         ExecutionPlan {
-            plan_type: ExecutionPlanType::Atomic,
             domain: "client".into(),
             capability: "client_lookup".into(),
             query_id: "client.lookup".into(),

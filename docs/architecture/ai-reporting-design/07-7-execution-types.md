@@ -4,6 +4,12 @@ Source: `docs-old/ai-reporting-design.md`
 
 ## 7. Execution Types
 
+> **Issue 012 (implemented):** these are now *shapes of the one workflow
+> runtime*, not separate runtimes. The classifier-selected capability is
+> compiled + verified into a typed workflow (petgraph control plane) and run by
+> `WorkflowRunner`; atomic is the single-`ExecuteQuery`-node case. The legacy
+> atomic-only planner was deleted in Phase 7.
+
 ### 7.1 Atomic Execution
 
 One capability executes one approved query.
