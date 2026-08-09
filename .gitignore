@@ -8,3 +8,5 @@ CLAUDE.md
 .worktrees/
 .pi
 .pi-subagents
+.mcp.json
+prompt.txt
