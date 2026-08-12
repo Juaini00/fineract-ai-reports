@@ -1,0 +1,21 @@
+id: savings.products_by_client
+database: fineract
+# Wraps the savings.products dataset's products_by_client resolver shape so
+# an approved capability can back it. Columns match the shape's frag SELECT;
+# the client_id predicate mirrors the dataset filter of the same name.
+sql_file: queries/savings/products_by_client.sql
+data_areas: [organization_foundation, client_foundation, savings_core]
+tables: [m_savings_product, m_savings_account, m_client]
+metrics: [savings.account_count]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - { name: client_id, type: integer, required: true }
+output_fields:
+  - { name: savings_product_id, type: bigint, sensitivity: public_business }
+  - { name: savings_product_name, type: string, sensitivity: public_business }
+  - { name: client_id, type: bigint, sensitivity: public_business }
+  - { name: currency_code, type: string, sensitivity: public_business }
+  - { name: deposit_type_enum, type: integer, sensitivity: public_business }
+  - { name: nominal_annual_interest_rate, type: decimal, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

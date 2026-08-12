@@ -1,0 +1,68 @@
+id: group.groups
+database: fineract
+# Group/center sub-domain (013 §6.5): conditional, enabled per-deployment via
+# knowledge/data-scope/areas/group-center-foundation.yaml. Authored so the
+# dataset exists ahead of the area flip; group_center domain stays
+# `candidate` until a deployment explicitly enables it (spec §7).
+# m_group.account_no/external_id are excluded per the area's
+# group_identifiers_excluded rule.
+source_sql: queries/datasets/group/groups.source.sql
+tables:
+  - m_group
+  - m_group_client
+entity:
+  kind: group
+  id_field: group_id
+  label_fields: [group_display_name]
+  label_fallback: "Group {group_id}"
+filters:
+  - id: group_id
+    expr: group_id
+    type: integer
+    operators: [eq, in]
+  - id: group_display_name
+    expr: group_display_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+  - id: office_id
+    expr: office_id
+    type: integer
+    operators: [eq, in]
+  - id: staff_id
+    expr: staff_id
+    type: integer
+    operators: [eq, in]
+# Display-only: the parent group is surfaced for context, not narrowed by
+# its own id — resolve the parent via group_display_name/group_id like any
+# group. hierarchy is a derived path string for display, not a second
+# spelling of a narrowing predicate already covered by group_id/office_id.
+filters_exempt:
+  - parent_group_id
+  - hierarchy
+shapes:
+  - id: group_candidates
+    role: resolver
+    expected_cardinality: many
+    row_cap: 25
+    produces:
+      - { slot: group_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: lookup
+      subject: office
+      grouping: none
+      output: lookup
+      pii: none
+    fragment: queries/datasets/group/groups.candidates.frag.sql
+    output_fields:
+      - { name: group_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: group_display_name, type: string, sensitivity: public_business, core: true }
+      - { name: group_status_enum, type: bigint, sensitivity: public_business, core: true }
+      - { name: office_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: staff_id, type: bigint, sensitivity: public_business }
+      - { name: parent_group_id, type: bigint, sensitivity: public_business }
+      - { name: hierarchy, type: string, sensitivity: public_business }
+      - { name: member_count, type: bigint, sensitivity: public_business, core: true }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

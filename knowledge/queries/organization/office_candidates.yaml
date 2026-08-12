@@ -1,0 +1,19 @@
+id: organization.office_candidates
+database: fineract
+# Wraps the organization.offices dataset's office_candidates resolver shape
+# so an approved capability can back it (guard/executor drive SQL off a
+# capability's dataset_recipe; a resolver shape needs a capability + query
+# wrapper). Columns match the shape's frag SELECT.
+sql_file: queries/datasets/organization/offices.source.sql
+data_areas: [organization_foundation]
+tables: [m_office]
+metrics: [organization.office_count]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+output_fields:
+  - { name: office_id, type: bigint, sensitivity: public_business }
+  - { name: office_name, type: string, sensitivity: public_business }
+  - { name: parent_office_id, type: bigint, sensitivity: public_business }
+  - { name: opening_date, type: date, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

@@ -14,6 +14,7 @@ entity:
 filters:
   - { id: savings_account_id, expr: savings_account_id, type: integer, operators: [eq, in] }
   - { id: savings_transaction_id, expr: savings_transaction_id, type: integer, operators: [eq, in] }
+  - { id: client_id, expr: client_id, type: integer, operators: [eq] }
 shapes:
   - id: activity_rows
     role: resolver

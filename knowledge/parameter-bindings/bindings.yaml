@@ -35,10 +35,8 @@ bindings:
   # the authorized office_ids predicate. It is never the authorization
   # boundary — that stays `office_ids`, source: authorized_scope.
   office_name: [office]
-  product_name: [product]
   charge_name: [charge_type]
   client_id: [client_id]
-  latest_transaction_amount: [transaction_amount]
   product_ids: [product_ids]
   # Filter-only and never projected; reaches SQL as transient_sensitive_input,
   # but still needs a declared home so a clarification answer can be stored.

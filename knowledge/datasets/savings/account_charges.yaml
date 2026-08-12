@@ -33,10 +33,30 @@ filters:
     type: string
     case_insensitive: true
     operators: [eq]
+  # m_savings_account_charge has no direct office_id; office is reached via
+  # the existing client join (c.office_id, selected as office_id).
+  - id: office_id
+    expr: office_id
+    type: integer
+    operators: [eq, in]
+  - id: savings_account_id
+    expr: savings_account_id
+    type: integer
+    operators: [eq, in]
+  - id: client_id
+    expr: client_id
+    type: integer
+    operators: [eq, in]
+  - id: charge_definition_id
+    expr: charge_definition_id
+    type: integer
+    operators: [eq, in]
 # A presentation label for currency_code, which is filterable. Narrowing by
 # "Rp" instead of "IDR" would be a second spelling of the same predicate.
+# savings_account_charge_id is this dataset's own row id, display-only.
 filters_exempt:
   - currency_display_symbol
+  - savings_account_charge_id
 shapes:
   - id: recent_list
     request_shape:
@@ -45,6 +65,7 @@ shapes:
       grouping: none
       output: list
       pii: client_identity
+    row_cap: 200
     fragment: queries/datasets/savings/account_charges.recent_list.frag.sql
     output_fields:
       - { name: client_id, type: bigint, sensitivity: public_business, core: true }
@@ -77,6 +98,7 @@ shapes:
       grouping: none
       output: list
       pii: client_identity
+    row_cap: 200
     fragment: queries/datasets/savings/account_charges.pending_clients.frag.sql
     output_fields:
       - { name: client_id, type: bigint, sensitivity: public_business, core: true }
@@ -111,6 +133,7 @@ shapes:
       grouping: none
       output: list
       pii: client_identity
+    row_cap: 200
     fragment: queries/datasets/savings/account_charges.overdue_clients.frag.sql
     output_fields:
       - { name: client_id, type: bigint, sensitivity: public_business, core: true }
@@ -148,6 +171,7 @@ shapes:
       grouping: none
       output: scalar
       pii: none
+    row_cap: 1
     fragment: queries/datasets/savings/account_charges.type_count.frag.sql
     output_fields:
       - { name: charge_count, type: bigint, sensitivity: public_business, core: true }
@@ -155,6 +179,4 @@ shapes:
       - { name: amount_outstanding_total, type: decimal, sensitivity: public_business, core: true }
     parameters:
       - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
-output_fields: []
-parameters: []
 timeout_ms: 3000

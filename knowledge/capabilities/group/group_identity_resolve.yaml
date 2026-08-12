@@ -1,0 +1,33 @@
+id: group_identity_resolve
+status: candidate
+domain: group_center
+display_name: Group Identity Resolve
+# Wires group.groups/group_candidates (013 §6.5) so the dataset shape is not
+# stale, without activating the domain: status stays `candidate` (matches
+# group_center's own status) rather than `approved_mvp`, so this capability
+# is never selected by planning/data paths, which filter on approved_mvp
+# (spec §7 — group's gate rests on the capability set, not a domain-status
+# reject, since lqr.rs does not reject `candidate`). Promote to approved_mvp
+# only alongside the group-center-foundation area flip and a recorded
+# pii_signoff.
+kind: resolver
+continuation: true
+description: Resolve candidate groups by name within the caller's authorized office scope, returning group id and safe label fields for entity selection.
+data_areas: [group_center_foundation, organization_foundation]
+required_api_capability: group_identity_resolve
+query_id: group.group_candidates
+metrics: []
+output_mode: list
+request_shape: { operation: lookup, subject: office, grouping: none, output: lookup, pii: none }
+examples:
+  - Resolve the group to continue.
+supported_intents:
+  - resolve a group entity by name within authorized office scope
+guards:
+  require_office_scope: true
+dataset_recipe:
+  dataset_id: group.groups
+  shape_id: group_candidates
+  projection: [group_id, group_display_name, group_status_enum, office_id, staff_id, parent_group_id, hierarchy, member_count]
+parameters:
+  office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }

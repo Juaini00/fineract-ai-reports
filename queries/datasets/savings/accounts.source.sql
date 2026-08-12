@@ -6,6 +6,8 @@ SELECT
     c.display_name AS client_display_name,
     o.id AS office_id,
     o.name AS office_name,
+    sa.group_id,
+    sa.field_officer_id AS staff_id,
     sp.id AS savings_product_id,
     sp.name AS savings_product_name,
     sa.status_enum::bigint AS savings_status_enum,

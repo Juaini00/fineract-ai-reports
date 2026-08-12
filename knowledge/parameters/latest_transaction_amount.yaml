@@ -1,9 +1,0 @@
-id: latest_transaction_amount
-parameters:
-  - latest_transaction_amount
-type: text
-label: Latest transaction amount
-help_text: Enter the exact decimal amount shown in the transaction.
-required: true
-validation:
-  max_length: 100

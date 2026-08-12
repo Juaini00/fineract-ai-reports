@@ -1,0 +1,32 @@
+id: savings_charge_type_identity_resolve
+status: approved_mvp
+domain: savings
+display_name: Charge Type Identity Resolve
+# Internal probe capability: it exists only so the `savings.charge_definitions`
+# `charge_type_candidates` probe shape has an approved_mvp capability + query
+# behind it (013 §3, "A3 charge-type probe"). The workflow compiler resolves
+# a named charge type to its definition id through this probe before running
+# a charge_name-scoped capability, so an ambiguous or unknown charge name
+# surfaces a bounded clarification instead of matching zero rows silently.
+# `continuation: true` keeps it out of first-turn classifier selection.
+kind: probe
+continuation: true
+description: Resolve candidate charge types by name within the caller's authorized office scope, returning charge definition id and safe label fields for entity selection.
+data_areas: [organization_foundation, client_foundation, savings_core, savings_charges_fees]
+required_api_capability: savings_charge_type_identity_resolve
+query_id: savings.charge_type_candidates
+metrics: [savings.charge_count]
+output_mode: list
+request_shape: { operation: lookup, subject: savings_account_charge, grouping: none, output: lookup, pii: none }
+examples:
+  - Resolve the charge type to continue.
+supported_intents:
+  - resolve a charge type entity by name within authorized office scope
+guards:
+  require_office_scope: true
+dataset_recipe:
+  dataset_id: savings.charge_definitions
+  shape_id: charge_type_candidates
+  projection: [charge_definition_id, charge_name, currency_code, is_penalty, charge_timing_enum]
+parameters:
+  office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }

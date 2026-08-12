@@ -1,0 +1,18 @@
+id: client.portfolio_counts
+database: fineract
+# Wraps the client.portfolio_counts dataset's counts_by_client shape so an
+# approved capability can back it (guard/executor drive SQL off a
+# capability's dataset_recipe; a dataset shape needs a capability + query
+# wrapper). Columns match the shape's frag SELECT.
+sql_file: queries/datasets/client/portfolio_counts.source.sql
+data_areas: [client_foundation, organization_foundation, savings_core]
+tables: [m_client, m_savings_account]
+metrics: [client.relationship_lookup]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+output_fields:
+  - { name: client_id, type: bigint, sensitivity: public_business }
+  - { name: client_display_name, type: string, sensitivity: pii }
+  - { name: savings_account_count, type: bigint, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000
