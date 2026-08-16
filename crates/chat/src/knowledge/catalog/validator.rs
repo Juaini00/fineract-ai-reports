@@ -366,8 +366,90 @@ impl KnowledgeValidator {
             }
         }
 
+        // Issue 013 D3: a dataset shape nothing consumes is exactly how 5 of
+        // 10 datasets went stale silently (013 §3) — fail catalog load on it.
+        // A resolver/probe shape not attached to a `probe:` is only a
+        // warning: it may legitimately land a step ahead of its consumer.
+        for finding in find_completeness_lints(catalog) {
+            match finding.severity {
+                LintSeverity::Fatal => bail!("{}", finding.message),
+                LintSeverity::Warning => {
+                    tracing::warn!(target: "catalog_completeness", "{}", finding.message)
+                }
+            }
+        }
+
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LintSeverity {
+    Fatal,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LintFinding {
+    pub id: &'static str,
+    pub severity: LintSeverity,
+    pub message: String,
+}
+
+/// D3 catalog-level completeness lints (013 §2). Reads the already-loaded
+/// capability + dataset sets; no new data source.
+pub(crate) fn find_completeness_lints(catalog: &KnowledgeCatalog) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    for dataset in &catalog.datasets {
+        for shape in &dataset.shapes {
+            let consumed = catalog.capabilities.iter().any(|capability| {
+                capability.dataset_recipe.as_ref().is_some_and(|recipe| {
+                    recipe.dataset_id == dataset.id && recipe.shape_id == shape.id
+                })
+            });
+            if !consumed {
+                findings.push(LintFinding {
+                    id: "unconsumed_shape",
+                    severity: LintSeverity::Fatal,
+                    message: format!(
+                        "dataset {} shape {} has zero consuming capabilities \
+                         (wire it via a capability's dataset_recipe, or retire it)",
+                        dataset.id, shape.id
+                    ),
+                });
+                continue;
+            }
+
+            if matches!(
+                shape.role,
+                crate::knowledge::dataset::model::ShapeRole::Resolver
+                    | crate::knowledge::dataset::model::ShapeRole::Probe
+            ) {
+                let wired = catalog.capabilities.iter().any(|capability| {
+                    capability.parameter_policies.iter().any(|policy| {
+                        policy.probe.as_ref().is_some_and(|probe| {
+                            probe.dataset_id == dataset.id && probe.shape_id == shape.id
+                        })
+                    })
+                });
+                if !wired {
+                    findings.push(LintFinding {
+                        id: "unwired_resolver",
+                        severity: LintSeverity::Warning,
+                        message: format!(
+                            "dataset {} resolver/probe shape {} is not attached to any \
+                             capability's parameter probe: (it may legitimately land a step \
+                             ahead of its consumer)",
+                            dataset.id, shape.id
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    findings
 }
 
 pub(crate) fn validate_classification_policy(
@@ -1716,6 +1798,111 @@ shapes:
         assert!(
             msg.contains("from_date") && msg.contains("default"),
             "validator must reject a required date param with no default: {msg}"
+        );
+    }
+
+    fn empty_catalog() -> KnowledgeCatalog {
+        KnowledgeCatalog {
+            root_path: PathBuf::from("/repo/knowledge"),
+            query_path: PathBuf::from("/repo/queries"),
+            data_areas: vec![],
+            domains: vec![],
+            schemas: vec![],
+            metrics: vec![],
+            capabilities: vec![],
+            queries: vec![],
+            policies: vec![],
+            responses: vec![],
+            parameter_bindings: Default::default(),
+            parameter_inputs: vec![],
+            classification: Default::default(),
+            datasets: vec![],
+        }
+    }
+
+    #[test]
+    fn flags_a_dataset_shape_with_zero_consuming_capabilities_as_fatal() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "unconsumed_shape");
+        assert_eq!(findings[0].severity, LintSeverity::Fatal);
+        assert!(findings[0].message.contains("identity_candidates"));
+    }
+
+    #[test]
+    fn wired_shape_produces_no_unconsumed_finding() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+        let mut capability = test_capability("consumer");
+        capability.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        catalog.capabilities = vec![capability];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert!(
+            findings.iter().all(|f| f.id != "unconsumed_shape"),
+            "wired shape must not be flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn flags_a_wired_but_unprobed_resolver_shape_as_a_warning_not_fatal() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+        let mut capability = test_capability("consumer");
+        capability.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        catalog.capabilities = vec![capability];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "unwired_resolver");
+        assert_eq!(findings[0].severity, LintSeverity::Warning);
+    }
+
+    #[test]
+    fn probed_resolver_shape_produces_no_unwired_finding() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+        let mut consumer = test_capability("consumer");
+        consumer.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        let mut prober = test_capability("prober");
+        let mut policy = parameter_policy("client_id");
+        policy.probe = Some(crate::knowledge::catalog::parameter_policy::ProbeRef {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            output_slot: "client_id".into(),
+        });
+        prober.parameter_policies = vec![policy];
+        catalog.capabilities = vec![consumer, prober];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert!(
+            findings.is_empty(),
+            "probed and consumed shape must produce no findings: {findings:?}"
         );
     }
 }

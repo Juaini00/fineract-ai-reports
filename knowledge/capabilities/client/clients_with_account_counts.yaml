@@ -1,0 +1,59 @@
+id: clients_with_account_counts
+status: approved_mvp
+domain: client
+display_name: Clients With Savings Account Counts
+description: Per-client savings account count within the caller's authorized office scope, one row per client.
+data_areas:
+  - client_foundation
+  - organization_foundation
+  - savings_core
+required_api_capability: clients_with_account_counts
+query_id: client.portfolio_counts
+metrics:
+  - client.relationship_lookup
+output_mode: list
+request_shape:
+  operation: summary
+  subject: client
+  grouping: none
+  output: list
+  pii: client_identity
+examples:
+  - How many savings accounts does each client have?
+  - List clients with their savings account count.
+  - Berapa jumlah rekening tabungan per nasabah?
+supported_intents:
+  - per-client savings account count
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  pii:
+    returns_pii: true
+    never_return:
+      - account_no
+      - external_id
+      - mobile_no
+      - email_address
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+  - id: pii_gated
+    rule: client identity fields must be redacted when caller lacks can_view_pii.
+  - id: dataset_recipe_valid
+    rule: dataset recipe IDs, filters, and projection must resolve against the approved dataset.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+dataset_recipe:
+  dataset_id: client.portfolio_counts
+  shape_id: counts_by_client
+  projection:
+    - client_id
+    - client_display_name
+    - savings_account_count

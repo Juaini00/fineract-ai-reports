@@ -1,0 +1,24 @@
+id: savings.activity_by_client
+database: fineract
+# Wraps the savings.transactions dataset's activity_rows shape, filtered by
+# client_id, so an approved capability can back it (013 §5: replaces the
+# retired account_activity/account_match fixture with a single-probe
+# client -> activity path — see savings_client_activity capability).
+sql_file: queries/savings/activity_by_client.sql
+data_areas: [organization_foundation, client_foundation, savings_core, savings_transactions]
+tables: [m_savings_account_transaction, m_savings_account, m_client]
+metrics: [savings.transaction_count]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - { name: client_id, type: integer, required: true }
+output_fields:
+  - { name: savings_transaction_id, type: bigint, sensitivity: public_business }
+  - { name: savings_account_id, type: bigint, sensitivity: public_business }
+  - { name: client_id, type: bigint, sensitivity: public_business }
+  - { name: client_display_name, type: string, sensitivity: pii }
+  - { name: transaction_type_enum, type: integer, sensitivity: public_business }
+  - { name: transaction_date, type: date, sensitivity: public_business }
+  - { name: amount, type: decimal, sensitivity: public_business }
+  - { name: running_balance, type: decimal, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

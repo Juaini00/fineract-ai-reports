@@ -14,6 +14,11 @@ filters:
   - { id: client_id, expr: client_id, type: integer, operators: [eq, in] }
   - { id: client_display_name, expr: client_display_name, type: string, case_insensitive: true, operators: [eq] }
   - { id: office_name, expr: office_name, type: string, case_insensitive: true, operators: [eq] }
+# office_id is narrowed by name, not by id — the office-name filter above is
+# the same narrowing axis (see organization.offices/office_candidates, which
+# resolves a name to an id ahead of this dataset).
+filters_exempt:
+  - office_id
 shapes:
   - id: identity_candidates
     role: resolver

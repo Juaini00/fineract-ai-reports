@@ -211,6 +211,31 @@ pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
             }
         }
 
+        // Issue 013 D1: a stable-id bigint (FK or entity id) is just as
+        // narrowable as a string column and must clear the same bar.
+        for field in fields.iter().filter(|field| {
+            field.kind == "bigint"
+                && (field.name.ends_with("_id")
+                    || dataset
+                        .entity
+                        .as_ref()
+                        .is_some_and(|entity| entity.id_field == field.name))
+        }) {
+            let filtered = dataset
+                .filters
+                .iter()
+                .any(|filter| filter.id == field.name || filter.expr == field.name);
+            if !filtered && !dataset.filters_exempt.contains(&field.name) {
+                bail!(
+                    "dataset {} shape {} returns narrowable column {} with no filter slot; \
+                     declare a filter or list it under filters_exempt",
+                    dataset.id,
+                    shape.id,
+                    field.name
+                );
+            }
+        }
+
         let mut parameter_names = HashSet::new();
         for parameter in shape.parameters(dataset) {
             if !parameter_names.insert(parameter.name.as_str()) {
@@ -320,14 +345,24 @@ mod tests {
             database: "fineract".into(),
             source_sql: "queries/savings/account_charges.source.sql".into(),
             tables: vec!["m_savings_account_charge".into()],
-            filters: vec![FilterSlot {
-                id: "due_date".into(),
-                expr: "sac.charge_due_date".into(),
-                kind: "date".into(),
-                case_insensitive: false,
-                input_policy: FilterInputPolicy::Ordinary,
-                operators: vec![FilterOperator::Eq],
-            }],
+            filters: vec![
+                FilterSlot {
+                    id: "due_date".into(),
+                    expr: "sac.charge_due_date".into(),
+                    kind: "date".into(),
+                    case_insensitive: false,
+                    input_policy: FilterInputPolicy::Ordinary,
+                    operators: vec![FilterOperator::Eq],
+                },
+                FilterSlot {
+                    id: "savings_account_charge_id".into(),
+                    expr: "sac.id".into(),
+                    kind: "integer".into(),
+                    case_insensitive: false,
+                    input_policy: FilterInputPolicy::Ordinary,
+                    operators: vec![FilterOperator::Eq],
+                },
+            ],
             entity: None,
             filters_exempt: Vec::new(),
             shapes: vec![ShapeOption {
@@ -555,6 +590,60 @@ mod tests {
         assert!(validate_dataset(&dataset).is_err());
 
         dataset.output_fields[0].sensitivity = Sensitivity::NeverUse;
+        assert!(validate_dataset(&dataset).is_err());
+    }
+
+    /// Issue 013 D1: a returned/joinable stable-id `bigint` column (`office_id`)
+    /// is just as narrowable as a string column, so it must clear the same bar:
+    /// a declared filter or a stated `filters_exempt` exemption.
+    #[test]
+    fn rejects_an_unfiltered_stable_id_bigint_column() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "office_id".into(),
+            kind: "bigint".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+            core: false,
+        });
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("office_id"), "got: {error}");
+        assert!(
+            error.contains("declare a filter or list it under filters_exempt"),
+            "got: {error}"
+        );
+
+        // Either escape hatch closes it: a declared filter …
+        let mut filtered = dataset.clone();
+        filtered.filters.push(FilterSlot {
+            id: "office_id".into(),
+            expr: "mc.office_id".into(),
+            kind: "integer".into(),
+            case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
+            operators: vec![FilterOperator::Eq],
+        });
+        assert!(validate_dataset(&filtered).is_ok());
+
+        // … or a stated exemption.
+        let mut exempt = dataset.clone();
+        exempt.filters_exempt = vec!["office_id".into()];
+        assert!(validate_dataset(&exempt).is_ok());
+    }
+
+    /// The dataset's own entity `id_field` is stable-id shaped too, even when
+    /// its name doesn't end in `_id` by coincidence (it usually does, but the
+    /// entity metadata is the authoritative source, not the name pattern).
+    #[test]
+    fn identity_bigint_output_is_not_exempt_from_the_id_filter_rule() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "product_id".into(),
+            kind: "bigint".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+            core: false,
+        });
+
         assert!(validate_dataset(&dataset).is_err());
     }
 

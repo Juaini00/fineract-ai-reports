@@ -12,6 +12,10 @@ entity:
 filters:
   - { id: office_id, expr: office_id, type: integer, operators: [eq, in] }
   - { id: office_name, expr: office_name, type: string, case_insensitive: true, operators: [eq] }
+# Display-only: the parent office is surfaced for context, not narrowed by
+# its own id — resolve the parent via office_name/office_id like any office.
+filters_exempt:
+  - parent_office_id
 shapes:
   - id: office_candidates
     role: resolver

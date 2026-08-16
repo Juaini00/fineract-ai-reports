@@ -1,0 +1,20 @@
+id: savings.charge_type_candidates
+database: fineract
+# Wraps the savings.charge_definitions dataset's charge_type_candidates probe
+# shape so an approved capability can back it (guard/executor drive SQL off
+# a capability's dataset_recipe; a probe shape needs a capability + query
+# wrapper). Columns match the shape's frag SELECT.
+sql_file: queries/datasets/savings/charge_definitions.source.sql
+data_areas: [organization_foundation, client_foundation, savings_core, savings_charges_fees]
+tables: [m_charge, m_savings_account_charge, m_savings_account, m_client]
+metrics: [savings.charge_count]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+output_fields:
+  - { name: charge_definition_id, type: bigint, sensitivity: public_business }
+  - { name: charge_name, type: string, sensitivity: public_business }
+  - { name: currency_code, type: string, sensitivity: public_business }
+  - { name: is_penalty, type: boolean, sensitivity: public_business }
+  - { name: charge_timing_enum, type: integer, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

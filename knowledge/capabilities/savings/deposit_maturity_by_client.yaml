@@ -1,0 +1,86 @@
+id: savings_deposit_maturity_by_client
+status: approved_mvp
+domain: savings
+display_name: Savings Deposit Maturity By Client
+# Surfaces the FD/RD deposit sub-domain (013 §6.4): in-scope, previously
+# unsurfaced. Same single-probe pattern as savings_client_activity — client_id
+# self-resolves via client.identity, then executes deposits/maturity_rows
+# filtered directly by client_id.
+continuation: true
+description: Fixed and recurring deposit terms, maturity schedule and overdue installments for a client resolved by name, within the caller's authorized office scope.
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+required_api_capability: savings_deposit_maturity_by_client
+query_id: savings.deposit_maturity_by_client
+metrics:
+  - savings.account_count
+output_mode: list
+request_shape:
+  operation: list
+  subject: savings_account
+  grouping: none
+  output: list
+  pii: client_identity
+examples:
+  - What is the maturity date for this client's fixed deposit?
+  - Show recurring deposit schedule for client John Doe.
+supported_intents:
+  - list a named client's fixed/recurring deposit maturity and schedule detail
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  pii:
+    returns_pii: true
+    never_return:
+      - account_no
+      - external_id
+      - mobile_no
+      - email_address
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+  - id: pii_gated
+    rule: client identity fields must be redacted when caller lacks can_view_pii.
+  - id: dataset_recipe_valid
+    rule: dataset recipe IDs, filters, and projection must resolve against the approved dataset.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  client_id:
+    type: integer
+    required: true
+    resolution: [authorized_data_probe]
+    probe:
+      dataset_id: client.identity
+      shape_id: identity_candidates
+      output_slot: client_id
+dataset_recipe:
+  dataset_id: savings.deposits
+  shape_id: maturity_rows
+  filters:
+    - filter_id: client_id
+      operator: eq
+      parameter: client_id
+  projection:
+    - savings_account_id
+    - client_id
+    - client_display_name
+    - deposit_type_enum
+    - currency_code
+    - term_deposit_amount
+    - maturity_amount
+    - maturity_date
+    - deposit_period
+    - deposit_period_frequency_enum
+    - mandatory_recommended_deposit_amount
+    - is_mandatory
+    - total_overdue_amount
+    - no_of_overdue_installments
