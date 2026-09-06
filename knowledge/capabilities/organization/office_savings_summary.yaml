@@ -2,14 +2,15 @@ id: organization_office_savings_summary
 status: approved_mvp
 domain: organization
 display_name: Office Savings Summary
-description: Return per-office savings account counts and total balance within the caller's authorized scope, ranked by total balance.
+description: Return per-office savings account counts and total balance within the caller's authorized
+  scope, ranked by total balance.
 data_areas:
-  - organization_foundation
-  - client_foundation
+- organization_foundation
+- client_foundation
 required_api_capability: organization_office_savings_summary
 query_id: organization.office_savings_summary
 metrics:
-  - savings.balance_total
+- savings.balance_total
 output_mode: top_n
 request_shape:
   operation: rank
@@ -18,36 +19,40 @@ request_shape:
   output: ranking
   pii: none
 examples:
-  - Top offices by savings balance.
-  - Which office holds the most savings?
-  - Office savings summary top 10 in IDR.
+- Top offices by savings balance.
+- Which office holds the most savings?
+- Office savings summary top 10 in IDR.
+- Kantor dengan saldo tabungan terbesar.
 supported_intents:
-  - office ranking by savings balance
-  - per-office savings account count and total balance
+- office ranking by savings balance
+- per-office savings account count and total balance
 unsupported_intents:
-  - individual account or client identity
-required_parameters:
-  - limit
-optional_parameters:
-  - office_ids
-  - currency_code
+- individual account or client identity
 defaults:
   authorized_scope_only: true
 guards:
   require_office_scope: true
   max_limit: 100
-pii:
-  returns_pii: false
-cost_class: medium
-clarification:
-  missing_parameters:
-    - limit
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: no_pii_output
-    rule: query output fields must not expose client identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: no_pii_output
+  rule: query output fields must not expose client identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  currency_code:
+    type: string
+    required: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 100

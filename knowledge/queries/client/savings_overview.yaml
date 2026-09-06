@@ -1,0 +1,92 @@
+id: client.savings_overview
+database: fineract
+sql_file: queries/client/savings_overview.sql
+data_areas:
+  - client_foundation
+  - organization_foundation
+  - savings_core
+  - savings_charges_fees
+  - savings_transactions
+tables:
+  - m_client
+  - m_office
+  - m_savings_account
+  - m_savings_account_charge
+  - m_savings_account_transaction
+metrics:
+  - savings.transaction_count
+  - savings.charge_amount_outstanding
+  - savings.account_balance
+parameters:
+  - name: office_ids
+    type: array_bigint
+    required: true
+    source: authorized_scope
+  - name: search
+    type: string
+    required: true
+  - name: limit
+    type: integer
+    required: true
+required_filters:
+  - m_client.office_id constrained to authorized office_ids
+  - m_client.display_name matched against the searched client name
+  - each aggregate computed in its own LATERAL subquery so account, charge and transaction counts cannot fan each other out
+  - bounded by limit
+output_fields:
+  - name: client_id
+    type: bigint
+    sensitivity: pii
+  - name: display_name
+    type: string
+    sensitivity: pii
+  - name: office_id
+    type: bigint
+    sensitivity: public_business
+  - name: office_name
+    type: string
+    sensitivity: public_business
+  - name: savings_account_count
+    type: bigint
+    sensitivity: public_business
+  - name: active_savings_account_count
+    type: bigint
+    sensitivity: public_business
+  - name: active_unpaid_charge_count
+    type: bigint
+    sensitivity: public_business
+  - name: active_unpaid_charge_amount_outstanding
+    type: decimal
+    sensitivity: public_business
+  - name: transaction_count
+    type: bigint
+    sensitivity: public_business
+guards:
+  select_only: true
+  single_statement: true
+  require_office_filter: true
+  parameterized_only: true
+timeout_ms: 3000
+checks:
+  - id: sql_file_exists
+    rule: sql_file must exist under queries/.
+  - id: sql_is_select_only
+    rule: SQL must be one SELECT statement and contain no unsafe command.
+  - id: office_filter_is_bound
+    rule: SQL must constrain c.office_id with ANY($1::bigint[]).
+  - id: client_search_is_bound
+    rule: SQL must match c.display_name against bound $2::text, never interpolated text.
+  - id: aggregates_are_fanout_safe
+    rule: account, charge and transaction counts must each come from their own LATERAL subquery.
+  - id: unpaid_charge_definition
+    rule: active_unpaid_charge_count must exclude waived, paid and inactive charges and require a positive outstanding amount.
+  - id: reversed_transactions_excluded
+    rule: transaction_count must exclude reversed transactions.
+  - id: limit_is_bound
+    rule: SQL must use bound LIMIT $3.
+  - id: output_columns_match_contract
+    rule: Prepared SQL output columns must equal output_fields order.
+  - id: pii_columns_labelled
+    rule: client_id and display_name output fields must be sensitivity=pii.
+  - id: no_raw_identifiers
+    rule: Query must not output account_no, external_id, mobile_no, or email_address.

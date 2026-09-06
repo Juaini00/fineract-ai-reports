@@ -1,0 +1,32 @@
+id: savings_account_identity_lookup
+status: approved_mvp
+domain: savings
+display_name: Savings Account Identity Lookup
+description: Resolve an exact savings account number to its masked identifier, owner, office, product, raw status enum, and currency within authorized office scope.
+data_areas: [organization_foundation, client_foundation, savings_core]
+required_api_capability: savings_account_identity_lookup
+query_id: savings.account_identity_lookup
+metrics: [savings.account_identity]
+output_mode: list
+request_shape:
+  operation: lookup
+  subject: savings_account
+  grouping: none
+  output: lookup
+  pii: client_identity
+examples:
+  - Who owns savings account number [SAVINGS_ACCOUNT_NUMBER]?
+  - Which office and product belong to savings account [SAVINGS_ACCOUNT_NUMBER]?
+guards:
+  require_office_scope: true
+checks:
+  - { id: exact_identifier_only, rule: Account number is transient, equality-only, and never projected raw. }
+parameters:
+  account_number: { type: string, required: true }
+  office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }
+dataset_recipe:
+  dataset_id: savings.accounts
+  shape_id: identity
+  filters:
+    - { filter_id: account_number, operator: eq, parameter: account_number }
+  projection: [savings_account_id, masked_account_number, client_id, client_display_name, office_id, office_name, savings_product_id, savings_product_name, savings_status_enum, currency_code]

@@ -12,7 +12,6 @@ use chat::assistant::{
     SemanticRouter,
     llm::{EmbeddingResponse, LlmClient, LlmPurpose, LlmResponse, TokenUsage},
 };
-use chat::knowledge::catalog::loader::KnowledgeLoader;
 use common::spawn_app;
 use serde_json::json;
 
@@ -77,11 +76,7 @@ impl LlmClient for ScenarioFakeLlm {
 
 #[tokio::test]
 async fn semantic_assistant_default_scenario_matrix_routes_without_live_services() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let catalog = KnowledgeLoader::new(root.join("knowledge"), root.join("queries"))
-        .load()
-        .expect("load catalog");
-    let router = SemanticRouter::new(Arc::new(ScenarioFakeLlm), &catalog);
+    let router = SemanticRouter::new(Arc::new(ScenarioFakeLlm));
     for (prompt, expected_intent, expected_domain) in [
         (
             "Hi",
@@ -179,6 +174,10 @@ async fn semantic_clarification_reply_selects_balance_by_meaning() {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
 
     let outcome = ClarificationResolver::resolve(
@@ -215,45 +214,50 @@ fn long_session_matrix_has_near_and_hard_limit_contracts() {
     assert!(hard.recent_messages.len() > near.recent_messages.len());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn live_scenario_matrix_is_gated() {
+// Not `#[tokio::test]`: this drives the full background execution pipeline,
+// whose future overflows tokio's default 2 MB worker stack. `block_on_big_stack`
+// runs the spawned server on 16 MB workers (mirrors main.rs) so it runs under
+// plain `cargo test` without `RUST_MIN_STACK`.
+#[test]
+fn live_scenario_matrix_is_gated() {
     if std::env::var("RUN_LIVE_SCENARIO_MATRIX").ok().as_deref() != Some("1") {
         return;
     }
-
-    let app = spawn_app().await;
-    let key = app
-        .provision_api_key(
-            &[
-                "savings_deposit_total",
-                "savings_balance_summary",
-                "client_name_lookup",
-            ],
-            vec![1, 2],
-            false,
-        )
-        .await;
-    for prompt in [
-        "Hi",
-        "kamu bisa apa aja?",
-        "ada gak nama Tony di client kita?",
-        "total savings deposit this month",
-        "Show savings activity",
-        "yang balance aja",
-        "sekarang tampilkan client aktif bulan ini",
-        "tau gak harga laptop?",
-        "show raw account numbers",
-    ] {
-        let resp = app
-            .post_json("/chat/jobs", Some(&key.raw), &json!({ "message": prompt }))
+    common::block_on_big_stack(async {
+        let app = spawn_app().await;
+        let key = app
+            .provision_api_key(
+                &[
+                    "savings_deposit_total",
+                    "savings_balance_summary",
+                    "client_name_lookup",
+                ],
+                vec![1, 2],
+                false,
+            )
             .await;
-        assert_eq!(
-            resp.status(),
-            201,
-            "{prompt}: {}",
-            resp.text().await.unwrap_or_default()
-        );
-    }
+        for prompt in [
+            "Hi",
+            "kamu bisa apa aja?",
+            "ada gak nama Tony di client kita?",
+            "total savings deposit this month",
+            "Show savings activity",
+            "yang balance aja",
+            "sekarang tampilkan client aktif bulan ini",
+            "tau gak harga laptop?",
+            "show raw account numbers",
+        ] {
+            let resp = app
+                .post_json("/chat/jobs", Some(&key.raw), &json!({ "message": prompt }))
+                .await;
+            assert_eq!(
+                resp.status(),
+                201,
+                "{prompt}: {}",
+                resp.text().await.unwrap_or_default()
+            );
+        }
+    });
 }
 
 fn route_case(message: &str) -> (AssistantIntentKind, AssistantDomain) {
@@ -317,6 +321,10 @@ fn assert_response_contract(prompt: &str, intent: &AssistantIntent) {
                 source_intent: None,
                 allow_free_text: true,
                 is_missing_execution_parameters: false,
+                workflow_id: None,
+                node_id: None,
+                resume_node_id: None,
+                entity_kind: None,
             })
         }
         _ => ResponseBuilder::selected(format!("{:?}", intent.domain)),

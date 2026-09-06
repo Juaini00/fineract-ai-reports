@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::assistant::{
-    AssistantDomain, AssistantIntent, DeterministicExtraction, PayloadField, Quantity,
+    AssistantDomain, AssistantEntityType, AssistantIntent, DeterministicExtraction, PayloadField,
+    Quantity,
 };
 
 use super::merge::validate;
@@ -125,12 +126,27 @@ pub fn original_request_observations(
             facts.push((field, string_value(kind, value.clone())));
         }
     }
+    if let Some(amount) = intent.constraints.transaction_amount.as_ref()
+        && amount.parse::<rust_decimal::Decimal>().is_ok()
+    {
+        facts.push((
+            ConstraintField::TransactionAmount,
+            TypedFactValue::Decimal(amount.clone()),
+        ));
+    }
     if intent.domain != AssistantDomain::Unknown {
         facts.push((
             ConstraintField::Domain,
             TypedFactValue::Domain(intent.domain.clone()),
         ));
     }
+    // The model's entities are the only place an office, product or charge type
+    // is ever named, and they were being dropped: `OriginalIntent` stored them
+    // and nothing turned them into facts, so a request that named a charge type
+    // reached SQL with no charge filter at all. They go in the original-request
+    // group, before the deterministic candidates, so the existing trust order
+    // is untouched.
+    facts.extend(intent.entities.iter().filter_map(entity_fact));
     let original_len = facts.len();
     facts.extend(
         extraction
@@ -138,6 +154,7 @@ pub fn original_request_observations(
             .iter()
             .filter_map(|candidate| candidate_fact(&candidate.field, &candidate.value)),
     );
+    facts.extend(extraction.entities.iter().filter_map(entity_fact));
     facts
         .into_iter()
         .enumerate()
@@ -276,4 +293,42 @@ fn candidate_fact(
             text().map(|v| (ConstraintField::PersonName, TypedFactValue::PersonName(v)))
         }
     }
+}
+
+pub fn entity_fact(
+    entity: &crate::assistant::AssistantEntity,
+) -> Option<(ConstraintField, TypedFactValue)> {
+    let text = entity.value.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let text = text.to_owned();
+    Some(match entity.entity_type {
+        AssistantEntityType::PersonName => (
+            ConstraintField::PersonName,
+            TypedFactValue::PersonName(text),
+        ),
+        AssistantEntityType::Office => (ConstraintField::Office, TypedFactValue::Office(text)),
+        AssistantEntityType::Product => (ConstraintField::Product, TypedFactValue::Product(text)),
+        AssistantEntityType::ChargeType => (
+            ConstraintField::ChargeType,
+            TypedFactValue::ChargeType(text),
+        ),
+        AssistantEntityType::AccountNumber => (
+            ConstraintField::AccountNumber,
+            TypedFactValue::AccountNumber(text),
+        ),
+        AssistantEntityType::ClientId => (
+            ConstraintField::ClientId,
+            TypedFactValue::ClientId(text.parse().ok()?),
+        ),
+        AssistantEntityType::Metric => (ConstraintField::Metric, TypedFactValue::Metric(text)),
+        AssistantEntityType::Currency => (
+            ConstraintField::CurrencyCode,
+            TypedFactValue::CurrencyCode(text),
+        ),
+        AssistantEntityType::DatePeriod
+        | AssistantEntityType::CapabilityHint
+        | AssistantEntityType::Unknown => return None,
+    })
 }

@@ -1,0 +1,36 @@
+---
+id: client.portfolio_counts
+database: fineract
+source_sql: queries/datasets/client/portfolio_counts.source.sql
+tables:
+  - m_client
+  - m_savings_account
+entity:
+  kind: client
+  id_field: client_id
+  label_fields: [client_display_name]
+  label_fallback: "Client {client_id}"
+filters:
+  - { id: client_id, expr: client_id, type: integer, operators: [eq, in] }
+shapes:
+  - id: counts_by_client
+    role: terminal
+    expected_cardinality: many
+    row_cap: 25
+    grouped_by: client_id
+    produces:
+      - { slot: client_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: summary
+      subject: client
+      grouping: client
+      output: list
+      pii: client_identity
+    fragment: queries/datasets/client/portfolio_counts.counts_by_client.frag.sql
+    output_fields:
+      - { name: client_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: client_display_name, type: string, sensitivity: pii, core: true }
+      - { name: savings_account_count, type: bigint, sensitivity: public_business, core: true }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

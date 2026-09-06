@@ -2,14 +2,15 @@ id: client_top_n_by_deposit_volume
 status: approved_mvp
 domain: client
 display_name: Top Clients by Deposit Volume
-description: Return clients with the largest total deposit amount within a date range across authorized offices.
+description: Return clients with the largest total deposit amount within a date range across authorized
+  offices.
 data_areas:
-  - client_foundation
-  - organization_foundation
+- client_foundation
+- organization_foundation
 required_api_capability: client_top_n_by_deposit_volume
 query_id: client.top_n_by_deposit_volume
 metrics:
-  - savings.deposit_total
+- savings.deposit_total
 output_mode: top_n
 request_shape:
   operation: rank
@@ -18,40 +19,50 @@ request_shape:
   output: ranking
   pii: client_identity
 examples:
-  - Top 10 clients by deposit volume this month.
-  - Which clients deposited the most in Q2?
-  - Show top 5 depositors from 2026-01-01 to 2026-06-30 in IDR.
+- Top 10 clients by deposit volume this month.
+- Which clients deposited the most in Q2?
+- Show top 5 depositors from 2026-01-01 to 2026-06-30 in IDR.
+- Nasabah dengan setoran terbesar berdasarkan volume.
 supported_intents:
-  - ranking clients by deposit amount in a date range
+- ranking clients by deposit amount in a date range
 unsupported_intents:
-  - client identity lookup by name
-required_parameters:
-  - from_date
-  - to_date
-  - limit
-optional_parameters:
-  - office_ids
-  - currency_code
+- client identity lookup by name
 defaults:
   authorized_scope_only: true
 guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: true
-cost_class: medium
-clarification:
-  missing_parameters:
-    - from_date
-    - to_date
-    - limit
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: pii_gated
-    rule: pii output fields must be redacted when caller lacks can_view_pii.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: pii_gated
+  rule: pii output fields must be redacted when caller lacks can_view_pii.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  from_date:
+    type: date
+    required: false
+    default: start_of_month(business_today)
+    fill_when_missing: true
+  to_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  currency_code:
+    type: string
+    required: false
+  limit:
+    type: integer
+    required: false
+    default: "10"
+    hard_cap: 100

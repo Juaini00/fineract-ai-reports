@@ -26,6 +26,31 @@ async fn create_job_without_bearer_is_unauthorized() {
     assert_eq!(resp.status(), 401);
 }
 
+/// Task 6 keystone: `POST /chat/jobs` must return as soon as the job row
+/// exists, not after the pipeline has produced a terminal result. Before the
+/// fix, `JobService::create` awaited `run_graph_skeleton` inline, so this
+/// assertion failed with `status == "completed"` (or another terminal state)
+/// returned directly from `create`.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_returns_immediately_with_a_non_terminal_status() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+
+    let started = Instant::now();
+    let job = create_job(&app, &token, "How much did we deposit?").await;
+    let elapsed = started.elapsed();
+
+    let status = job["status"].as_str().unwrap_or("");
+    assert!(
+        matches!(status, "queued" | "running"),
+        "create must return before the pipeline finishes: got status {status}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "create took {elapsed:?}, which suggests the pipeline ran inline again"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_message_is_rejected_by_validator() {
     let app = spawn_app().await;
@@ -193,23 +218,25 @@ async fn admin_reads_legacy_unowned_audit_without_claiming_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn missing_date_range_triggers_clarification_and_continues_same_job() {
+async fn follow_up_message_stays_on_the_same_job() {
     let app = spawn_app().await;
     let token = app.login_admin().await;
 
-    // Turn 1: no date range → planner should ask for clarification (or classifier)
+    // Turn 1: this capability's date parameters declare `default: business_today`,
+    // so the pipeline auto-fills them and answers in one turn instead of asking.
     let job1 = create_job(&app, &token, "How much did we deposit?").await;
     let job1_id = job1["job_id"].as_str().unwrap().to_string();
 
     let after_turn1 = wait_for_terminal(&app, &token, &job1).await;
-    // Whatever the terminal state (needs_clarification is expected but the
-    // planner may fall back to unsupported), the reply must be short and safe.
+    // Whatever the terminal state, the reply must be short and safe.
     let payload = serde_json::to_string(&after_turn1).unwrap();
     assert!(!payload.contains("SELECT "));
 
     // Turn 2: send a follow-up on the SAME job — must not 404 and must not
     // spawn a new job. Even if the pipeline had already terminated, the
-    // /responses route belongs to the same job_id.
+    // /responses route belongs to the same job_id. A finished job answers
+    // 409 clarification_not_active, never 404: a 404 would tell the client the
+    // job vanished and push it into spawning a replacement.
     let resp = app
         .post_json_bearer(
             &format!("/chat/jobs/{job1_id}/responses"),
@@ -234,6 +261,63 @@ async fn missing_date_range_triggers_clarification_and_continues_same_job() {
     assert_eq!(got.status(), 200);
     let got_json: Value = got.json().await.unwrap();
     assert_eq!(got_json["data"]["id"], job1_id);
+}
+
+/// A follow-up for a required parameter stays on the same job even if the job is no
+/// longer active; clients must never receive a 404 and create a replacement job.
+#[tokio::test(flavor = "multi_thread")]
+async fn required_parameter_without_default_asks_and_answer_continues_same_job() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+
+    let job = create_job(&app, &token, "Find the client named Ada").await;
+    let job_id = job["job_id"].as_str().unwrap().to_string();
+    let _ = wait_for_terminal(&app, &token, &job).await;
+
+    let response = app
+        .post_json_bearer(
+            &format!("/chat/jobs/{job_id}/responses"),
+            &token,
+            &json!({ "message": "Ada Lovelace" }),
+        )
+        .await;
+    assert!(
+        matches!(response.status().as_u16(), 200 | 201 | 400 | 409),
+        "responses route must be reachable on the same job, got {}",
+        response.status()
+    );
+
+    let got = app
+        .get_bearer(&format!("/chat/jobs/{job_id}"), &token)
+        .await;
+    assert_eq!(got.status(), 200);
+    let got_json: Value = got.json().await.unwrap();
+    assert_eq!(got_json["data"]["id"], job_id);
+}
+
+/// The date parameters of `savings_deposit_total` declare `default: business_today`,
+/// so the pipeline must fill them itself and answer in a single turn instead of
+/// demanding a date range. The durable catalog-wide guarantee for W-E now lives in
+/// `catalog_validation.rs::every_fully_defaulted_capability_plans_without_asking`;
+/// this test remains the single end-to-end witness through the HTTP + canonical stack.
+#[tokio::test(flavor = "multi_thread")]
+async fn date_parameters_with_a_policy_default_are_auto_filled_without_asking() {
+    let app = spawn_app().await;
+    let token = app.login_admin().await;
+
+    let job = create_job(&app, &token, "How much did we deposit?").await;
+    let job_id = job["job_id"].as_str().unwrap().to_string();
+    let terminal = wait_for_terminal(&app, &token, &job).await;
+
+    assert_eq!(
+        terminal["status"], "completed",
+        "policy defaults must complete the job in one turn: {terminal}"
+    );
+    assert!(
+        terminal["result_json"]["structured_response"]["clarification"].is_null(),
+        "no clarification may be requested when every parameter has a default: {terminal}"
+    );
+    assert_eq!(terminal["id"], job_id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -312,26 +396,4 @@ async fn get_audit(app: &TestApp, token: &str, job_id: &str) -> Value {
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     body["data"].clone()
-}
-
-#[allow(dead_code)]
-async fn wait_for_final_after_response(app: &TestApp, token: &str, job_id: &str) -> Value {
-    let deadline = Instant::now() + POLL_TIMEOUT;
-    loop {
-        let resp = app.get_bearer(&format!("/chat/jobs/{job_id}"), token).await;
-        assert_eq!(resp.status(), 200);
-        let body: Value = resp.json().await.unwrap();
-        let status = body["data"]["status"].as_str().unwrap_or("").to_string();
-
-        if !matches!(
-            status.as_str(),
-            "queued" | "running" | "waiting_for_user_input"
-        ) {
-            return body["data"].clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("job did not finish clarification response within {POLL_TIMEOUT:?}: {body}");
-        }
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
 }

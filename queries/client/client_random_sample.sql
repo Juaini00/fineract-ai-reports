@@ -8,5 +8,6 @@ FROM m_client c
 JOIN m_office o ON o.id = c.office_id
 WHERE c.office_id = ANY($1::bigint[])
   AND c.status_enum = 300
+  AND ($3::text IS NULL OR lower(o.name) = lower($3::text))
 ORDER BY random()
 LIMIT $2;

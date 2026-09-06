@@ -1,6 +1,4 @@
-use std::str::FromStr;
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -53,6 +51,8 @@ pub struct AuthConfig {
 #[derive(Clone, Debug)]
 pub struct QueryConfig {
     pub default_timeout_ms: u64,
+    /// Row ceiling used when a capability has no declared `hard_cap`.
+    pub global_max_rows: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -123,32 +123,10 @@ pub struct CatalogConfig {
 #[derive(Clone, Debug)]
 pub struct ChatFeatureConfig {
     pub lqr_enabled: bool,
-    pub canonical_gateway_mode: CanonicalGatewayMode,
     pub context_soft_token_limit: usize,
     pub context_hard_token_limit: usize,
     pub context_max_recent_messages: usize,
     pub context_max_relevant_jobs: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CanonicalGatewayMode {
-    #[default]
-    Disabled,
-    Shadow,
-    Authoritative,
-}
-
-impl FromStr for CanonicalGatewayMode {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "disabled" => Ok(Self::Disabled),
-            "shadow" => Ok(Self::Shadow),
-            "authoritative" => Ok(Self::Authoritative),
-            _ => bail!("CHAT_CANONICAL_GATEWAY_MODE must be disabled, shadow, or authoritative"),
-        }
-    }
 }
 
 impl AppConfig {
@@ -215,6 +193,9 @@ impl AppConfig {
                 default_timeout_ms: get_env_or("QUERY_DEFAULT_TIMEOUT_MS", "3000")
                     .parse()
                     .context("QUERY_DEFAULT_TIMEOUT_MS must be an integer")?,
+                global_max_rows: get_env_or("QUERY_GLOBAL_MAX_ROWS", "50000")
+                    .parse()
+                    .context("QUERY_GLOBAL_MAX_ROWS must be an integer")?,
             },
             llm: LlmConfig {
                 provider: get_env_or("LLM_PROVIDER", "deepseek"),
@@ -234,7 +215,7 @@ impl AppConfig {
                 )
                 .parse()
                 .context("LLM_TIMEOUT_MS must be an integer")?,
-                max_retries: get_env_or("LLM_MAX_RETRIES", "1")
+                max_retries: get_env_or("LLM_MAX_RETRIES", "3")
                     .parse()
                     .context("LLM_MAX_RETRIES must be an integer")?,
                 max_output_tokens: get_env_or(
@@ -278,7 +259,7 @@ impl AppConfig {
                 )
                 .parse()
                 .context("EMBEDDING_TIMEOUT_MS must be an integer")?,
-                max_retries: get_env_or("EMBEDDING_MAX_RETRIES", "1")
+                max_retries: get_env_or("EMBEDDING_MAX_RETRIES", "3")
                     .parse()
                     .context("EMBEDDING_MAX_RETRIES must be an integer")?,
                 dimensions: get_env_or("EMBEDDING_DIMENSIONS", "1024")
@@ -297,8 +278,6 @@ impl AppConfig {
             },
             chat_features: ChatFeatureConfig {
                 lqr_enabled: get_env_or("LQR_ENABLED", "true").eq_ignore_ascii_case("true"),
-                canonical_gateway_mode: get_env_or("CHAT_CANONICAL_GATEWAY_MODE", "disabled")
-                    .parse()?,
                 context_soft_token_limit: get_env_or("CHAT_CONTEXT_SOFT_TOKEN_LIMIT", "6000")
                     .parse()
                     .context("CHAT_CONTEXT_SOFT_TOKEN_LIMIT must be an integer")?,
@@ -322,26 +301,4 @@ fn get_required_env(key: &str) -> Result<String> {
 
 fn get_env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::CanonicalGatewayMode;
-
-    #[test]
-    fn canonical_gateway_mode_rejects_invalid_values() {
-        assert_eq!(
-            "disabled".parse::<CanonicalGatewayMode>().unwrap(),
-            CanonicalGatewayMode::Disabled
-        );
-        assert_eq!(
-            "shadow".parse::<CanonicalGatewayMode>().unwrap(),
-            CanonicalGatewayMode::Shadow
-        );
-        assert_eq!(
-            "authoritative".parse::<CanonicalGatewayMode>().unwrap(),
-            CanonicalGatewayMode::Authoritative
-        );
-        assert!("legacy".parse::<CanonicalGatewayMode>().is_err());
-    }
 }

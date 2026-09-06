@@ -1,0 +1,26 @@
+id: client.relationship_lookup
+domain: client
+status: approved_mvp
+description: Client relationship traversal within authorized office scope — resolves a client to the office that owns them and the savings accounts and products attached to them. Not an aggregate; it names the relationship being read.
+data_areas:
+  - client_foundation
+  - organization_foundation
+  - savings_core
+source_table: m_client
+source_columns:
+  - id
+  - display_name
+  - office_id
+expression: m_client joined to its owning office and savings accounts
+filters:
+  - client owner office must be inside authorized office scope
+grouping_compatible:
+  - office_id
+sensitivity: client_identity
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by client_foundation data scope.
+  - id: owner_office_scope_required
+    rule: traversal must enforce client owner office scope.
+  - id: pii_gated
+    rule: client identity fields must be redacted when the caller lacks can_view_pii.

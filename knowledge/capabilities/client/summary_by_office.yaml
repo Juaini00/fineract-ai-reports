@@ -2,14 +2,15 @@ id: client_summary_by_office
 status: approved_mvp
 domain: client
 display_name: Client Summary by Office
-description: Return active, pending, closed, and total client counts per office within the caller's authorized scope.
+description: Return the lifecycle-status distribution (active, pending, closed, and total) per office within
+  the caller's authorized scope.
 data_areas:
-  - client_foundation
-  - organization_foundation
+- client_foundation
+- organization_foundation
 required_api_capability: client_summary_by_office
 query_id: client.summary_by_office
 metrics:
-  - client.lifecycle_count
+- client.lifecycle_count
 output_mode: top_n
 request_shape:
   operation: rank
@@ -18,33 +19,53 @@ request_shape:
   output: ranking
   pii: none
 examples:
-  - Show client breakdown per office.
-  - How many active clients does each office have?
-  - Client lifecycle counts across my offices (top 20).
+- Show client breakdown per office.
+- How many active clients does each office have?
+- Client lifecycle counts across my offices (top 20).
+- Lifecycle status distribution of active, pending, and closed clients by office.
+- Status lifecycle nasabah aktif, pending, dan closed per kantor.
+- Client lifecycle breakdown for Head Office.
 supported_intents:
-  - client lifecycle counts grouped by office
+- client lifecycle counts grouped by office
 unsupported_intents:
-  - client identity lookup
-required_parameters:
-  - limit
-optional_parameters:
-  - office_ids
+- client identity lookup
 defaults:
   authorized_scope_only: true
 guards:
   require_office_scope: true
   snapshot_only: true
-pii:
-  returns_pii: false
-cost_class: low
-clarification:
-  missing_parameters: []
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: no_pii_output
-    rule: query output fields must not expose client identity.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: no_pii_output
+  rule: query output fields must not expose client identity.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: office_name_narrows_only
+  rule: >-
+    A user-named office may only narrow within authorized_scope. It is bound
+    into the approved SQL and ANDed after the authorized office_ids predicate,
+    never post-filtered in Rust, so naming an office outside the caller's scope
+    returns no rows rather than data or an existence signal.
+- id: office_name_is_exact_not_hierarchical
+  rule: >-
+    office_name matches the office's own name exactly (case-insensitive). Child
+    offices are NOT included; every returned row carries office_name so the
+    scope actually applied is visible in the output.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 10000
+  office_name:
+    type: string
+    required: false
+    user_may_override: true

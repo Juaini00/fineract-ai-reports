@@ -9,6 +9,7 @@ async fn clarify_retrieval_candidates(
     catalog: Option<&Arc<KnowledgeCatalog>>,
     client: Option<&PrincipalContext>,
     fineract_pool: Option<&PgPool>,
+    workflow_state: Option<&WorkflowStateRepository>,
     canonical: Option<&CanonicalRuntimeContext>,
     input: &RuntimeUserInput,
 ) -> GraphRuntimeResult {
@@ -48,9 +49,12 @@ async fn clarify_retrieval_candidates(
                     Some(catalog),
                     client,
                     fineract_pool,
+                    workflow_state,
                     canonical,
                     None,
                     None,
+                    input.sensitive_identifier.as_ref(),
+                    &input.source_message,
                 )
                 .await;
             }
@@ -93,6 +97,7 @@ pub(super) async fn complete_semantic_route(
     llm: Option<&SharedLlmClient>,
     knowledge: Option<&KnowledgeRepository>,
     fineract_pool: Option<&PgPool>,
+    workflow_state: Option<&WorkflowStateRepository>,
     catalog: Option<&Arc<KnowledgeCatalog>>,
     client: Option<&PrincipalContext>,
     canonical: Option<&CanonicalRuntimeContext>,
@@ -144,6 +149,54 @@ pub(super) async fn complete_semantic_route(
                             ),
                         );
                     }
+                    Ok(ClarificationOutcome::SelectedOption { option_id, .. })
+                        if payload.kind == crate::assistant::ClarificationKind::SelectEntity =>
+                    {
+                        let Some(client_id) = option_id
+                            .strip_prefix("client:")
+                            .and_then(|value| value.parse::<i64>().ok())
+                        else {
+                            return graph_result(
+                                memory,
+                                TerminalState::FailedOperational,
+                                "invalid_client_selection",
+                                ResponseBuilder::error(),
+                                context.recent_messages.len(),
+                                None,
+                                simple_intent_transitions(
+                                    TerminalState::FailedOperational,
+                                    "invalid_client_selection",
+                                ),
+                            );
+                        };
+                        let mut selected_intent = intent_from_source(payload, &context, canonical);
+                        selected_intent
+                            .entities
+                            .push(crate::assistant::AssistantEntity {
+                                entity_type: AssistantEntityType::ClientId,
+                                value: client_id.to_string(),
+                                canonical: Some(client_id.to_string()),
+                                confidence: Some(1.0),
+                            });
+                        memory.intent = Some(selected_intent);
+                        memory.selected_capability = Some("client_relationship_by_id".into());
+                        pending_clarification = Some(None);
+                        return execute_selected_capability(
+                            memory,
+                            context.recent_messages.len(),
+                            "client_relationship_by_id".into(),
+                            catalog,
+                            client,
+                            fineract_pool,
+                            workflow_state,
+                            canonical,
+                            Some(payload),
+                            pending_clarification,
+                            None,
+                            &input.source_message,
+                        )
+                        .await;
+                    }
                     Ok(ClarificationOutcome::SelectedOption { option_id, .. }) => {
                         memory.intent = Some(intent_from_source(payload, &context, canonical));
                         record_source_extraction_metadata(
@@ -152,7 +205,8 @@ pub(super) async fn complete_semantic_route(
                             canonical,
                             &input.source_message,
                         );
-                        memory.selected_capability = Some(option_id.clone());
+                        let selected_capability = option_id.clone();
+                        memory.selected_capability = Some(selected_capability);
                         memory.source_intent = payload
                             .source_intent
                             .as_ref()
@@ -170,9 +224,12 @@ pub(super) async fn complete_semantic_route(
                             catalog,
                             client,
                             fineract_pool,
+                            workflow_state,
                             canonical,
                             Some(payload),
                             pending_clarification,
+                            input.sensitive_identifier.as_ref(),
+                            &input.source_message,
                         )
                         .await;
                     }
@@ -220,8 +277,13 @@ pub(super) async fn complete_semantic_route(
                     }
                 }
             }
+            let retrieval_query = if intent.canonical_query_en.trim().is_empty() {
+                message
+            } else {
+                intent.canonical_query_en.as_str()
+            };
             let plan = RetrievalPlan::new(
-                message,
+                retrieval_query,
                 &intent,
                 allow_all_capabilities(&context),
                 allowed_capabilities(&context),
@@ -261,31 +323,11 @@ pub(super) async fn complete_semantic_route(
                         simple_intent_transitions(TerminalState::BlockedByPolicy, "unsafe_request"),
                     );
                 }
-                Some(AssistantIntentKind::OutOfDomain) => {
-                    return graph_result(
-                        memory,
-                        TerminalState::OutOfDomain,
-                        "out_of_domain",
-                        ResponseBuilder::out_of_domain(),
-                        context.recent_messages.len(),
-                        None,
-                        simple_intent_transitions(TerminalState::OutOfDomain, "out_of_domain"),
-                    );
-                }
-                Some(AssistantIntentKind::UnsupportedInDomain) => {
-                    return graph_result(
-                        memory,
-                        TerminalState::Unsupported,
-                        "unsupported_in_domain",
-                        ResponseBuilder::unsupported(),
-                        context.recent_messages.len(),
-                        None,
-                        simple_intent_transitions(
-                            TerminalState::Unsupported,
-                            "unsupported_in_domain",
-                        ),
-                    );
-                }
+                // Nothing else terminates here. `OutOfDomain` in particular is
+                // a hint that rides into the plan and lowers the prior in
+                // `catalog_fallback`; only the reranker, which sees real
+                // capability ids/descriptions/examples, may answer
+                // "unsupported".
                 _ => {}
             }
             tracing::info!(
@@ -298,21 +340,71 @@ pub(super) async fn complete_semantic_route(
                 compatible_ids = ?catalog.map(|c| crate::assistant::retrieval::compatible_ids(&plan, c)),
                 "retrieval plan"
             );
+            crate::job::progress::started(crate::job::progress::Stage::Retrieval);
+            let retrieval_started_at = std::time::Instant::now();
             let evidence = RetrievalEngine::retrieve(&plan, llm, knowledge, catalog).await;
+            crate::job::progress::finished(
+                crate::job::progress::Stage::Retrieval,
+                retrieval_started_at.elapsed().as_millis() as u64,
+            );
             let (evidence, warning) = match evidence {
                 Ok(evidence) => (evidence, None),
                 Err(error) => (Vec::new(), Some(error.to_string())),
+            };
+            // The sufficiency gate. Retrieval ranks on similarity, and the
+            // reranker prompt merely *asks* the model not to pick a candidate
+            // that drops a filter the user named — which is how "5 clients in
+            // <office>" completed with clients from all eight authorized
+            // offices. A candidate that cannot bind a constraint the user
+            // clearly expressed is not a worse answer to this question, it is
+            // an answer to a different one, so it stops being a candidate here
+            // rather than being argued about in a prompt.
+            let evidence = match catalog {
+                Some(catalog) => {
+                    let extraction = memory
+                        .current_user_message_metadata
+                        .get("deterministic_extraction")
+                        .cloned()
+                        .and_then(|value| {
+                            serde_json::from_value::<DeterministicExtraction>(value).ok()
+                        });
+                    let expressed = crate::assistant::retrieval::expressed_filters(
+                        message,
+                        memory.intent.as_ref(),
+                        extraction.as_ref(),
+                    );
+                    crate::assistant::retrieval::drop_insufficient(catalog, &expressed, evidence)
+                }
+                None => evidence,
             };
             tracing::info!(
                 target: "assistant::mapping",
                 evidence_count = evidence.len(),
                 evidence = ?evidence.iter().map(|e| (&e.capability_id, e.score)).collect::<Vec<_>>(),
+                // Issue 011 item 6: measurement before tuning. `score_gap` is
+                // top-1 minus top-2; `tied_at_top` counts candidates sharing
+                // the leader's score. A gap near zero with several tied means
+                // ranking was decided by the reranker alone, with no prior.
+                score_gap = evidence
+                    .first()
+                    .zip(evidence.get(1))
+                    .map(|(first, second)| first.score - second.score),
+                tied_at_top = evidence.first().map(|first| evidence
+                    .iter()
+                    .filter(|item| (item.score - first.score).abs() < f32::EPSILON)
+                    .count()),
                 warning = ?warning,
                 "retrieval evidence"
             );
+            crate::job::progress::started(crate::job::progress::Stage::Reranking);
+            let reranking_started_at = std::time::Instant::now();
             let decision = LlmReranker::new(llm)
                 .rerank(&plan.query_text, &evidence)
                 .await;
+            crate::job::progress::finished(
+                crate::job::progress::Stage::Reranking,
+                reranking_started_at.elapsed().as_millis() as u64,
+            );
             tracing::info!(
                 target: "assistant::mapping",
                 decision = ?decision,
@@ -349,9 +441,12 @@ pub(super) async fn complete_semantic_route(
                                 catalog,
                                 client,
                                 fineract_pool,
+                                workflow_state,
                                 canonical,
                                 None,
                                 None,
+                                input.sensitive_identifier.as_ref(),
+                                &input.source_message,
                             )
                             .await;
                             result.retrieval_trace = retrieval_trace.clone();
@@ -367,6 +462,7 @@ pub(super) async fn complete_semantic_route(
                                 catalog,
                                 client,
                                 fineract_pool,
+                                workflow_state,
                                 canonical,
                                 &input,
                             )
@@ -384,6 +480,7 @@ pub(super) async fn complete_semantic_route(
                         catalog,
                         client,
                         fineract_pool,
+                        workflow_state,
                         canonical,
                         &input,
                     )
@@ -393,6 +490,11 @@ pub(super) async fn complete_semantic_route(
                     TerminalState::Unsupported,
                     "unsupported_in_domain",
                     ResponseBuilder::unsupported(),
+                ),
+                RerankerVerdict::FailedOperational => (
+                    TerminalState::FailedOperational,
+                    "reranker_failed_operational",
+                    ResponseBuilder::error(),
                 ),
             }
         }
@@ -456,9 +558,6 @@ pub(super) async fn complete_semantic_route(
             reason: reason.into(),
         },
     ];
-    AssistantGraphTopology::new()
-        .validate_sequence(&transitions)
-        .expect("assistant runtime produced illegal graph transitions");
     GraphRuntimeResult {
         memory,
         transitions,

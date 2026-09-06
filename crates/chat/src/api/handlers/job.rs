@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
     response::{
         IntoResponse, Response,
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
     },
 };
 use futures::stream::{self, StreamExt};
@@ -20,8 +20,92 @@ use uuid::Uuid;
 
 use crate::api::ChatAppState;
 use crate::api::dto::job::{CreateChatJobRequest, RespondToChatJobRequest};
-use crate::job::model::{CreateChatJobInput, RespondToChatJobInput};
+use crate::job::model::{ChatJobEvent, CreateChatJobInput, RespondToChatJobInput};
 use crate::job::service::{RespondToChatJobOutcome, redis_url_log_value};
+
+fn map_create_error(error: anyhow::Error) -> ApiError {
+    match error.to_string().as_str() {
+        "identifier_lookup_rate_limited" => ApiError::too_many_requests_with_code(
+            "identifier_lookup_rate_limited",
+            "Too many identifier lookup attempts. Try again later.",
+        ),
+        "identifier_lookup_rate_limit_unavailable" => ApiError::internal(anyhow::anyhow!(
+            "identifier lookup is temporarily unavailable"
+        )),
+        _ => ApiError::internal(error),
+    }
+}
+
+/// Statuses `chat_jobs.status` reaches at the end of a run — mirrors the
+/// `chat_job:{id}:live_state` values `JobService::emit_event` writes on
+/// `final`/`error`.
+fn is_terminal_job_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "waiting_for_user_input")
+}
+
+fn durable_poll_stream(
+    state: ChatAppState,
+    client: app_core::auth::model::PrincipalContext,
+    job_id: Uuid,
+) -> impl futures::Stream<Item = Result<Event, Infallible>> {
+    stream::unfold(Some(0usize), move |state_seen| {
+        let state = state.clone();
+        let client = client.clone();
+        async move {
+            let seen = state_seen?;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let events = state
+                .chat
+                .jobs
+                .replay_events(client, job_id)
+                .await
+                .unwrap_or_default()
+                .unwrap_or_default();
+            let next = events.into_iter().nth(seen);
+            let terminal = next.as_ref().is_some_and(|event| {
+                matches!(
+                    event.event_type.as_str(),
+                    "final" | "error" | "clarification"
+                )
+            });
+            let event = next
+                .as_ref()
+                .map(replay_event_to_sse)
+                .unwrap_or_else(|| Event::default().event("keepalive").data("{}"));
+            Some((
+                Ok::<_, Infallible>(event),
+                (!terminal).then_some(seen + usize::from(next.is_some())),
+            ))
+        }
+    })
+}
+
+/// Re-derives the SSE wire shape `JobService::emit_event` publishes live
+/// (`{kind, step, payload, at}`), so a replayed durable event is
+/// indistinguishable from one the client would have received live.
+fn replay_event_to_sse(event: &ChatJobEvent) -> Event {
+    let body = serde_json::json!({
+        "kind": event.event_type,
+        "step": event.step,
+        "payload": event.payload_json,
+        "at": event.created_at,
+    })
+    .to_string();
+    Event::default().event(event.event_type.clone()).data(body)
+}
+
+/// Best-effort peek at whether the job finished *during* the subscribe race
+/// (Task C1 part 2). Redis is live coordination only — any failure here
+/// (down, timeout, key expired) must fall through to the normal live stream,
+/// never fail or block the request.
+async fn live_state_is_terminal(redis_client: &redis::Client, job_id: Uuid) -> bool {
+    let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await else {
+        return false;
+    };
+    let key = format!("chat_job:{job_id}:live_state");
+    let value: redis::RedisResult<Option<String>> = redis::AsyncCommands::get(&mut conn, key).await;
+    matches!(value, Ok(Some(state)) if is_terminal_job_status(&state))
+}
 
 #[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id))]
 pub async fn create(
@@ -38,7 +122,7 @@ pub async fn create(
             message: request.message,
         })
         .await
-        .map_err(ApiError::internal)?
+        .map_err(map_create_error)?
     else {
         return Err(ApiError::not_found("chat session not found"));
     };
@@ -102,7 +186,7 @@ pub async fn stream(
     let Some(job) = state
         .chat
         .jobs
-        .get(client, job_id)
+        .get(client.clone(), job_id)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -116,70 +200,105 @@ pub async fn stream(
     })
     .to_string();
 
-    let Some(redis_client) = state.core.pools.redis.clone() else {
-        let events = stream::once(async move {
-            Ok::<_, Infallible>(Event::default().event("status").data(snapshot))
-        });
-        return Ok(Sse::new(events).into_response());
+    let status_event = || {
+        stream::once(
+            async move { Ok::<_, Infallible>(Event::default().event("status").data(snapshot)) },
+        )
     };
 
-    // Poll Redis :latest_event every 1s, emit on change, terminate on :live_state ∈ {completed, failed}.
-    // ponytail: polling; upgrade to PubSub if per-job event latency hurts UX.
-    let event_key = format!("chat_job:{job_id}:latest_event");
-    let state_key = format!("chat_job:{job_id}:live_state");
+    // Part 1 (C1): pub/sub has no history. If the job already finished
+    // before this subscriber connected — page reload, restored tab, a fast
+    // job, or just the gap between POST /chat/jobs and opening the stream —
+    // subscribing would hang forever waiting for a `final`/`error` message
+    // that already happened. Replay the durable log instead and end,
+    // without ever subscribing.
+    if is_terminal_job_status(&job.status) {
+        let events = state
+            .chat
+            .jobs
+            .replay_events(client, job_id)
+            .await
+            .map_err(ApiError::internal)?
+            .unwrap_or_default();
+        let replay_events: Vec<_> = events.iter().map(replay_event_to_sse).collect();
+        let replay = stream::iter(replay_events.into_iter().map(Ok::<_, Infallible>));
+        return Ok(Sse::new(status_event().chain(replay)).into_response());
+    }
+
+    let Some(redis_client) = state.core.pools.redis.clone() else {
+        return Ok(
+            Sse::new(status_event().chain(durable_poll_stream(state, client, job_id)))
+                .keep_alive(KeepAlive::default())
+                .into_response(),
+        );
+    };
+
     let redis_url = redis_url_log_value(&state.core.config.redis.url);
-    let stream = stream::unfold(
-        (
-            redis_client,
-            event_key,
-            state_key,
-            redis_url,
-            Some(snapshot),
-            0u32,
-            true,
-        ),
-        |(client, event_key, state_key, redis_url, snapshot, ticks, mut first)| async move {
-            if let Some(initial) = snapshot {
-                return Some((
-                    Ok::<_, Infallible>(Event::default().event("status").data(initial)),
-                    (client, event_key, state_key, redis_url, None, ticks, false),
-                ));
-            }
-            if !first {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            first = false;
-            if ticks >= 120 {
-                return None;
-            }
-            let mut conn = match client.get_multiplexed_async_connection().await {
-                Ok(conn) => conn,
-                Err(error) => {
-                    warn!(redis_url = %redis_url, error = %error, "redis connect failed during SSE");
-                    return None;
-                }
-            };
-            let event: Option<String> = redis::AsyncCommands::get(&mut conn, &event_key)
-                .await
-                .unwrap_or(None);
-            let live_state: Option<String> = redis::AsyncCommands::get(&mut conn, &state_key)
-                .await
-                .unwrap_or(None);
+    let channel = format!("chat_job:{job_id}:events");
+    let mut pubsub = match redis_client.get_async_pubsub().await {
+        Ok(pubsub) => pubsub,
+        Err(error) => {
+            warn!(redis_url = %redis_url, error = %error, "redis pubsub connect failed during SSE, using durable polling");
+            return Ok(
+                Sse::new(status_event().chain(durable_poll_stream(state, client, job_id)))
+                    .keep_alive(KeepAlive::default())
+                    .into_response(),
+            );
+        }
+    };
+    if let Err(error) = pubsub.subscribe(&channel).await {
+        warn!(redis_url = %redis_url, error = %error, channel = %channel, "redis subscribe failed during SSE, using durable polling");
+        return Ok(
+            Sse::new(status_event().chain(durable_poll_stream(state, client, job_id)))
+                .keep_alive(KeepAlive::default())
+                .into_response(),
+        );
+    }
 
-            let event = event.unwrap_or_else(|| "{}".to_string());
-            let sse = Event::default().event("update").data(event);
+    // Part 2 (C1): the job may have finished between the status snapshot
+    // above and this subscribe call — events published during that race are
+    // lost to pub/sub (no history), so a late `final`/`error` could be the
+    // only thing this subscription ever sees, or nothing at all. Re-check
+    // and, if the job already finished, replay the durable log instead of
+    // trusting the channel.
+    if live_state_is_terminal(&redis_client, job_id).await {
+        let events = state
+            .chat
+            .jobs
+            .replay_events(client, job_id)
+            .await
+            .map_err(ApiError::internal)?
+            .unwrap_or_default();
+        let replay_events: Vec<_> = events.iter().map(replay_event_to_sse).collect();
+        let replay = stream::iter(replay_events.into_iter().map(Ok::<_, Infallible>));
+        return Ok(Sse::new(status_event().chain(replay)).into_response());
+    }
 
-            let terminal = matches!(live_state.as_deref(), Some("completed") | Some("failed"));
-            let next_ticks = if terminal { 121 } else { ticks + 1 };
-            Some((
-                Ok(sse),
-                (client, event_key, state_key, redis_url, None, next_ticks, first),
-            ))
-        },
-    )
-    .take(125);
+    // Part 3: subscribe to the job's pub/sub channel and forward each event
+    // under its own `kind` as the SSE event name, terminating on
+    // `final`/`error`.
+    let message_stream = Box::pin(pubsub.into_on_message());
+    let events = status_event().chain(stream::unfold(Some(message_stream), |state| async move {
+        let mut message_stream = state?;
+        let message = message_stream.next().await?;
+        let payload: String = message.get_payload().unwrap_or_default();
+        let kind = serde_json::from_str::<serde_json::Value>(&payload)
+            .ok()
+            .and_then(|value| value.get("kind")?.as_str().map(str::to_string))
+            .unwrap_or_else(|| "update".to_string());
+        let is_terminal = matches!(kind.as_str(), "final" | "error" | "clarification");
+        let event = Event::default().event(kind).data(payload);
+        let next_state = if is_terminal {
+            None
+        } else {
+            Some(message_stream)
+        };
+        Some((Ok::<_, Infallible>(event), next_state))
+    }));
 
-    Ok(Sse::new(stream).into_response())
+    Ok(Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response())
 }
 
 #[tracing::instrument(skip(state, client, request), fields(user_id = %client.user_id, job_id = %job_id))]
@@ -197,6 +316,9 @@ pub async fn respond(
             job_id,
             clarification_id: request.clarification_id,
             clarification_revision: request.clarification_revision,
+            workflow_id: request.workflow_id,
+            node_id: request.node_id,
+            workflow_revision: request.workflow_revision,
             selected_option_id: request.option_id,
             source_message: request.message,
             answers: request.answers,
@@ -204,6 +326,14 @@ pub async fn respond(
         .await
         .map_err(ApiError::internal)?;
     let message = match outcome {
+        RespondToChatJobOutcome::WorkflowResumed => {
+            info!(job_id = %job_id, "workflow response accepted");
+            return Ok(response::success(
+                StatusCode::CREATED,
+                serde_json::json!({ "status": "queued" }),
+            )
+            .into_response());
+        }
         RespondToChatJobOutcome::Inserted(message) => message,
         RespondToChatJobOutcome::NotFound => return Err(ApiError::not_found("chat job not found")),
         RespondToChatJobOutcome::NotActive => {

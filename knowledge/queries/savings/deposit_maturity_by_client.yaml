@@ -1,0 +1,33 @@
+id: savings.deposit_maturity_by_client
+database: fineract
+# Wraps the savings.deposits dataset's maturity_rows shape, filtered by
+# client_id, so an approved capability can back it (013 §6.4). Columns match
+# the shape's frag SELECT.
+sql_file: queries/savings/deposit_maturity_by_client.sql
+data_areas: [organization_foundation, client_foundation, savings_core]
+tables:
+  - m_savings_account
+  - m_client
+  - m_deposit_account_term_and_preclosure
+  - m_deposit_account_recurring_detail
+metrics: [savings.account_count]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - { name: client_id, type: integer, required: true }
+output_fields:
+  - { name: savings_account_id, type: bigint, sensitivity: public_business }
+  - { name: client_id, type: bigint, sensitivity: public_business }
+  - { name: client_display_name, type: string, sensitivity: pii }
+  - { name: deposit_type_enum, type: integer, sensitivity: public_business }
+  - { name: currency_code, type: string, sensitivity: public_business }
+  - { name: term_deposit_amount, type: decimal, sensitivity: public_business }
+  - { name: maturity_amount, type: decimal, sensitivity: public_business }
+  - { name: maturity_date, type: date, sensitivity: public_business }
+  - { name: deposit_period, type: integer, sensitivity: public_business }
+  - { name: deposit_period_frequency_enum, type: integer, sensitivity: public_business }
+  - { name: mandatory_recommended_deposit_amount, type: decimal, sensitivity: public_business }
+  - { name: is_mandatory, type: boolean, sensitivity: public_business }
+  - { name: total_overdue_amount, type: decimal, sensitivity: public_business }
+  - { name: no_of_overdue_installments, type: integer, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

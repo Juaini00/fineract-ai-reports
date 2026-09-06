@@ -1,0 +1,19 @@
+id: savings.account_terms_lookup
+database: fineract
+sql_file: queries/savings/account_terms_lookup.sql
+data_areas: [client_foundation, savings_core]
+tables: [m_savings_account, m_client, m_savings_product]
+metrics: [savings.account_terms]
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+  - { name: account_number, type: string, required: true, source: transient_sensitive_input }
+output_fields:
+  - { name: savings_account_id, type: bigint, sensitivity: public_business }
+  - { name: masked_account_number, type: string, sensitivity: masked_output }
+  - { name: account_nominal_annual_interest_rate, type: decimal, sensitivity: public_business }
+  - { name: product_nominal_annual_interest_rate, type: decimal, sensitivity: public_business }
+  - { name: account_allow_overdraft, type: boolean, sensitivity: public_business }
+  - { name: product_allow_overdraft, type: boolean, sensitivity: public_business }
+  - { name: account_overdraft_limit, type: decimal, sensitivity: public_business }
+  - { name: product_overdraft_limit, type: decimal, sensitivity: public_business }
+timeout_ms: 3000

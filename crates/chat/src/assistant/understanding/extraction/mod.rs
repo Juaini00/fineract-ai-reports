@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +8,7 @@ use crate::assistant::{
 };
 
 mod domain;
+mod identifier;
 mod quantity;
 mod temporal;
 #[cfg(test)]
@@ -15,9 +16,12 @@ mod tests;
 mod token;
 
 use domain::{extract_domain, extract_metric};
+pub(crate) use identifier::{SensitiveIdentifier, identifier_intake};
 use quantity::{extract_quantity, quantity_parts};
 use temporal::resolve_temporal;
-use token::{extract_currency, extract_person_name, words};
+use token::{
+    NamedEntityKind, extract_currency, extract_named_entities, extract_transaction_amount, words,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DeterministicExtraction {
@@ -75,12 +79,24 @@ pub enum PayloadField {
     PersonName,
 }
 
+/// Provenance of a resolved payload field, recorded for the issue-006 audit trail.
+///
+/// `#[non_exhaustive]` + the `Unknown` catch-all keep this forward-compatible: the
+/// drill-down follow-up (issue 009, §W-H decision 3) will add a `PriorJob` variant
+/// without a contract break, and an unknown source string from a newer producer
+/// deserialises to `Unknown` instead of failing. Do not reorder or rename the
+/// known variants — their snake_case tags are the stored audit contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PayloadSource {
     UserText,
     LlmClaim,
     CatalogDefault,
+    /// Any source tag this build does not recognise. Forward-compatibility only —
+    /// never construct this deliberately; producers emit a specific known source.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -232,13 +248,18 @@ fn conflict(
     }
 }
 
-pub fn extract_message_facts(message: &str) -> DeterministicExtraction {
-    extract_message_facts_at(message, Utc::now(), 366)
+/// The deterministic extractor is a `pub(crate)` verification helper: the
+/// runtime grounds the LLM's advisory facts against it, and it serves as a
+/// sanity-check for the LLM's `entities` / phrase spans.
+pub(crate) fn extract_message_facts(message: &str) -> DeterministicExtraction {
+    let now = Utc::now();
+    extract_message_facts_at(message, now, now.date_naive(), 366)
 }
 
-pub fn extract_message_facts_at(
+pub(crate) fn extract_message_facts_at(
     message: &str,
     reference_instant: DateTime<Utc>,
+    business_today: NaiveDate,
     max_range_days: i64,
 ) -> DeterministicExtraction {
     let lower = message.to_lowercase();
@@ -246,7 +267,7 @@ pub fn extract_message_facts_at(
     let mut extraction = DeterministicExtraction::default();
 
     extraction.constraints.quantity = extract_quantity(&lower, &words);
-    match resolve_temporal(message, reference_instant, max_range_days) {
+    match resolve_temporal(message, reference_instant, business_today, max_range_days) {
         Ok(Some(resolved)) => {
             extraction.constraints.from_date = Some(resolved.from.to_string());
             extraction.constraints.to_date = Some(resolved.to.to_string());
@@ -266,11 +287,25 @@ pub fn extract_message_facts_at(
             confidence: Some(1.0),
         });
     }
-    if let Some(name) = extract_person_name(message) {
+    extraction.constraints.transaction_amount = extract_transaction_amount(message);
+    for (kind, value) in extract_named_entities(message) {
+        let entity_type = match kind {
+            NamedEntityKind::Person => AssistantEntityType::PersonName,
+            NamedEntityKind::Office => AssistantEntityType::Office,
+            NamedEntityKind::ChargeType => AssistantEntityType::ChargeType,
+            NamedEntityKind::Product => AssistantEntityType::Product,
+        };
+        if extraction
+            .entities
+            .iter()
+            .any(|existing| existing.entity_type == entity_type)
+        {
+            continue;
+        }
         extraction.entities.push(AssistantEntity {
-            entity_type: AssistantEntityType::PersonName,
-            value: name.clone(),
-            canonical: Some(name),
+            entity_type,
+            value: value.clone(),
+            canonical: Some(value),
             confidence: Some(1.0),
         });
     }

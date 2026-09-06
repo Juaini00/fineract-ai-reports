@@ -1,0 +1,44 @@
+---
+id: savings.transactions
+database: fineract
+source_sql: queries/datasets/savings/transactions.source.sql
+tables:
+  - m_savings_account_transaction
+  - m_savings_account
+  - m_client
+entity:
+  kind: savings_account
+  id_field: savings_account_id
+  label_fields: [client_display_name]
+  label_fallback: "Savings account {savings_account_id}"
+filters:
+  - { id: savings_account_id, expr: savings_account_id, type: integer, operators: [eq, in] }
+  - { id: savings_transaction_id, expr: savings_transaction_id, type: integer, operators: [eq, in] }
+  - { id: client_id, expr: client_id, type: integer, operators: [eq] }
+shapes:
+  - id: activity_rows
+    role: resolver
+    expected_cardinality: many
+    row_cap: 100
+    produces:
+      - { slot: savings_account_id, type: integer, sensitivity: public_business, cardinality: many }
+      - { slot: savings_transaction_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: list
+      subject: savings_transaction
+      grouping: none
+      output: list
+      pii: client_identity
+    fragment: queries/datasets/savings/transactions.activity_rows.frag.sql
+    output_fields:
+      - { name: savings_transaction_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: client_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: client_display_name, type: string, sensitivity: pii, core: true }
+      - { name: transaction_type_enum, type: bigint, sensitivity: public_business, core: true }
+      - { name: transaction_date, type: date, sensitivity: public_business, core: true }
+      - { name: amount, type: decimal, sensitivity: public_business, core: true }
+      - { name: running_balance, type: decimal, sensitivity: public_business }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

@@ -32,4 +32,14 @@ Resolved: YYYY-MM-DD or blank
 - [Robust verified payload extraction](./active/003-verified-payload-extraction.md)
 - [API key/session ownership model mismatch](./active/004-api-key-session-ownership.md)
 - [Unified agentic clarification contract and job-scoped workflow](./active/005-unified-agentic-clarification-contract.md)
+- [Management observability and audit contract](./active/006-management-observability-and-audit-contract.md)
+- [Analyst-grade knowledge and request mapping](./active/007-analyst-grade-knowledge-and-request-mapping.md)
+- [Loan domain analyst capabilities](./active/008-loan-domain-analyst-capabilities.md)
+- [Conversational drill-down](./active/009-conversational-drill-down.md)
+- [Agentic workflow runtime and framework completion](./active/012-agentic-workflow-runtime-and-framework-completion.md)
 - [Hardcode cleanup issues](./active/hardcode-cleanup-issues.md)
+
+## Resolved issues
+
+- [Operational identity and relationship lookups](./resolved/010-operational-identity-and-relationship-lookups.md)
+- [Dataset filter and shape coverage gaps](./resolved/011-dataset-filter-and-shape-coverage-gaps.md)

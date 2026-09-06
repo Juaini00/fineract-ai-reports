@@ -81,6 +81,15 @@ impl ApiError {
         }
     }
 
+    pub fn too_many_requests_with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code,
+            message: message.into(),
+            details: None,
+        }
+    }
+
     pub fn internal(error: anyhow::Error) -> Self {
         warn!(error = %error, "internal API error");
         Self {

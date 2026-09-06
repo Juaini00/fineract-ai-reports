@@ -1,0 +1,23 @@
+id: group.group_candidates
+database: fineract
+# Wraps the group.groups dataset's group_candidates resolver shape so a
+# capability can back it (013 §6.5). Not approved_mvp: group_center is
+# `candidate` and stays inert until a deployment enables
+# group-center-foundation (spec §7) and promotes the domain.
+sql_file: queries/datasets/group/groups.source.sql
+data_areas: [group_center_foundation, organization_foundation]
+tables: [m_group, m_group_client]
+metrics: []
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+output_fields:
+  - { name: group_id, type: bigint, sensitivity: public_business }
+  - { name: group_display_name, type: string, sensitivity: public_business }
+  - { name: group_status_enum, type: integer, sensitivity: public_business }
+  - { name: office_id, type: bigint, sensitivity: public_business }
+  - { name: staff_id, type: bigint, sensitivity: public_business }
+  - { name: parent_group_id, type: bigint, sensitivity: public_business }
+  - { name: hierarchy, type: string, sensitivity: public_business }
+  - { name: member_count, type: bigint, sensitivity: public_business }
+guards: { select_only: true, single_statement: true, require_office_filter: true, parameterized_only: true }
+timeout_ms: 3000

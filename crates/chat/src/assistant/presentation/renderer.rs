@@ -1,12 +1,18 @@
+use rust_decimal::Decimal;
 use serde_json::Value;
 
-use crate::assistant::response::{AssistantResponse, ResponseTable};
+use crate::assistant::{
+    presentation::builder::format_money,
+    response::{AssistantResponse, ResponseTable, TableColumn, TableColumnKind},
+};
 
 pub trait ResponseRenderer {
     fn render(&self, response: &AssistantResponse) -> String;
 }
 
 pub struct MarkdownRenderer;
+
+const MARKDOWN_TABLE_ROW_LIMIT: usize = 50;
 
 impl ResponseRenderer for MarkdownRenderer {
     fn render(&self, response: &AssistantResponse) -> String {
@@ -145,16 +151,42 @@ fn render_table(out: &mut String, table: &ResponseTable) {
     for _ in &visible {
         out.push_str("---|");
     }
-    for row in &table.rows {
+    for row in table.rows.iter().take(MARKDOWN_TABLE_ROW_LIMIT) {
         out.push_str("\n|");
         for column in &visible {
-            out.push_str(&cell(row, &column.key));
+            out.push_str(&cell(row, column));
             out.push('|');
         }
     }
 }
 
-fn cell(row: &Value, key: &str) -> String {
+fn cell(row: &Value, column: &TableColumn) -> String {
+    let value = if column.kind == TableColumnKind::Money {
+        money_cell(row, &column.key).unwrap_or_else(|| raw_cell(row, &column.key))
+    } else {
+        raw_cell(row, &column.key)
+    };
+    value
+        .replace('\r', "")
+        .replace('\n', "<br>")
+        .replace('|', "\\|")
+}
+
+fn money_cell(row: &Value, key: &str) -> Option<String> {
+    let value = row.get(key)?.as_str()?.parse::<Decimal>().ok()?;
+    let digits = row.get("currency_digits")?.as_u64()? as u32;
+    let code = row.get("currency_code")?.as_str()?.trim();
+    if code.is_empty() {
+        return None;
+    }
+    let symbol = row
+        .get("currency_display_symbol")
+        .and_then(Value::as_str)
+        .filter(|symbol| !symbol.trim().is_empty());
+    Some(format_money(value, digits, symbol, code))
+}
+
+fn raw_cell(row: &Value, key: &str) -> String {
     match row.get(key) {
         Some(Value::String(value)) => value.clone(),
         Some(Value::Number(value)) => value.to_string(),

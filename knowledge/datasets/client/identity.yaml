@@ -1,0 +1,44 @@
+---
+id: client.identity
+database: fineract
+source_sql: queries/datasets/client/identity.source.sql
+tables:
+  - m_client
+  - m_office
+entity:
+  kind: client
+  id_field: client_id
+  label_fields: [client_display_name, office_name]
+  label_fallback: "Client {client_id}"
+filters:
+  - { id: client_id, expr: client_id, type: integer, operators: [eq, in] }
+  - { id: client_display_name, expr: client_display_name, type: string, case_insensitive: true, operators: [eq] }
+  - { id: office_name, expr: office_name, type: string, case_insensitive: true, operators: [eq] }
+# office_id is narrowed by name, not by id — the office-name filter above is
+# the same narrowing axis (see organization.offices/office_candidates, which
+# resolves a name to an id ahead of this dataset).
+filters_exempt:
+  - office_id
+shapes:
+  - id: identity_candidates
+    role: resolver
+    expected_cardinality: many
+    row_cap: 25
+    produces:
+      - { slot: client_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: lookup
+      subject: client
+      grouping: none
+      output: lookup
+      pii: client_identity
+    fragment: queries/datasets/client/identity.identity_candidates.frag.sql
+    output_fields:
+      - { name: client_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: client_display_name, type: string, sensitivity: pii, core: true }
+      - { name: office_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: office_name, type: string, sensitivity: public_business, core: true }
+      - { name: client_status_enum, type: bigint, sensitivity: public_business, core: true }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 
 use super::token::tokens_with_spans;
 use super::{TemporalProvenance, TemporalValidationError};
@@ -12,12 +12,12 @@ pub(super) struct ResolvedTemporal {
 pub(super) fn resolve_temporal(
     message: &str,
     reference_instant: DateTime<Utc>,
+    business_today: NaiveDate,
     max_range_days: i64,
 ) -> Result<Option<ResolvedTemporal>, TemporalValidationError> {
     let lower = message.to_ascii_lowercase();
     let tokens = tokens_with_spans(&lower);
-    let jakarta = FixedOffset::east_opt(7 * 3600).expect("valid Jakarta offset");
-    let today = reference_instant.with_timezone(&jakarta).date_naive();
+    let today = business_today;
     let invalid = |code: &str, message: &str| TemporalValidationError {
         code: code.into(),
         message: message.into(),
@@ -47,6 +47,50 @@ pub(super) fn resolve_temporal(
             },
         }))
     };
+
+    // Month-name ranges: "from January to September 2026",
+    // "dari Januari sampai September". Must run before the generic
+    // "from X to Y" window below, which would otherwise hand "january" to
+    // parse_date and refuse with temporal_invalid_date.
+    for start in 0..tokens.len() {
+        if !matches!(tokens[start].0, "from" | "dari") {
+            continue;
+        }
+        let Some((from_month, from_year, after_from)) = month_expr(&tokens, start + 1) else {
+            continue;
+        };
+        if !matches!(
+            tokens.get(after_from).map(|token| token.0),
+            Some("to") | Some("sampai")
+        ) {
+            continue;
+        }
+        let Some((to_month, to_year, end)) = month_expr(&tokens, after_from + 1) else {
+            continue;
+        };
+        // A month range that states no year at all means the current business
+        // year — the Indonesian examples ("dari Januari sampai September")
+        // depend on it. A year stated on either side applies to both. We never
+        // invent a *different* year per side: "November to February" therefore
+        // stays reversed and is refused below rather than silently rolled into
+        // the next year.
+        let stated = from_year.or(to_year).unwrap_or_else(|| today.year());
+        let (Some(from), Some(to)) = (
+            month_start(from_year.unwrap_or(stated), from_month),
+            month_end(to_year.unwrap_or(stated), to_month),
+        ) else {
+            return Err(invalid(
+                "temporal_invalid_date",
+                "Use a valid Gregorian date in YYYY-MM-DD format.",
+            ));
+        };
+        return finish(
+            from,
+            to,
+            "inclusive_month_range",
+            [tokens[start].1, tokens[end - 1].2],
+        );
+    }
 
     for window in tokens.windows(4) {
         if matches!(
@@ -270,6 +314,58 @@ fn relative_range(today: NaiveDate, rule: &str) -> (NaiveDate, NaiveDate) {
         ),
         _ => unreachable!(),
     }
+}
+
+/// `<month> [year]` starting at `index`. Returns the month number, the year
+/// only when the user actually stated one, and the index just past the phrase.
+fn month_expr(tokens: &[(&str, usize, usize)], index: usize) -> Option<(u32, Option<i32>, usize)> {
+    let month = month_number(tokens.get(index)?.0)?;
+    let year = tokens.get(index + 1).and_then(|token| parse_year(token.0));
+    Some((month, year, index + if year.is_some() { 2 } else { 1 }))
+}
+
+/// `pub(super)` so `token.rs` can refuse to read a month name as an office name
+/// ("deposits in January"). One month table, not two.
+pub(super) fn month_number(word: &str) -> Option<u32> {
+    const MONTHS: [(&str, &str); 12] = [
+        ("january", "januari"),
+        ("february", "februari"),
+        ("march", "maret"),
+        ("april", "april"),
+        ("may", "mei"),
+        ("june", "juni"),
+        ("july", "juli"),
+        ("august", "agustus"),
+        ("september", "september"),
+        ("october", "oktober"),
+        ("november", "november"),
+        ("december", "desember"),
+    ];
+    MONTHS
+        .iter()
+        .position(|(english, indonesian)| *english == word || *indonesian == word)
+        .map(|index| index as u32 + 1)
+}
+
+fn parse_year(word: &str) -> Option<i32> {
+    (word.len() == 4 && word.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| word.parse().ok())
+        .flatten()
+}
+
+fn month_start(year: i32, month: u32) -> Option<NaiveDate> {
+    NaiveDate::from_ymd_opt(year, month, 1)
+}
+
+/// Last day of the month. Stepping back from the first of the next month gets
+/// February right in leap years without a day-count table.
+fn month_end(year: i32, month: u32) -> Option<NaiveDate> {
+    let next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    };
+    next?.pred_opt()
 }
 
 fn parse_date(value: &str) -> Result<NaiveDate, TemporalValidationError> {

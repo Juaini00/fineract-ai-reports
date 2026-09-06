@@ -2,14 +2,15 @@ id: client_random_sample
 status: approved_mvp
 domain: client
 display_name: Random Client Sample
-description: Return a random sample of active clients in the caller's authorized office scope, for spot-checking or arbitrary browsing with no ranking metric.
+description: Return a random sample of active clients in the caller's authorized office scope, for spot-checking
+  or arbitrary browsing with no ranking metric.
 data_areas:
-  - client_foundation
-  - organization_foundation
+- client_foundation
+- organization_foundation
 required_api_capability: client_random_sample
 query_id: client.client_random_sample
 metrics:
-  - client.client_lifecycle_count
+- client.client_lifecycle_count
 output_mode: list
 request_shape:
   operation: random_sample
@@ -18,18 +19,16 @@ request_shape:
   output: list
   pii: client_identity
 examples:
-  - coba berikan saya 5 client sembarang pada tahun ini
-  - Give me a random sample of 5 clients.
-  - Show a few arbitrary clients from my offices.
+- coba berikan saya 5 client sembarang pada tahun ini
+- Give me a random sample of 5 clients.
+- Show a few arbitrary clients from my offices.
+- Show 5 random clients from Head Office.
+- Give me a random sample of clients in office Head Office.
 supported_intents:
-  - random/arbitrary sample of clients with no ranking metric
+- random/arbitrary sample of clients with no ranking metric
 unsupported_intents:
-  - clients ranked or filtered by a metric
-  - client identity lookup by name
-required_parameters:
-  - limit
-optional_parameters:
-  - office_ids
+- clients ranked or filtered by a metric
+- client identity lookup by name
 defaults:
   authorized_scope_only: true
   default_limit: 5
@@ -39,21 +38,44 @@ guards:
   pii:
     returns_pii: true
     never_return:
-      - account_no
-      - external_id
-      - mobile_no
-      - email_address
-cost_class: medium
-clarification:
-  missing_parameters: []
+    - account_no
+    - external_id
+    - mobile_no
+    - email_address
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: pii_gated
-    rule: pii output fields must be redacted when caller lacks can_view_pii.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
-  - id: bounded_sample_size
-    rule: limit must never exceed 50.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: pii_gated
+  rule: pii output fields must be redacted when caller lacks can_view_pii.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: bounded_sample_size
+  rule: limit must never exceed 50.
+- id: office_name_narrows_only
+  rule: >-
+    A user-named office may only narrow within authorized_scope. It is bound
+    into the approved SQL and ANDed after the authorized office_ids predicate,
+    never post-filtered in Rust, so naming an office outside the caller's scope
+    returns no rows rather than data or an existence signal.
+- id: office_name_is_exact_not_hierarchical
+  rule: >-
+    office_name matches the office's own name exactly (case-insensitive). Child
+    offices are NOT included; every returned row carries office_name so the
+    scope actually applied is visible in the output.
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    default: unbounded
+    hard_cap: 50
+  office_name:
+    type: string
+    required: false
+    user_may_override: true

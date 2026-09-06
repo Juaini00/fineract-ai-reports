@@ -153,3 +153,72 @@ async fn bearer_authority_is_loaded_from_active_user_and_owned_active_session() 
         .unwrap();
     assert_eq!(create_key.status(), StatusCode::FORBIDDEN);
 }
+
+/// SI-1: every chat route — including the workflow (`/chat/jobs/{id}/responses`)
+/// and admin (`/vector-index/*`) endpoints — requires a bearer session JWT. A
+/// request with no `Authorization` header must be rejected with 401 before any
+/// handler logic runs. An API key alone can never authenticate a chat request.
+#[tokio::test(flavor = "multi_thread")]
+async fn si1_every_chat_route_requires_a_bearer_and_rejects_missing_auth() {
+    let app = spawn_app().await;
+    let job = Uuid::new_v4();
+
+    // (method, path) for every chat/catalog/vector-index route.
+    let get_routes = [
+        "/chat/sessions",
+        &format!("/chat/jobs/{job}"),
+        &format!("/chat/jobs/{job}/audit"),
+        &format!("/chat/jobs/{job}/stream"),
+        "/catalog/capabilities",
+        "/vector-index/status",
+    ];
+    for path in get_routes {
+        let resp = app
+            .http
+            .get(format!("{}{path}", app.base_url))
+            .send()
+            .await
+            .expect("send get");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "GET {path} must require a bearer"
+        );
+    }
+
+    let post_routes = [
+        "/chat/sessions",
+        "/chat/jobs",
+        &format!("/chat/jobs/{job}/responses"),
+        "/catalog/validate",
+        "/vector-index/rebuild",
+    ];
+    for path in post_routes {
+        let resp = app
+            .http
+            .post(format!("{}{path}", app.base_url))
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("send post");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "POST {path} must require a bearer"
+        );
+    }
+
+    // An API key without a bearer must not authenticate a chat route either.
+    let with_api_key = app
+        .http
+        .get(format!("{}/chat/sessions", app.base_url))
+        .header("X-API-Key", "air_test_not-a-real-key")
+        .send()
+        .await
+        .expect("send get with api key");
+    assert_eq!(
+        with_api_key.status(),
+        StatusCode::UNAUTHORIZED,
+        "an API key alone can never authenticate a chat request"
+    );
+}

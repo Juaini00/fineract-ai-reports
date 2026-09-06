@@ -116,7 +116,7 @@ Reporting rules:
 | --- | --- | --- | --- |
 | `created_by` | `bigint` | no | Audit creator user id. Exclude from MVP unless operational audit scope is enabled. |
 | `last_modified_by` | `bigint` | no | Audit updater user id. Exclude from MVP unless operational audit scope is enabled. |
-| `created_on_utc` | `timestamp with time zone` | no | Audit creation timestamp. Exclude from MVP unless operational audit scope is enabled. |
+| `created_on_utc` | `timestamp with time zone` | no | Audit creation timestamp. Approved only to order the recently-created savings account charges report; it is not a business, due, assessment, or payment date. |
 | `last_modified_on_utc` | `timestamp with time zone` | no | Audit update timestamp. Exclude from MVP unless operational audit scope is enabled. |
 
 ## 3. `m_savings_account_charge_paid_by`
@@ -265,7 +265,7 @@ Excluded from MVP output:
 
 - `m_savings_account_charge.created_by`.
 - `m_savings_account_charge.last_modified_by`.
-- `m_savings_account_charge.created_on_utc`.
+- `m_savings_account_charge.created_on_utc` is approved only as the ordering key for the recently-created savings account charges report; it remains excluded from report output.
 - `m_savings_account_charge.last_modified_on_utc`.
 - `m_charge.income_or_liability_account_id` until accounting scope is approved.
 - `m_charge.tax_group_id` until tax scope is approved.

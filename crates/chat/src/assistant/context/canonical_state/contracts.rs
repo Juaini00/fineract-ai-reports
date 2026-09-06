@@ -18,12 +18,22 @@ pub enum ConstraintField {
     ToDate,
     CurrencyCode,
     Metric,
+    TransactionAmount,
     Domain,
     PersonName,
+    ClientId,
     Office,
     Product,
     ProductIds,
     OfficeIds,
+    /// A charge/fee type name (`m_charge.name`). Without a canonical field the
+    /// `charge_name` clarification loop could never terminate: the answer had
+    /// nowhere to be stored, so the next turn asked for it again.
+    ChargeType,
+    /// A savings account number. Filter-only and never projected; it reaches SQL
+    /// as `transient_sensitive_input`, but it still needs a field so a text
+    /// clarification answer can be recorded.
+    AccountNumber,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -52,10 +62,14 @@ pub enum TypedFactValue {
     Date(String),
     CurrencyCode(String),
     Metric(String),
+    Decimal(String),
     Domain(AssistantDomain),
     PersonName(String),
+    ClientId(i64),
     Office(String),
     Product(String),
+    ChargeType(String),
+    AccountNumber(String),
     IdList(ListPatch<i64>),
 }
 
@@ -218,10 +232,13 @@ pub fn executable_constraint_contracts() -> ConstraintContracts {
         (ToDate, true, false),
         (CurrencyCode, true, false),
         (Metric, true, false),
+        (TransactionAmount, true, false),
         (Domain, false, false),
         (PersonName, true, false),
         (Office, true, false),
         (Product, true, false),
+        (ChargeType, true, false),
+        (AccountNumber, true, false),
         (ProductIds, true, true),
         (OfficeIds, true, true),
     ]

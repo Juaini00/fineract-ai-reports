@@ -3,11 +3,9 @@ use anyhow::{Result, bail};
 use crate::{
     assistant::{
         AssistantIntent, DeterministicExtraction, PlannerInputSnapshot,
-        execution::plan::{
-            AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, RetrievalPlan,
-        },
+        execution::plan::{EvidenceEvaluation, ExecutionPlan, RetrievalPlan},
     },
-    knowledge::model::KnowledgeCatalog,
+    knowledge::{catalog::parameter_policy::EvaluationContext, model::KnowledgeCatalog},
 };
 
 use super::parameters::{
@@ -24,7 +22,14 @@ pub(super) fn plan_selected_capability(
         entities: intent.entities.clone(),
         ..Default::default()
     };
-    plan_selected_capability_verified(catalog, capability_id, intent, Some(&legacy_extraction))
+    plan_selected_capability_verified(
+        catalog,
+        capability_id,
+        intent,
+        Some(&legacy_extraction),
+        None,
+        None,
+    )
 }
 
 pub(super) fn plan_selected_capability_verified(
@@ -32,6 +37,8 @@ pub(super) fn plan_selected_capability_verified(
     capability_id: &str,
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
+    ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<ExecutionPlan> {
     if let Some(error) = deterministic_extraction.and_then(|value| value.temporal_error.as_ref()) {
         bail!("{}: {}", error.code, error.message);
@@ -41,19 +48,43 @@ pub(super) fn plan_selected_capability_verified(
         .iter()
         .find(|item| item.id == capability_id && item.status == "approved_mvp")
         .ok_or_else(|| anyhow::anyhow!("selected capability is not executable"))?;
-    verify_capability_metric(capability.metrics.as_slice(), deterministic_extraction)?;
+    verify_capability_metric(
+        catalog,
+        capability.metrics.as_slice(),
+        deterministic_extraction,
+    )?;
     let query = catalog
         .queries
         .iter()
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
-    let params = params_from_verified(query, intent, deterministic_extraction)?;
+    let params = params_from_verified(
+        catalog,
+        query,
+        intent,
+        deterministic_extraction,
+        &capability.parameter_policies,
+        ctx,
+        message,
+    )?;
+    let dataset_selection = capability
+        .dataset_recipe
+        .as_ref()
+        .map(|recipe| {
+            let dataset = catalog
+                .datasets
+                .iter()
+                .find(|dataset| dataset.id == recipe.dataset_id)
+                .ok_or_else(|| anyhow::anyhow!("selected capability has no approved dataset"))?;
+            crate::knowledge::dataset::resolve::resolve_recipe(dataset, recipe, &params)
+        })
+        .transpose()?;
 
     Ok(ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: capability.id.clone(),
         query_id: query.id.clone(),
+        dataset_selection,
         output_mode: capability.output_mode.clone(),
         params,
         retrieval_plan: RetrievalPlan {
@@ -73,9 +104,6 @@ pub(super) fn plan_selected_capability_verified(
             source_types: vec!["capability".into()],
             reason: None,
         },
-        answer_plan: AnswerPlan {
-            sections: vec!["Result".into(), "Scope".into(), "Evidence".into()],
-        },
         requires_policy_check: true,
     })
 }
@@ -91,11 +119,27 @@ pub(super) fn plan_from_snapshot(
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
     validate_snapshot_parameters(query, &snapshot.normalized_parameters)?;
+    let dataset_selection = capability
+        .dataset_recipe
+        .as_ref()
+        .map(|recipe| {
+            let dataset = catalog
+                .datasets
+                .iter()
+                .find(|dataset| dataset.id == recipe.dataset_id)
+                .ok_or_else(|| anyhow::anyhow!("selected capability has no approved dataset"))?;
+            crate::knowledge::dataset::resolve::resolve_recipe(
+                dataset,
+                recipe,
+                &snapshot.normalized_parameters,
+            )
+        })
+        .transpose()?;
     Ok(ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: capability.domain.clone(),
         capability: capability.id.clone(),
         query_id: query.id.clone(),
+        dataset_selection,
         output_mode: capability.output_mode.clone(),
         params: snapshot.normalized_parameters.clone(),
         retrieval_plan: RetrievalPlan::default(),
@@ -104,9 +148,6 @@ pub(super) fn plan_from_snapshot(
             source_count: 1,
             source_types: vec!["planner_input_snapshot".into()],
             reason: None,
-        },
-        answer_plan: AnswerPlan {
-            sections: vec!["Result".into(), "Scope".into(), "Evidence".into()],
         },
         requires_policy_check: true,
     })

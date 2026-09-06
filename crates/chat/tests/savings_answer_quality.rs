@@ -103,6 +103,10 @@ async fn savings_answer_respects_narrow_office_scope() {
     assert_ne!(wide_expected, narrow_expected);
 }
 
+/// A parameter-only reply that carries `option_id` must stay on the capability the
+/// analyst picked. The reply is answered in the same turn rather than provoking a
+/// second clarification, because `savings_deposit_total`'s date parameters declare
+/// `default: business_today` and the pipeline fills them itself.
 #[tokio::test(flavor = "multi_thread")]
 async fn savings_clarification_keeps_selected_capability_for_parameter_only_reply() {
     let app = spawn_app().await;
@@ -141,23 +145,18 @@ async fn savings_clarification_keeps_selected_capability_for_parameter_only_repl
         resp.text().await.unwrap_or_default()
     );
     let selected = wait_until_not_running(&app, &key.raw, &job_id).await;
-    assert_eq!(selected["status"], "waiting_for_user_input", "{selected}");
+    assert_eq!(selected["status"], "completed", "{selected}");
     let response = &selected["result_json"]["structured_response"];
+    // The guarantee this test exists for: the option the analyst picked survives the
+    // parameter-only reply and is the capability that actually ran.
     assert_eq!(
         selected["result_json"]["selected_capability"],
         case.capability
     );
-    let clarification = &response["clarification"];
-    assert_eq!(clarification["kind"], "collect_fields", "{selected}");
-    assert_eq!(
-        clarification["fields"]
-            .as_array()
-            .unwrap_or_else(|| panic!("missing clarification fields: {selected}"))
-            .iter()
-            .map(|field| field["key"].as_str())
-            .collect::<Vec<_>>(),
-        vec![Some("date_range")],
-        "{selected}"
+    assert_eq!(response["response_type"], "table", "{selected}");
+    assert!(
+        response["clarification"].is_null(),
+        "policy-defaulted dates must not be asked for again: {selected}"
     );
     assert_no_legacy_empty_options_loop(response);
     assert_no_response_leak(response, &selected["result_json"]["markdown"]);

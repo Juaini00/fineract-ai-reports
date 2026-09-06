@@ -9,12 +9,17 @@ fn default_required_parameter(parameter: &QueryParameter) -> Option<Value> {
         .then(|| json!(DEFAULT_REPORT_LIMIT))
 }
 
+use std::collections::BTreeMap;
+
 use crate::{
     assistant::{
         AssistantEntityType, AssistantIntent, ConstraintField, DeterministicExtraction,
         EffectiveConstraints, LimitMode, ListPatch, Quantity, TypedFactValue,
     },
-    knowledge::model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
+    knowledge::{
+        catalog::parameter_policy::{EvaluationContext, ParameterPolicy, ResolvedValue},
+        model::{CapabilityKnowledge, KnowledgeCatalog, QueryKnowledge, QueryParameter},
+    },
 };
 
 pub fn approved_default_patch(
@@ -64,23 +69,25 @@ pub(super) fn normalize_effective_parameters(
         .iter()
         .find(|item| item.id == capability.query_id)
         .ok_or_else(|| anyhow::anyhow!("selected capability has no approved query"))?;
-    if let Some(TypedFactValue::Metric(metric)) = effective.values.get(&ConstraintField::Metric) {
-        let trusted = normalize_metric(metric);
-        if !capability
+    if let Some(TypedFactValue::Metric(metric)) = effective.values.get(&ConstraintField::Metric)
+        && let Some(requested) = catalog.resolve_metric_id(metric)
+        && !capability
             .metrics
             .iter()
-            .any(|item| normalize_metric(item) == trusted)
-        {
-            bail!("selected capability does not match requested metric {metric}");
-        }
+            .any(|item| catalog.resolve_metric_id(item) == Some(requested))
+    {
+        bail!("selected capability does not match requested metric {metric}");
     }
     validate_effective_date_range(effective)?;
     let mut params = serde_json::Map::new();
     for parameter in &query.parameters {
-        if parameter.source.as_deref() == Some("authorized_scope") {
+        if matches!(
+            parameter.source.as_deref(),
+            Some("authorized_scope" | "transient_sensitive_input")
+        ) {
             continue;
         }
-        let value = effective_parameter(effective, &parameter.name)
+        let value = bind_parameter(catalog, &effective.values, parameter)
             .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
@@ -88,7 +95,32 @@ pub(super) fn normalize_effective_parameters(
             bail!("missing parameter {}", parameter.name);
         }
     }
+    clamp_hard_caps(&mut params, &capability.parameter_policies);
     Ok(Value::Object(params))
+}
+
+pub(super) fn clamp_hard_caps(
+    params: &mut serde_json::Map<String, Value>,
+    policies: &[ParameterPolicy],
+) {
+    for policy in policies {
+        let Some(cap) = policy.hard_cap else {
+            continue;
+        };
+        let Some(requested) = params.get(&policy.name).and_then(Value::as_i64) else {
+            continue;
+        };
+        if requested > cap {
+            tracing::warn!(
+                target: "assistant::hard_cap_clamp",
+                parameter = %policy.name,
+                requested,
+                applied = cap,
+                "row-limit clamped to catalog hard_cap"
+            );
+            params.insert(policy.name.clone(), json!(cap));
+        }
+    }
 }
 
 fn validate_effective_date_range(effective: &EffectiveConstraints) -> Result<()> {
@@ -117,59 +149,45 @@ pub(super) fn executable_capability<'a>(
         .ok_or_else(|| anyhow::anyhow!("selected capability is not executable"))
 }
 
-fn effective_parameter(effective: &EffectiveConstraints, name: &str) -> Option<Value> {
-    let value = |field| effective.values.get(&field);
-    match name {
-        "from_date" => typed_string(value(ConstraintField::FromDate)).map(Value::String),
-        "to_date" => typed_string(value(ConstraintField::ToDate)).map(Value::String),
-        "currency_code" => typed_string(value(ConstraintField::CurrencyCode)).map(Value::String),
-        "product_ids" => typed_ids(value(ConstraintField::ProductIds)).map(|ids| json!(ids)),
-        "product_id" => typed_ids(value(ConstraintField::ProductIds))
-            .and_then(|ids| ids.first().copied())
-            .map(|id| json!(id))
-            .or_else(|| {
-                typed_string(value(ConstraintField::Product))
-                    .and_then(|v| v.parse().ok())
-                    .map(|id: i64| json!(id))
-            }),
-        "search" | "name" => [
-            ConstraintField::PersonName,
-            ConstraintField::Office,
-            ConstraintField::Product,
-        ]
-        .into_iter()
-        .find_map(|field| typed_string(value(field)))
-        .map(Value::String),
-        "office" | "office_name" => typed_string(value(ConstraintField::Office)).map(Value::String),
-        "limit" | "top_n" => match (
-            value(ConstraintField::LimitMode),
-            value(ConstraintField::LimitValue),
-        ) {
-            (
-                Some(TypedFactValue::LimitMode(LimitMode::Limit | LimitMode::TopN)),
-                Some(TypedFactValue::Integer(limit)),
-            ) => Some(json!(limit)),
-            _ => None,
+/// Bind one query parameter from whatever canonical facts we hold, following
+/// the precedence the catalog declares for it.
+///
+/// This is the single binding site. It replaced three separate Rust matches on
+/// the parameter name that had each grown their own idea of what fills what;
+/// `knowledge/parameter-bindings/` now answers that once, and the validator
+/// refuses to load a parameter it does not cover.
+pub(super) fn bind_parameter(
+    catalog: &KnowledgeCatalog,
+    facts: &BTreeMap<ConstraintField, TypedFactValue>,
+    parameter: &QueryParameter,
+) -> Option<Value> {
+    catalog
+        .binding_fields(&parameter.name)
+        .iter()
+        .find_map(|field| bind_value(&parameter.kind, facts.get(field)?))
+}
+
+/// Shape a canonical fact into the JSON the approved SQL expects, using the
+/// parameter's declared type rather than its name.
+fn bind_value(kind: &str, value: &TypedFactValue) -> Option<Value> {
+    match value {
+        TypedFactValue::Date(text)
+        | TypedFactValue::Decimal(text)
+        | TypedFactValue::CurrencyCode(text)
+        | TypedFactValue::Metric(text)
+        | TypedFactValue::PersonName(text)
+        | TypedFactValue::Office(text)
+        | TypedFactValue::Product(text)
+        | TypedFactValue::ChargeType(text)
+        | TypedFactValue::AccountNumber(text) => match kind {
+            "integer" => text.parse::<i64>().ok().map(|value| json!(value)),
+            _ => Some(json!(text)),
         },
-        _ => None,
-    }
-}
-
-fn typed_string(value: Option<&TypedFactValue>) -> Option<String> {
-    match value? {
-        TypedFactValue::Date(v)
-        | TypedFactValue::CurrencyCode(v)
-        | TypedFactValue::Metric(v)
-        | TypedFactValue::PersonName(v)
-        | TypedFactValue::Office(v)
-        | TypedFactValue::Product(v) => Some(v.clone()),
-        _ => None,
-    }
-}
-
-fn typed_ids(value: Option<&TypedFactValue>) -> Option<Vec<i64>> {
-    match value? {
-        TypedFactValue::IdList(ListPatch::Replace(ids)) => Some(ids.clone()),
+        TypedFactValue::Integer(value) | TypedFactValue::ClientId(value) => Some(json!(value)),
+        TypedFactValue::IdList(ListPatch::Replace(ids)) => match kind {
+            "integer" => ids.first().map(|id| json!(id)),
+            _ => Some(json!(ids)),
+        },
         _ => None,
     }
 }
@@ -180,13 +198,20 @@ pub(super) fn validate_snapshot_parameters(query: &QueryKnowledge, params: &Valu
         .ok_or_else(|| anyhow::anyhow!("snapshot parameters must be an object"))?;
     for name in params.keys() {
         if !query.parameters.iter().any(|parameter| {
-            parameter.name == *name && parameter.source.as_deref() != Some("authorized_scope")
+            parameter.name == *name
+                && !matches!(
+                    parameter.source.as_deref(),
+                    Some("authorized_scope" | "transient_sensitive_input")
+                )
         }) {
             bail!("snapshot contains unexpected parameter {name}");
         }
     }
     for parameter in &query.parameters {
-        if parameter.source.as_deref() == Some("authorized_scope") {
+        if matches!(
+            parameter.source.as_deref(),
+            Some("authorized_scope" | "transient_sensitive_input")
+        ) {
             continue;
         }
         let Some(value) = params.get(&parameter.name) else {
@@ -196,7 +221,7 @@ pub(super) fn validate_snapshot_parameters(query: &QueryKnowledge, params: &Valu
             continue;
         };
         let valid = match parameter.kind.as_str() {
-            "date" | "string" => value.is_string(),
+            "date" | "string" | "decimal" => value.is_string(),
             "integer" => value.as_i64().is_some(),
             "array_bigint" => value
                 .as_array()
@@ -211,51 +236,27 @@ pub(super) fn validate_snapshot_parameters(query: &QueryKnowledge, params: &Valu
 }
 
 pub(super) fn params_from_verified(
+    catalog: &KnowledgeCatalog,
     query: &QueryKnowledge,
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
+    policies: &[ParameterPolicy],
+    ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<Value> {
     let mut params = serde_json::Map::new();
-    let person_name = deterministic_extraction.and_then(|extraction| {
-        entity_value_from(&extraction.entities, AssistantEntityType::PersonName)
-    });
-    let office = entity_value(intent, AssistantEntityType::Office);
-    let product = entity_value(intent, AssistantEntityType::Product);
-    let trusted = deterministic_extraction.map(|extraction| &extraction.constraints);
-    let currency = trusted.and_then(|constraints| constraints.currency_code.as_deref());
+    let facts = request_facts(message, Some(intent), deterministic_extraction);
 
     for parameter in &query.parameters {
-        if parameter.source.as_deref() == Some("authorized_scope") {
+        if matches!(
+            parameter.source.as_deref(),
+            Some("authorized_scope" | "transient_sensitive_input")
+        ) {
             continue;
         }
-        let value = match parameter.name.as_str() {
-            "from_date" => trusted
-                .and_then(|constraints| constraints.from_date.as_ref().map(|value| json!(value))),
-            "to_date" => trusted
-                .and_then(|constraints| constraints.to_date.as_ref().map(|value| json!(value))),
-            "currency_code" => currency.map(|value| json!(value)),
-            "product_ids" => intent
-                .constraints
-                .product_ids
-                .as_ref()
-                .map(|value| json!(value)),
-            "product_id" => intent
-                .constraints
-                .product_ids
-                .as_ref()
-                .and_then(|ids| ids.first())
-                .map(|value| json!(value))
-                .or_else(|| {
-                    product
-                        .and_then(|value| value.parse::<i64>().ok())
-                        .map(|value| json!(value))
-                }),
-            "search" | "name" => person_name.or(office).or(product).map(|value| json!(value)),
-            "office" | "office_name" => office.map(|value| json!(value)),
-            "limit" | "top_n" => trusted.and_then(quantity_limit).map(|value| json!(value)),
-            _ => None,
-        }
-        .or_else(|| default_required_parameter(parameter));
+        let value = bind_parameter(catalog, &facts, parameter)
+            .or_else(|| resolve_policy_default(policies, ctx, &parameter.name))
+            .or_else(|| default_required_parameter(parameter));
         if let Some(value) = value {
             params.insert(parameter.name.clone(), value);
         } else if parameter.required {
@@ -263,10 +264,166 @@ pub(super) fn params_from_verified(
         }
     }
 
+    clamp_hard_caps(&mut params, policies);
     Ok(Value::Object(params))
 }
 
+/// Canonical facts for one turn, assembled from the deterministic extractor and
+/// the model's intent under the existing trust rule: the extractor is verified
+/// against the user's own words, so it wins, and the model may only contribute
+/// fields it cannot fabricate a plausible-looking wrong answer for.
+///
+/// A model-claimed date, limit, currency or transaction amount is still
+/// discarded outright — those are the fields a hallucination silently answers
+/// the wrong question with. A person name is admitted only under the verbatim
+/// guard described on `MODEL_VERBATIM_ENTITIES`.
+///
+/// `retrieval::sufficiency` reads the same map to decide whether a candidate
+/// capability can honour what the user asked for, so "what the user said" has
+/// exactly one definition in this crate; hence `intent` is optional here, since
+/// that caller runs on turns where no intent has been routed yet. `message` is
+/// optional for the same reason and defaults to the safe answer: a caller that
+/// cannot show the user's own words gets no verbatim-gated entity at all.
+pub(crate) fn request_facts(
+    message: Option<&str>,
+    intent: Option<&AssistantIntent>,
+    extraction: Option<&DeterministicExtraction>,
+) -> BTreeMap<ConstraintField, TypedFactValue> {
+    let mut facts = BTreeMap::new();
+    if let Some(extraction) = extraction {
+        let constraints = &extraction.constraints;
+        for (field, value) in [
+            (ConstraintField::FromDate, constraints.from_date.as_ref()),
+            (ConstraintField::ToDate, constraints.to_date.as_ref()),
+        ] {
+            if let Some(value) = value {
+                facts.insert(field, TypedFactValue::Date(value.clone()));
+            }
+        }
+        if let Some(value) = &constraints.currency_code {
+            facts.insert(
+                ConstraintField::CurrencyCode,
+                TypedFactValue::CurrencyCode(value.clone()),
+            );
+        }
+        if let Some(value) = &constraints.transaction_amount {
+            facts.insert(
+                ConstraintField::TransactionAmount,
+                TypedFactValue::Decimal(value.clone()),
+            );
+        }
+        if let Some(limit) = quantity_limit(constraints) {
+            facts.insert(ConstraintField::LimitValue, TypedFactValue::Integer(limit));
+        }
+        for entity in &extraction.entities {
+            if let Some((field, value)) = crate::assistant::entity_fact(entity) {
+                facts.insert(field, value);
+            }
+        }
+    }
+    // The model's own entities are a real source — until now they were carried
+    // on the intent and read by three ad-hoc lookups, so anything the router
+    // named but the regex missed was simply lost. They fill only gaps: inserted
+    // after the extractor, they never overwrite a verified fact.
+    let Some(intent) = intent else {
+        return facts;
+    };
+    if let Some(ids) = &intent.constraints.product_ids {
+        facts
+            .entry(ConstraintField::ProductIds)
+            .or_insert_with(|| TypedFactValue::IdList(ListPatch::Replace(ids.clone())));
+    }
+    for entity in &intent.entities {
+        let admissible = MODEL_TRUSTED_ENTITIES.contains(&entity.entity_type)
+            || (MODEL_VERBATIM_ENTITIES.contains(&entity.entity_type)
+                && message.is_some_and(|message| occurs_verbatim(message, &entity.value)));
+        if !admissible {
+            continue;
+        }
+        if let Some((field, value)) = crate::assistant::entity_fact(entity) {
+            facts.entry(field).or_insert(value);
+        }
+    }
+    facts
+}
+
+/// Entity kinds the model may supply unconditionally. Each names a thing the SQL
+/// matches against a catalog-approved column by equality, so a wrong guess
+/// returns no rows rather than the wrong rows.
+const MODEL_TRUSTED_ENTITIES: &[AssistantEntityType] = &[
+    AssistantEntityType::ClientId,
+    AssistantEntityType::Office,
+    AssistantEntityType::Product,
+    AssistantEntityType::ChargeType,
+];
+
+/// Entity kinds the model may supply only when the value occurs in the user's
+/// own message. A person name reaches SQL as a substring match, so a wrong guess
+/// does not return no rows — it quietly returns a *different customer's* rows.
+/// Excluding the kind entirely was the previous answer, and it cost every
+/// lowercase name the deterministic extractor could not see.
+///
+/// The verbatim check is what makes this admissible, so it is not separable from
+/// the list: the model may only point at words the user typed, never invent
+/// them. Moving a kind here without the guard reinstates exactly the risk the
+/// exclusion was protecting against.
+const MODEL_VERBATIM_ENTITIES: &[AssistantEntityType] = &[AssistantEntityType::PersonName];
+
+/// Did the user type this value? Case-insensitive substring, which is the same
+/// bar the deterministic extractor meets by construction — it is a reader over
+/// the message — and the same one `retrieval::sufficiency` applies before it
+/// lets a fact refuse a capability.
+pub(crate) fn occurs_verbatim(message: &str, value: &str) -> bool {
+    !value.trim().is_empty()
+        && message
+            .to_lowercase()
+            .contains(&value.trim().to_lowercase())
+}
+
+/// Look up a per-parameter policy default and evaluate it against `ctx`.
+/// Returns `None` when the parameter has no policy, no default, is still
+/// required, or when no evaluation context was supplied.
+pub(super) fn resolve_policy_default(
+    policies: &[ParameterPolicy],
+    ctx: Option<&EvaluationContext>,
+    name: &str,
+) -> Option<Value> {
+    let ctx = ctx?;
+    let policy = policies.iter().find(|p| p.name == name)?;
+    if policy.required {
+        return None;
+    }
+    let default = policy.default.as_ref()?;
+    Some(resolved_to_value(default.evaluate(ctx)))
+}
+
+fn resolved_to_value(resolved: ResolvedValue) -> Value {
+    match resolved {
+        ResolvedValue::Date(d) => json!(d.to_string()),
+        ResolvedValue::Integer(i) => json!(i),
+        ResolvedValue::IntegerArray(ids) => json!(ids),
+        // Unbounded: no user-supplied cap. Bound as i64::MAX so callers that
+        // require an integer parameter (e.g. `LIMIT $n`) still bind; the SQL
+        // repository clamps this to the effective row cap (declared hard_cap or
+        // the configured global backstop) before binding.
+        // ponytail: i64::MAX sentinel, upgrade to LIMIT-omitting SQL if a real
+        // "no limit" query appears.
+        ResolvedValue::Unbounded => json!(i64::MAX),
+    }
+}
+
+/// Guard against executing a capability that measures something other than what
+/// the caller asked for — the failure mode where a weekly-charge count question
+/// was answered with a list of clients holding unpaid charges.
+///
+/// Resolution goes through the catalog's metric aliases rather than a local
+/// table. An extractor guess the catalog does not recognise at all is treated as
+/// no signal, not as a mismatch: the extractor is a substring heuristic, and
+/// letting it veto a capability the reranker chose on real evidence is how
+/// `savings_balance_summary` came to reject "what is the total savings balance
+/// right now?".
 pub(super) fn verify_capability_metric(
+    catalog: &KnowledgeCatalog,
     capability_metrics: &[String],
     deterministic_extraction: Option<&DeterministicExtraction>,
 ) -> Result<()> {
@@ -275,39 +432,17 @@ pub(super) fn verify_capability_metric(
     else {
         return Ok(());
     };
-    let trusted = normalize_metric(metric);
+    let Some(requested) = catalog.resolve_metric_id(metric) else {
+        return Ok(());
+    };
     if capability_metrics
         .iter()
-        .any(|metric| normalize_metric(metric) == trusted)
+        .any(|declared| catalog.resolve_metric_id(declared) == Some(requested))
     {
         Ok(())
     } else {
         bail!("selected capability does not match requested metric {metric}")
     }
-}
-
-fn normalize_metric(metric: &str) -> String {
-    match metric.replace('_', ".").as_str() {
-        "savings.account.count" => "savings.account_count".into(),
-        "savings.balance" => "savings.balance_total".into(),
-        "deposit.volume" | "savings.deposit.volume" => "savings.deposit_total".into(),
-        other => other.into(),
-    }
-}
-
-fn entity_value(intent: &AssistantIntent, entity_type: AssistantEntityType) -> Option<&str> {
-    entity_value_from(&intent.entities, entity_type)
-}
-
-fn entity_value_from(
-    entities: &[crate::assistant::AssistantEntity],
-    entity_type: AssistantEntityType,
-) -> Option<&str> {
-    entities
-        .iter()
-        .find(|entity| entity.entity_type == entity_type)
-        .map(|entity| entity.value.trim())
-        .filter(|value| !value.is_empty())
 }
 
 fn quantity_limit(constraints: &crate::assistant::AssistantConstraints) -> Option<i64> {

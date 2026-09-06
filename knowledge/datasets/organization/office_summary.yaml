@@ -1,0 +1,35 @@
+id: organization.office_summary
+database: fineract
+# Rows are per office; the summary shape aggregates them. The pre-aggregated
+# form could not be narrowed at all, so "is there an office named X" had no
+# way to be asked (issue 011).
+source_sql: queries/datasets/organization/office_summary.source.sql
+tables:
+  - m_office
+  - m_staff
+filters:
+  # Narrows within the caller's authorized offices. Office *scope* is still
+  # bound from authorized_scope in the source SQL and is not overridable —
+  # this filter can only shrink that set, never widen it.
+  - id: office_name
+    expr: office_name
+    type: string
+    case_insensitive: true
+    operators: [eq]
+shapes:
+  - id: summary
+    request_shape:
+      operation: summary
+      subject: office
+      grouping: none
+      output: summary
+      pii: none
+    fragment: queries/datasets/organization/office_summary.summary.frag.sql
+output_fields:
+  - { name: office_count, type: bigint, sensitivity: public_business, core: true }
+  - { name: root_office_count, type: bigint, sensitivity: public_business, core: true }
+  - { name: oldest_opening_date, type: date, sensitivity: public_business, core: true }
+  - { name: active_staff_count, type: bigint, sensitivity: public_business, core: true }
+parameters:
+  - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

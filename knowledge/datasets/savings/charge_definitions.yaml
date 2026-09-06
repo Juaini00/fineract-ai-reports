@@ -1,0 +1,41 @@
+---
+id: savings.charge_definitions
+database: fineract
+source_sql: queries/datasets/savings/charge_definitions.source.sql
+tables:
+  - m_charge
+  - m_savings_account_charge
+  - m_savings_account
+  - m_client
+entity:
+  kind: charge_definition
+  id_field: charge_definition_id
+  label_fields: [charge_name]
+  label_fallback: "Charge type {charge_definition_id}"
+filters:
+  - { id: charge_definition_id, expr: charge_definition_id, type: integer, operators: [eq, in] }
+  - { id: charge_name, expr: charge_name, type: string, case_insensitive: true, operators: [eq] }
+  - { id: currency_code, expr: currency_code, type: string, case_insensitive: true, operators: [eq] }
+shapes:
+  - id: charge_type_candidates
+    role: probe
+    expected_cardinality: many
+    row_cap: 25
+    produces:
+      - { slot: charge_definition_id, type: integer, sensitivity: public_business, cardinality: many }
+    request_shape:
+      operation: lookup
+      subject: savings_account_charge
+      grouping: none
+      output: lookup
+      pii: none
+    fragment: queries/datasets/savings/charge_definitions.charge_type_candidates.frag.sql
+    output_fields:
+      - { name: charge_definition_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: charge_name, type: string, sensitivity: public_business, core: true }
+      - { name: currency_code, type: string, sensitivity: public_business, core: true }
+      - { name: is_penalty, type: boolean, sensitivity: public_business, core: true }
+      - { name: charge_timing_enum, type: bigint, sensitivity: public_business }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

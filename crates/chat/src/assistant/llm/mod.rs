@@ -8,9 +8,12 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+pub mod agent;
 pub mod planner_client;
-pub mod rig_client;
+pub mod provider;
 pub mod router;
+pub mod semantic;
+pub mod tool;
 pub mod traced_client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -22,6 +25,7 @@ pub enum LlmPurpose {
     ClarificationResolve,
     EvidenceRetrieval,
     ResponseBuild,
+    WorkflowPlanning,
     Test,
 }
 
@@ -34,6 +38,7 @@ impl std::fmt::Display for LlmPurpose {
             Self::ClarificationResolve => "clarification_resolve",
             Self::EvidenceRetrieval => "evidence_retrieval",
             Self::ResponseBuild => "response_build",
+            Self::WorkflowPlanning => "workflow_planning",
             Self::Test => "test",
         };
         f.write_str(value)
@@ -42,13 +47,26 @@ impl std::fmt::Display for LlmPurpose {
 
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
-    pub input_tokens: i32,
-    pub output_tokens: i32,
+    pub input_tokens: Option<i32>,
+    pub output_tokens: Option<i32>,
 }
 
 impl TokenUsage {
-    pub fn total_tokens(&self) -> i32 {
-        self.input_tokens + self.output_tokens
+    pub fn provider_reported(input_tokens: i32, output_tokens: i32) -> Self {
+        Self {
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+        }
+    }
+
+    pub fn is_provider_reported(&self) -> bool {
+        self.input_tokens.is_some() && self.output_tokens.is_some()
+    }
+
+    pub fn total_tokens(&self) -> Option<i32> {
+        self.input_tokens
+            .zip(self.output_tokens)
+            .map(|(input, output)| input + output)
     }
 }
 
@@ -214,14 +232,9 @@ impl LlmClient for FakeLlmClient {
             Ok(value) => value,
             Err(error) => bail!(error),
         };
-        let usage = TokenUsage {
-            input_tokens: 10,
-            output_tokens: 5,
-        };
+        let usage = TokenUsage::provider_reported(10, 5);
         let cost_usd = llm_pricing(&self.provider, &self.model).map(|price| {
-            (usage.input_tokens as f64 * price.input_usd_per_1m
-                + usage.output_tokens as f64 * price.output_usd_per_1m)
-                / 1_000_000.0
+            (10.0 * price.input_usd_per_1m + 5.0 * price.output_usd_per_1m) / 1_000_000.0
         });
         Ok(LlmResponse {
             value,
@@ -246,10 +259,7 @@ impl LlmClient for FakeLlmClient {
         };
         Ok(EmbeddingResponse {
             vector,
-            usage: TokenUsage {
-                input_tokens: 7,
-                output_tokens: 0,
-            },
+            usage: TokenUsage::provider_reported(7, 0),
             cost_usd: None,
             provider: self.provider.clone(),
             model: self.model.clone(),

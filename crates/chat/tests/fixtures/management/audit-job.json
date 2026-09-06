@@ -1,0 +1,1 @@
+{"job_id":"00000000-0000-0000-0000-000000000001","catalog_version":"sha256:catalog","outcome":"success","events":[{"id":"00000000-0000-0000-0000-000000000002","occurred_at":"2026-07-23T00:00:00Z","event_type":"policy.evaluated","outcome":"success","summary":{"policy_result":"allowed"}}],"llm_calls":[]}

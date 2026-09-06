@@ -2,6 +2,8 @@ mod guard;
 mod parameters;
 mod planning;
 
+pub(crate) use parameters::{occurs_verbatim, request_facts};
+
 use anyhow::Result;
 use app_core::auth::model::PrincipalContext;
 use schemars::JsonSchema;
@@ -13,7 +15,7 @@ use crate::{
         AssistantIntent, DeterministicExtraction, EffectiveConstraints, PlannerInputSnapshot,
         execution::plan::{ExecutionPlan, PolicyDecision},
     },
-    knowledge::model::KnowledgeCatalog,
+    knowledge::{catalog::parameter_policy::EvaluationContext, model::KnowledgeCatalog},
 };
 
 #[cfg(test)]
@@ -46,6 +48,9 @@ pub struct ToolResult {
     pub error: Option<ToolValidationError>,
     #[serde(default)]
     pub evidence_refs: Vec<String>,
+    /// When the row cap trimmed the result, the number of rows actually shown.
+    #[serde(default)]
+    pub truncated: Option<u64>,
 }
 
 pub const APPROVED_SQL_TOOL: &str = "approved_catalog_sql";
@@ -75,6 +80,11 @@ pub fn tool_result_from_execution(request: &ToolRequest, execution_result: Value
             .map(|count| format!("{count} row(s) returned")),
         error: None,
         evidence_refs: request.evidence_refs.clone(),
+        truncated: execution_result
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .filter(|truncated| *truncated)
+            .and(execution_result.get("shown").and_then(Value::as_u64)),
     }
 }
 
@@ -99,12 +109,16 @@ pub fn plan_selected_capability_verified(
     capability_id: &str,
     intent: &AssistantIntent,
     deterministic_extraction: Option<&DeterministicExtraction>,
+    ctx: Option<&EvaluationContext>,
+    message: Option<&str>,
 ) -> Result<ExecutionPlan> {
     planning::plan_selected_capability_verified(
         catalog,
         capability_id,
         intent,
         deterministic_extraction,
+        ctx,
+        message,
     )
 }
 

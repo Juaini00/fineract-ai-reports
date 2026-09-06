@@ -1,0 +1,60 @@
+id: savings_charge_count_by_type
+status: approved_mvp
+domain: savings
+display_name: Savings Charge Count By Charge Type
+description: Count how many active savings account charges of one named charge type exist in the caller's authorized office scope, with the number of accounts affected and the total amount still outstanding.
+data_areas:
+  - organization_foundation
+  - client_foundation
+  - savings_core
+  - savings_charges_fees
+required_api_capability: savings_charge_count_by_type
+query_id: savings.charge_count_by_type
+metrics:
+  - savings.charge_count
+  - savings.charge_amount_outstanding
+output_mode: summary
+request_shape:
+  operation: summary
+  subject: savings_account_charge
+  grouping: none
+  output: scalar
+  pii: none
+examples:
+  - How many Weekly Charge charges are there on savings accounts?
+  - Count savings charges of type Monthly Fee.
+  - Ada berapa saving weekly charge di sistem saat ini?
+  - Berapa jumlah biaya penalty pada tabungan?
+supported_intents:
+  - count savings charges of one charge type
+  - how many charges of a named fee exist
+defaults:
+  authorized_scope_only: true
+guards:
+  require_office_scope: true
+  snapshot_only: true
+checks:
+  - id: query_exists
+    rule: query_id must exist in knowledge/queries.
+  - id: office_scope_required
+    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+  - id: charge_type_bound
+    rule: charge_name must reach SQL as a bound dataset filter, never as a discarded hint.
+  - id: no_pii_output
+    rule: query output fields must not expose client identity.
+dataset_recipe:
+  dataset_id: savings.account_charges
+  shape_id: type_count
+  filters:
+    - filter_id: charge_name
+      operator: eq
+      parameter: charge_name
+parameters:
+  charge_name:
+    type: string
+    required: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false

@@ -28,6 +28,20 @@ pub struct AssistantResponse {
     pub evidence_refs: Vec<EvidenceReference>,
     #[serde(default)]
     pub rendered_markdown: Option<String>,
+    /// Additive workflow runtime metadata. Absent entirely (not `null`) when
+    /// the request wasn't served by the workflow runtime, so pre-migration
+    /// clients see byte-identical responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowResponseMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowResponseMeta {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub node_id: String,
+    pub steps_executed: u32,
+    pub partial: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -144,6 +158,7 @@ mod tests {
             actions: vec![],
             evidence_refs: vec![],
             rendered_markdown: None,
+            workflow: None,
         }
     }
 
@@ -174,6 +189,32 @@ mod tests {
     }
 
     #[test]
+    fn renders_table_cells_safely_and_bounds_markdown_rows() {
+        let mut response = base_response();
+        response.table = Some(ResponseTable {
+            columns: vec![TableColumn {
+                key: "value".into(),
+                label: "Value".into(),
+                kind: TableColumnKind::Text,
+                hidden: false,
+            }],
+            rows: (0..51)
+                .map(|index| {
+                    json!({
+                        "value": if index == 0 { "A|B\r\nC".to_string() } else { format!("row-{index}") }
+                    })
+                })
+                .collect(),
+        });
+
+        let rendered = MarkdownRenderer.render(&response);
+        assert_eq!(response.table.as_ref().unwrap().rows.len(), 51);
+        assert!(rendered.contains("A\\|B<br>C"));
+        assert!(rendered.contains("row-49"));
+        assert!(!rendered.contains("row-50"));
+    }
+
+    #[test]
     fn renders_clarification_question_fields_and_safe_label_fallback() {
         let mut response = base_response();
         response.response_type = AssistantResponseType::Clarification;
@@ -196,6 +237,10 @@ mod tests {
                 errors: vec!["Choose a range of 31 days or fewer.".into()],
             }],
             allow_free_text: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         });
 
         let rendered = MarkdownRenderer.render(&response);

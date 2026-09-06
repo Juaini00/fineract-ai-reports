@@ -83,7 +83,6 @@ guards:
   parameterized_only: true
   pii_fields_require_capability: true
 timeout_ms: 3000
-cost_class: medium
 checks:
   - id: sql_file_exists
     rule: sql_file must exist under queries/.

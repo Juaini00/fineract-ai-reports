@@ -1,0 +1,63 @@
+id: savings.deposits
+database: fineract
+# FD/RD sub-domain of savings (013 §6.4): m_savings_account rows with
+# deposit_type_enum 200 (fixed) / 300 (recurring), joined to their term and
+# recurring-schedule detail tables. In-scope, previously unsurfaced.
+source_sql: queries/datasets/savings/deposits.source.sql
+tables:
+  - m_savings_account
+  - m_client
+  - m_deposit_account_term_and_preclosure
+  - m_deposit_account_recurring_detail
+entity:
+  kind: savings_account
+  id_field: savings_account_id
+  label_fields: [client_display_name]
+  label_fallback: "Deposit account {savings_account_id}"
+filters:
+  - id: savings_account_id
+    expr: savings_account_id
+    type: integer
+    operators: [eq, in]
+  - id: client_id
+    expr: client_id
+    type: integer
+    operators: [eq, in]
+  - id: deposit_type_enum
+    expr: deposit_type_enum
+    type: integer
+    operators: [eq]
+  - id: currency_code
+    expr: currency_code
+    type: string
+    case_insensitive: true
+    operators: [eq]
+shapes:
+  - id: maturity_rows
+    role: terminal
+    row_cap: 100
+    request_shape:
+      operation: list
+      subject: savings_account
+      grouping: none
+      output: list
+      pii: client_identity
+    fragment: queries/datasets/savings/deposits.maturity_rows.frag.sql
+    output_fields:
+      - { name: savings_account_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: client_id, type: bigint, sensitivity: public_business, core: true }
+      - { name: client_display_name, type: string, sensitivity: pii, core: true }
+      - { name: deposit_type_enum, type: bigint, sensitivity: public_business, core: true }
+      - { name: currency_code, type: string, sensitivity: public_business, core: true }
+      - { name: term_deposit_amount, type: decimal, sensitivity: public_business, core: true }
+      - { name: maturity_amount, type: decimal, sensitivity: public_business, core: true }
+      - { name: maturity_date, type: date, sensitivity: public_business, core: true }
+      - { name: deposit_period, type: integer, sensitivity: public_business, core: true }
+      - { name: deposit_period_frequency_enum, type: integer, sensitivity: public_business, core: true }
+      - { name: mandatory_recommended_deposit_amount, type: decimal, sensitivity: public_business, core: true }
+      - { name: is_mandatory, type: boolean, sensitivity: public_business, core: true }
+      - { name: total_overdue_amount, type: decimal, sensitivity: public_business, core: true }
+      - { name: no_of_overdue_installments, type: integer, sensitivity: public_business, core: true }
+    parameters:
+      - { name: office_ids, type: array_bigint, required: true, source: authorized_scope }
+timeout_ms: 3000

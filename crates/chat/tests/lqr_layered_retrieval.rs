@@ -6,10 +6,10 @@ fn off_domain_prompt_short_circuits_at_layer_1() {
     ];
     let policy = chat::knowledge::model::LqrPolicy::default();
 
-    let decision = chat::chat::pipeline::lqr::decide_domain_layer(&policy, &ranked);
+    let decision = chat::assistant::understanding::lqr::decide_domain_layer(&policy, &ranked);
 
     match decision {
-        chat::chat::pipeline::lqr::DomainDecision::Reject { reason } => {
+        chat::assistant::understanding::lqr::DomainDecision::Reject { reason } => {
             assert!(reason.contains("off_domain_loan"));
         }
         _ => panic!("expected off-domain reject"),

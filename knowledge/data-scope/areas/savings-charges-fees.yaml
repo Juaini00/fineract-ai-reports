@@ -13,9 +13,9 @@ excluded_tables: []
 allowed_domains:
   - savings
 default_rules:
-  - Keep secondary until core savings transaction reporting is stable.
+  - Charge metrics and the account-charge creation timestamp are approved only where a capability declares their exact output semantics; created_on_utc may order recent-charge lists but is not a business date.
 checks:
   - id: secondary_not_executable_without_capability
     rule: secondary tables must not be used by approved_mvp queries until a capability is approved.
-  - id: charge_metrics_candidate_only
-    rule: charge and fee metrics must remain candidate until output semantics are approved.
+  - id: charge_metrics_semantics_declared
+    rule: charge and fee metrics must declare approved output semantics before use.

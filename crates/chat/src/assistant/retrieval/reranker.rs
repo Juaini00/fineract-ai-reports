@@ -2,8 +2,8 @@
 //!
 //! Replaces the arithmetic `EvidenceEvaluator` with a natural-language pass:
 //! feed the user query + top-K retrieval candidates to the LLM, decode a
-//! structured `RerankerDecision`. On low confidence or malformed output,
-//! degrade to `Clarify` with the retrieval-ranked alternatives.
+//! structured `RerankerDecision`. It returns scored ranking evidence; the workflow
+//! compiler owns the clarification gate. Malformed output is operational failure.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -12,14 +12,10 @@ use serde_json::json;
 use super::evidence::Evidence;
 use crate::assistant::llm::{LlmClient, LlmPurpose, SharedLlmClient, structured};
 
-/// Below this confidence a `Select` is coerced to `Clarify`.
-const MIN_SELECT_CONFIDENCE: f32 = 0.6;
 /// Cap on candidates sent to the LLM (input-token budget). 12 keeps the
 /// prompt small while still covering domain-adjacent competitors that
 /// legitimately tie in retrieval.
 const MAX_CANDIDATES: usize = 12;
-/// Cap on alternatives surfaced in a `Clarify` payload.
-const CLARIFY_ALTERNATIVES: usize = 4;
 
 const RERANKER_SYSTEM: &str = "You are a reranker. Given a user query and a list of \
 candidate reporting capabilities, pick the one that best matches the query.\n\n\
@@ -28,11 +24,38 @@ Rules:\n\
 candidate clearly matches the query intent.\n\
 - decision=\"clarify\" with 2-4 alternative capability ids when several candidates \
 plausibly fit and the user should choose.\n\
-- decision=\"unsupported\" when no candidate matches the query semantically.\n\
+- Candidates that report a *different measure* of the same subject (client \
+counts vs savings balances vs deposit volume vs staff headcount vs hierarchy \
+depth) are not interchangeable. When the query asks for a \"summary\", \
+\"overview\", \"report\", \"ringkasan\" or \"laporan\" of a subject without \
+naming which measure it wants, and two or more candidates differ only in that \
+measure, choose clarify. Picking the candidate whose title happens to echo the \
+user's wording most literally is a guess presented as an answer, which for a \
+banking report is worse than asking.\n\
+- decision=\"unsupported\" when no candidate matches the query semantically. You \
+are the only stage permitted to make that call — nothing upstream decides \
+coverage — so make it on the candidate ids, descriptions and examples in front \
+of you, never on a hunch about what the catalog contains.\n\
+- Never select or clarify with a candidate that answers a *different* question \
+than the one asked (a different subject, a different filter, or one that drops \
+a filter the user named). Answering an adjacent question is worse than \
+\"unsupported\".\n\
+- `supported_intents`, `unsupported_intents` and `user_filters` are the \
+authoritative statement of what a candidate does; `title` and `description` are \
+prose and may be narrower than the truth. A candidate whose `user_filters` \
+include the field the user named CAN filter by it, even if the title does not \
+say so. Judge on the declared fields first and treat the title as a hint.\n\
+- An ordering word in a title (\"recent\", \"latest\", \"top\") describes the \
+sort order, not a restriction of the rows, unless `supported_intents` or \
+`description` says the rows are actually restricted. Do not refuse an \
+unrestricted \"all X\" request merely because the only matching candidate sorts \
+its rows by recency.\n\
 - Confidence must reflect actual certainty, not retrieval-score arithmetic.\n\
 - Prefer specificity: \"total\" queries pick totals; \"top N\"/\"highest\"/\"largest\" \
 queries pick top_n variants; \"per month\"/\"monthly\" queries pick monthly variants; \
-\"random\"/\"sample\" queries pick random_sample variants when present.\n\
+\"random\"/\"sample\" queries pick random_sample variants when present; \
+\"newest\"/\"latest\"/\"most recent\"/\"paling baru\" queries pick the recency \
+variant over status variants like pending/overdue/outstanding.\n\
 - Keep the reason short (one sentence).";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -41,6 +64,7 @@ pub enum RerankerVerdict {
     Select,
     Clarify,
     Unsupported,
+    FailedOperational,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +78,8 @@ pub struct RerankerDecision {
     pub alternatives: Vec<String>,
     #[serde(default)]
     pub reason: String,
+    #[serde(default)]
+    pub ranked_candidates: Vec<String>,
 }
 
 impl RerankerDecision {
@@ -64,6 +90,7 @@ impl RerankerDecision {
             confidence,
             alternatives: Vec::new(),
             reason: String::new(),
+            ranked_candidates: Vec::new(),
         }
     }
 
@@ -74,6 +101,7 @@ impl RerankerDecision {
             confidence: 0.0,
             alternatives,
             reason: String::new(),
+            ranked_candidates: Vec::new(),
         }
     }
 
@@ -84,6 +112,17 @@ impl RerankerDecision {
             confidence: 0.0,
             alternatives: Vec::new(),
             reason: reason.into(),
+            ranked_candidates: Vec::new(),
+        }
+    }
+    pub fn failed_operational() -> Self {
+        Self {
+            decision: RerankerVerdict::FailedOperational,
+            capability_id: None,
+            confidence: 0.0,
+            alternatives: Vec::new(),
+            reason: "reranking failed".into(),
+            ranked_candidates: Vec::new(),
         }
     }
 }
@@ -123,6 +162,16 @@ impl<'a> LlmReranker<'a> {
                     "output_mode": e.metadata.get("output_mode")
                         .and_then(|v| v.as_str())
                         .unwrap_or(""),
+                    // The three fields below are the capability's actual
+                    // boundary. Without them this stage judged coverage from
+                    // the title's adjective, which is prose and can disagree
+                    // with the approved SQL underneath it.
+                    "supported_intents": e.metadata.get("supported_intents")
+                        .cloned().unwrap_or(json!([])),
+                    "unsupported_intents": e.metadata.get("unsupported_intents")
+                        .cloned().unwrap_or(json!([])),
+                    "user_filters": e.metadata.get("user_filters")
+                        .cloned().unwrap_or(json!([])),
                 }))
                 .collect::<Vec<_>>(),
         });
@@ -159,50 +208,26 @@ impl<'a> LlmReranker<'a> {
                         tracing::warn!(
                             target: "assistant::reranker",
                             error = %second,
-                            "reranker fell back to clarify",
+                            "reranker failed after retry",
                         );
-                        return RerankerDecision::clarify(alternative_ids(candidates));
+                        return RerankerDecision::failed_operational();
                     }
                 }
             }
         };
 
-        if matches!(decision.decision, RerankerVerdict::Select)
-            && decision.confidence < MIN_SELECT_CONFIDENCE
-        {
-            let alts = if decision.alternatives.is_empty() {
-                alternative_ids(candidates)
-            } else {
-                decision.alternatives.clone()
-            };
-            decision = RerankerDecision::clarify(alts);
-        }
-        if matches!(decision.decision, RerankerVerdict::Clarify) && decision.alternatives.is_empty()
-        {
-            decision.alternatives = alternative_ids(candidates);
-        }
+        decision.ranked_candidates = candidates
+            .iter()
+            .take(MAX_CANDIDATES)
+            .map(|candidate| candidate.capability_id.clone())
+            .collect();
         decision
     }
 }
 
-fn alternative_ids(candidates: &[Evidence]) -> Vec<String> {
-    candidates
-        .iter()
-        .take(CLARIFY_ALTERNATIVES)
-        .map(|e| e.capability_id.clone())
-        .collect()
-}
-
-/// No-LLM fallback: pick top-1 unless the score gap is trivial, else Clarify.
-/// ponytail: only reached when `llm` is None (test/no-key envs); production
-/// always goes through the LLM.
-fn score_tie_fallback(candidates: &[Evidence]) -> RerankerDecision {
-    let top = &candidates[0];
-    if candidates.len() >= 2 && candidates[1].score >= top.score - 0.05 {
-        RerankerDecision::clarify(alternative_ids(candidates))
-    } else {
-        RerankerDecision::select(&top.capability_id, top.score)
-    }
+/// No model is an operational failure; score gaps are evidence for the compiler, not a policy decision.
+fn score_tie_fallback(_candidates: &[Evidence]) -> RerankerDecision {
+    RerankerDecision::failed_operational()
 }
 
 #[cfg(test)]
@@ -258,7 +283,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn low_confidence_select_coerced_to_clarify() {
+    async fn low_confidence_select_remains_evidence_for_the_compiler() {
         let llm = FakeLlmClient::default();
         llm.push_structured(json!({
             "decision": "select",
@@ -277,12 +302,15 @@ mod tests {
                 ],
             )
             .await;
-        assert_eq!(out.decision, RerankerVerdict::Clarify);
-        assert!(!out.alternatives.is_empty());
+        assert_eq!(out.decision, RerankerVerdict::Select);
+        assert_eq!(
+            out.ranked_candidates,
+            vec!["savings_deposit_total", "savings_deposit_top_n"]
+        );
     }
 
     #[tokio::test]
-    async fn clarify_with_empty_alternatives_backfills_from_candidates() {
+    async fn clarify_with_empty_alternatives_does_not_invent_choices() {
         let llm = FakeLlmClient::default();
         llm.push_structured(json!({
             "decision": "clarify",
@@ -305,7 +333,8 @@ mod tests {
             )
             .await;
         assert_eq!(out.decision, RerankerVerdict::Clarify);
-        assert_eq!(out.alternatives, vec!["a", "b", "c", "d"]);
+        assert!(out.alternatives.is_empty());
+        assert_eq!(out.ranked_candidates, vec!["a", "b", "c", "d", "e"]);
     }
 
     #[tokio::test]
@@ -326,7 +355,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_invalid_response_retries_once_then_falls_back_to_clarify() {
+    async fn schema_invalid_response_retries_once_then_fails_operationally() {
         let llm = FakeLlmClient::default();
         // first response: bogus shape → schema mismatch
         llm.push_structured(json!({"nope": "bad"}));
@@ -335,23 +364,15 @@ mod tests {
         let out = LlmReranker::new(Some(&llm))
             .rerank("anything", &[ev("a", 0.5), ev("b", 0.4)])
             .await;
-        assert_eq!(out.decision, RerankerVerdict::Clarify);
-        assert_eq!(out.alternatives, vec!["a", "b"]);
+        assert_eq!(out.decision, RerankerVerdict::FailedOperational);
+        assert!(out.alternatives.is_empty());
     }
 
     #[tokio::test]
-    async fn no_llm_falls_back_to_score_tie_heuristic() {
-        // Clear top-1 → Select.
+    async fn no_llm_is_an_operational_failure_not_a_clarification() {
         let out = LlmReranker::new(None)
             .rerank("q", &[ev("a", 0.9), ev("b", 0.5)])
             .await;
-        assert_eq!(out.decision, RerankerVerdict::Select);
-        assert_eq!(out.capability_id.as_deref(), Some("a"));
-
-        // Near-tie → Clarify.
-        let out = LlmReranker::new(None)
-            .rerank("q", &[ev("a", 0.55), ev("b", 0.53)])
-            .await;
-        assert_eq!(out.decision, RerankerVerdict::Clarify);
+        assert_eq!(out.decision, RerankerVerdict::FailedOperational);
     }
 }

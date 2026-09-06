@@ -5,10 +5,10 @@ use app_core::config::LlmConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::assistant::legacy_pipeline::answer::{GeneratedAnswer, parse_generated_answer};
-use crate::assistant::legacy_pipeline::model::ParsedIntent;
-use crate::assistant::legacy_pipeline::parser::parse_semantic_response;
-use crate::assistant::legacy_pipeline::retrieval::{
+use crate::assistant::llm::semantic::answer::{GeneratedAnswer, parse_generated_answer};
+use crate::assistant::llm::semantic::model::ParsedIntent;
+use crate::assistant::llm::semantic::parser::parse_semantic_response;
+use crate::assistant::llm::semantic::retrieval::{
     LayeredRetrievalPlan, parse_layered_retrieval_response,
 };
 use crate::assistant::understanding::classifier::ClarificationOption;

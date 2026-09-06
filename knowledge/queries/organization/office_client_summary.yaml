@@ -17,6 +17,13 @@ parameters:
   - name: limit
     type: integer
     required: true
+  # User-supplied narrowing, not authorization. It is ANDed after the
+  # unconditional `o.id = ANY($1::bigint[])` scope predicate, so it can only
+  # ever shrink the authorized set. Unbound it binds NULL and the predicate
+  # short-circuits, leaving the statement text identical.
+  - name: office_name
+    type: string
+    required: false
 output_fields:
   - name: office_id
     type: bigint
@@ -42,7 +49,6 @@ guards:
   require_office_filter: true
   parameterized_only: true
 timeout_ms: 3000
-cost_class: low
 checks:
   - id: sql_file_exists
     rule: sql_file must exist under queries/.
@@ -54,3 +60,9 @@ checks:
     rule: SQL must use bound LIMIT $2.
   - id: output_columns_match_contract
     rule: Prepared SQL output columns must equal output_fields order.
+  - id: office_name_narrows_only
+    rule: >-
+      office_name is ANDed after the authorized office_ids predicate and binds
+      NULL when absent, so it can only narrow within authorized_scope, never
+      widen it. Match is exact and case-insensitive on the office's own name;
+      child offices are not included.

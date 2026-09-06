@@ -2,14 +2,14 @@ id: savings_withdrawal_top_n
 status: approved_mvp
 domain: savings
 data_areas:
-  - organization_foundation
-  - client_foundation
-  - savings_core
-  - savings_transactions
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_transactions
 required_api_capability: savings_withdrawal_top_n
 query_id: savings.withdrawal_top_n
 metrics:
-  - savings.withdrawal_amount
+- savings.withdrawal_amount
 output_mode: top_n
 request_shape:
   operation: rank
@@ -18,43 +18,52 @@ request_shape:
   output: ranking
   pii: conditional_client_identity
 examples:
-  - Who made the largest withdrawal today?
-  - Show the largest withdrawals this month.
-  - Top 10 savings withdrawals this week.
-  - Penarikan terbesar bulan ini.
-required_parameters:
-  - from_date
-  - to_date
-  - limit
-optional_parameters:
-  - office_ids
-  - currency_code
-  - product_ids
+- Who made the largest withdrawal today?
+- Show the largest withdrawals this month.
+- Top 10 savings withdrawals this week.
+- Penarikan terbesar bulan ini.
+- Largest cash-out withdrawal transactions by client.
 defaults:
   exclude_reversed: true
 guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-    - client_id
-    - client_display_name
-cost_class: medium
-clarification:
-  missing_parameters:
-    - from_date
-    - to_date
-    - limit
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: top_n_bounded
-    rule: max_limit must bound returned rows.
-  - id: pii_fields_are_conditional
-    rule: PII output fields require can_view_pii and explicit capability approval.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: top_n_bounded
+  rule: max_limit must bound returned rows.
+- id: pii_fields_are_conditional
+  rule: PII output fields require can_view_pii and explicit capability approval.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  from_date:
+    type: date
+    required: false
+    default: start_of_month(business_today)
+    fill_when_missing: true
+  to_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  currency_code:
+    type: string
+    required: false
+  product_ids:
+    type: integer_array
+    required: false
+  limit:
+    type: integer
+    required: false
+    default: "10"
+    hard_cap: 100

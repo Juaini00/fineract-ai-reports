@@ -4,11 +4,11 @@ use chat::assistant::{
     AssistantIntentKind, AssistantLanguage, CLARIFICATION_VERSION_1, CanonicalStateRepository,
     CanonicalStateRepositoryError, ClarificationKind, ClarificationOption, ClarificationPayload,
     EffectiveConstraints, GraphState, GraphTransition, JobMemoryRepository, LlmTrace,
-    LlmTraceRepository, OriginalIntent, PlannerInputSnapshot, PrincipalProjection,
-    SessionMemoryRepository,
+    LlmTraceRepository, LlmTraceUsageStatus, OriginalIntent, PlannerInputSnapshot,
+    PrincipalProjection, SessionMemoryRepository,
 };
-use chat::conversation::repository::SessionRepository;
-use chat::job::repository::JobRepository;
+use chat::conversation::repository::{MessageRepository, SessionRepository};
+use chat::job::repository::{AssistantResponseTerminal, JobRepository};
 use chrono::Utc;
 use common::spawn_app;
 use serde_json::json;
@@ -16,7 +16,11 @@ use uuid::Uuid;
 
 async fn insert_session_and_job(app: &common::TestApp, user_id: Uuid) -> (Uuid, Uuid) {
     let sessions = SessionRepository::new(app.app_pool.clone());
-    let jobs = JobRepository::new(app.app_pool.clone(), sessions);
+    let jobs = JobRepository::new(
+        app.app_pool.clone(),
+        sessions,
+        MessageRepository::new(app.app_pool.clone()),
+    );
     let created = jobs
         .create(
             user_id,
@@ -35,20 +39,185 @@ async fn insert_session_and_job(app: &common::TestApp, user_id: Uuid) -> (Uuid, 
 
 async fn insert_job_for_session(app: &common::TestApp, user_id: Uuid, session_id: Uuid) -> Uuid {
     let sessions = SessionRepository::new(app.app_pool.clone());
-    JobRepository::new(app.app_pool.clone(), sessions)
-        .create(
+    JobRepository::new(
+        app.app_pool.clone(),
+        sessions,
+        MessageRepository::new(app.app_pool.clone()),
+    )
+    .create(
+        user_id,
+        Some(session_id),
+        "show savings".into(),
+        json!({}),
+        json!({}),
+        json!({}),
+        json!({}),
+    )
+    .await
+    .expect("create chat job")
+    .expect("owned session")
+    .job_id
+}
+
+#[tokio::test]
+async fn terminal_response_persistence_commits_message_job_and_outbox_together() {
+    let app = spawn_app().await;
+    let user_id = app.admin_user_id().await;
+    let (session_id, job_id) = insert_session_and_job(&app, user_id).await;
+    let jobs = JobRepository::new(
+        app.app_pool.clone(),
+        SessionRepository::new(app.app_pool.clone()),
+        MessageRepository::new(app.app_pool.clone()),
+    );
+
+    jobs.persist_assistant_response_and_terminal_state(
+        session_id,
+        job_id,
+        user_id,
+        "Done.".into(),
+        json!({ "type": "assistant_response" }),
+        json!({ "markdown": "Done." }),
+        AssistantResponseTerminal::Completed {
+            outcome: chat::management::model::AuditOutcome::Success,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    let status: String = sqlx::query_scalar("SELECT status FROM chat_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(&app.app_pool)
+        .await
+        .unwrap();
+    let message_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat_messages WHERE job_id = $1 AND role = 'assistant'",
+    )
+    .bind(job_id)
+    .fetch_one(&app.app_pool)
+    .await
+    .unwrap();
+    let outbox_payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM management_audit_outbox WHERE job_id = $1 AND payload->>'event_type' = 'chat.job_completed'",
+    )
+            .bind(job_id)
+            .fetch_one(&app.app_pool)
+            .await
+            .unwrap();
+
+    assert_eq!(status, "completed");
+    assert_eq!(message_count, 1);
+    assert_eq!(outbox_payload["event_type"], "chat.job_completed");
+    assert_eq!(outbox_payload["outcome"], "success");
+    assert_eq!(outbox_payload["summary"]["kind"], "job_completed");
+}
+
+#[tokio::test]
+async fn terminal_response_persistence_records_each_typed_outcome() {
+    let app = spawn_app().await;
+    let user_id = app.admin_user_id().await;
+    let (session_id, _) = insert_session_and_job(&app, user_id).await;
+    let jobs = JobRepository::new(
+        app.app_pool.clone(),
+        SessionRepository::new(app.app_pool.clone()),
+        MessageRepository::new(app.app_pool.clone()),
+    );
+
+    for (outcome, expected_status, expected_event, expected_summary) in [
+        (
+            chat::management::model::AuditOutcome::Success,
+            "completed",
+            "chat.job_completed",
+            "job_completed",
+        ),
+        (
+            chat::management::model::AuditOutcome::Blocked,
+            "completed",
+            "chat.job_completed",
+            "job_completed",
+        ),
+        (
+            chat::management::model::AuditOutcome::Unsupported,
+            "completed",
+            "chat.job_completed",
+            "job_completed",
+        ),
+        (
+            chat::management::model::AuditOutcome::Failed,
+            "failed",
+            "chat.job_failed",
+            "job_failed",
+        ),
+    ] {
+        let job_id = insert_job_for_session(&app, user_id, session_id).await;
+        let terminal = match outcome {
+            chat::management::model::AuditOutcome::Failed => AssistantResponseTerminal::Failed {
+                error_json: json!({ "code": "assistant_failed" }),
+            },
+            outcome => AssistantResponseTerminal::Completed { outcome },
+        };
+        jobs.persist_assistant_response_and_terminal_state(
+            session_id,
+            job_id,
             user_id,
-            Some(session_id),
-            "show savings".into(),
-            json!({}),
-            json!({}),
-            json!({}),
-            json!({}),
+            "Done.".into(),
+            json!({ "type": "assistant_response" }),
+            json!({ "markdown": "Done." }),
+            terminal,
+            None,
         )
         .await
-        .expect("create chat job")
-        .expect("owned session")
-        .job_id
+        .unwrap();
+
+        let status: String = sqlx::query_scalar("SELECT status FROM chat_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&app.app_pool)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = sqlx::query_scalar(
+            "SELECT payload FROM management_audit_outbox WHERE job_id = $1 AND payload->>'event_type' = $2",
+        )
+        .bind(job_id)
+        .bind(expected_event)
+        .fetch_one(&app.app_pool)
+        .await
+        .unwrap();
+        assert_eq!(status, expected_status);
+        assert_eq!(payload["outcome"], outcome.as_str());
+        assert_eq!(payload["summary"]["kind"], expected_summary);
+    }
+}
+
+#[tokio::test]
+async fn waiting_for_user_input_records_clarification_requested_atomically() {
+    let app = spawn_app().await;
+    let user_id = app.admin_user_id().await;
+    let (session_id, job_id) = insert_session_and_job(&app, user_id).await;
+    let jobs = JobRepository::new(
+        app.app_pool.clone(),
+        SessionRepository::new(app.app_pool.clone()),
+        MessageRepository::new(app.app_pool.clone()),
+    );
+
+    jobs.wait_for_user_input_and_record_clarification_requested(session_id, job_id, user_id)
+        .await
+        .unwrap();
+
+    let status: String = sqlx::query_scalar("SELECT status FROM chat_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(&app.app_pool)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM management_audit_outbox WHERE job_id = $1 AND payload->>'event_type' = 'chat.clarification_requested'",
+    )
+    .bind(job_id)
+    .fetch_one(&app.app_pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "waiting_for_user_input");
+    assert_eq!(payload["outcome"], "clarification");
+    assert_eq!(payload["summary"]["kind"], "clarification_requested");
 }
 
 fn pending_clarification(id: Uuid) -> ClarificationPayload {
@@ -64,6 +233,10 @@ fn pending_clarification(id: Uuid) -> ClarificationPayload {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
@@ -174,6 +347,10 @@ async fn session_memory_update_pending_source_and_revision_conflict() {
         source_intent: None,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     });
     memory.pending_clarification_source_intent = Some(json!({ "domain": "savings" }));
     memory.entities = json!([{ "type": "office", "id": 1 }]);
@@ -244,20 +421,29 @@ async fn checkpoint_transition_and_llm_trace_readback() {
             user_id,
             legacy_api_key_id: Some(api_key.id),
             graph_state: Some("route_intent".into()),
+            correlation_id: Some(Uuid::new_v4()),
+            context_contract_version: Some(1),
+            catalog_version_id: Some(Uuid::new_v4()),
+            index_version_id: Some(Uuid::new_v4()),
             purpose: "route_intent".into(),
             provider: "test".into(),
             model: "tiny".into(),
-            input_tokens: 10,
-            output_tokens: 7,
+            input_tokens: Some(10),
+            output_tokens: Some(7),
+            usage_status: LlmTraceUsageStatus::ProviderReported,
             cost_usd: Some(0.0123),
+            price_version: Some("static_config_v1".into()),
+            cost_currency: Some("USD".into()),
             latency_ms: 42,
             status: "ok".into(),
             error_kind: None,
+            error_code: None,
         })
         .await
         .unwrap();
     let traces = trace_repo.list_for_job(job_id).await.unwrap();
-    assert_eq!(traces[0].total_tokens, 17);
+    assert_eq!(traces[0].total_tokens, Some(17));
+    assert_eq!(traces[0].usage_status, "provider_reported");
     assert_eq!(traces[0].user_id, Some(user_id));
     assert_eq!(traces[0].legacy_api_key_id, Some(api_key.id));
     assert_eq!(traces[0].cost_usd.unwrap().to_string(), "0.012300");

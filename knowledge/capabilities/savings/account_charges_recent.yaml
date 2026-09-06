@@ -1,0 +1,74 @@
+id: savings_account_charges_recent
+status: approved_mvp
+domain: savings
+display_name: Savings Account Charges, Newest First
+# Same defect as client_list_recent: the SQL restricts nothing by date. It
+# returns every savings account charge in the caller's office scope and only
+# orders by audit creation time.
+description: List savings account charges within the caller's authorized office scope, ordered by audit creation time newest first. Returns every charge in scope up to the row cap; it does not restrict the rows to a recent period, and it cannot narrow by charge type.
+data_areas:
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_charges_fees
+required_api_capability: savings_account_charges_recent
+query_id: savings.account_charges_recent
+metrics:
+- savings.charge_amount_outstanding
+output_mode: list
+request_shape:
+  operation: list
+  subject: savings_account_charge
+  grouping: none
+  output: list
+  pii: client_identity
+examples:
+- Show the most recently created savings account charges.
+- List the latest savings charges.
+- Tampilkan charge tabungan yang paling baru dibuat.
+- Saya ingin tahu charge paling baru yang telah dibuat.
+supported_intents:
+- every savings account charge in the caller's office scope, unranked
+- newest savings account charges, which this capability serves by sort order
+unsupported_intents:
+- charges narrowed to one charge type, which this capability cannot bind
+- charges created strictly within a named date range, which this capability cannot restrict
+defaults:
+  authorized_scope_only: true
+  default_limit: 50
+guards:
+  require_office_scope: true
+  max_limit: 200
+  pii:
+    returns_pii: true
+    never_return:
+    - account_no
+    - external_id
+    - mobile_no
+    - email_address
+checks:
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: recent_ordering_declared
+  rule: SQL must order by m_savings_account_charge.created_on_utc descending with id descending as a deterministic tie-breaker.
+- id: pii_gated
+  rule: client identity fields must be redacted when caller lacks can_view_pii.
+dataset_recipe:
+  dataset_id: savings.account_charges
+  shape_id: recent_list
+parameters:
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  limit:
+    type: integer
+    required: false
+    # A recency report is a "latest few", not the whole table: `unbounded`
+    # resolves to i64::MAX and is then clamped to hard_cap, so every unqualified
+    # request returned 200 rows. Keep this equal to defaults.default_limit.
+    default: "50"
+    hard_cap: 200

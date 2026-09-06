@@ -3,13 +3,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use sqlx::{AssertSqlSafe, Column, Executor, PgPool, SqlSafeStr, Statement};
 
 use crate::assistant::ClarificationFieldType;
 use crate::knowledge::model::{
-    CapabilityKnowledge, GenericKnowledge, KnowledgeCatalog, ParameterInputKnowledge,
-    QueryKnowledge,
+    CapabilityKind, CapabilityKnowledge, GenericKnowledge, KnowledgeCatalog,
+    ParameterInputKnowledge, QueryKnowledge,
 };
 
 const DATA_AREA_STATUSES: &[&str] = &[
@@ -34,15 +34,7 @@ const OUTPUT_MODES: &[&str] = &[
     "summary",
 ];
 const QUERY_DATABASES: &[&str] = &["fineract", "app"];
-const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "array_bigint"];
-const SENSITIVITY_CLASSES: &[&str] = &[
-    "public_business",
-    "pii",
-    "sensitive_business_identifier",
-    "security_sensitive",
-    "secret_never_expose",
-    "free_text_sensitive",
-];
+const PARAMETER_TYPES: &[&str] = &["date", "integer", "string", "decimal", "array_bigint"];
 const UNSAFE_SQL_COMMANDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP", "ALTER", "CREATE", "GRANT", "REVOKE", "COPY",
     "VACUUM", "ANALYZE",
@@ -90,6 +82,7 @@ impl KnowledgeValidator {
             catalog.parameter_inputs.iter().map(|item| item.id.as_str()),
         )?;
         validate_parameter_input_registry(&catalog.parameter_inputs, &catalog.queries)?;
+        validate_parameter_bindings(catalog)?;
 
         for area in &catalog.data_areas {
             validate_status("data area", &area.id, &area.status, DATA_AREA_STATUSES)?;
@@ -163,9 +156,10 @@ impl KnowledgeValidator {
             if capability.status == "approved_mvp"
                 && capability.output_mode != "summary"
                 && capability.required_parameters.is_empty()
+                && capability.parameter_policies.is_empty()
             {
                 bail!(
-                    "approved capability {} must declare required parameters",
+                    "approved capability {} must declare parameters (legacy or new policy block)",
                     capability.id
                 );
             }
@@ -221,6 +215,21 @@ impl KnowledgeValidator {
                 );
             }
 
+            // A metric id with no definition file cannot be resolved, so the
+            // runtime metric guard compares against a name that means nothing
+            // and rejects the capability. Four such ids shipped undetected
+            // because nothing tied `metrics:` back to `knowledge/metrics/`.
+            for metric in &capability.metrics {
+                if catalog.resolve_metric_id(metric).is_none() {
+                    bail!(
+                        "capability {} references metric {} with no definition in knowledge/metrics \
+                         (declare it, or add it to an existing metric's aliases)",
+                        capability.id,
+                        metric
+                    );
+                }
+            }
+
             if capability.status == "approved_mvp" {
                 let query = catalog
                     .queries
@@ -232,6 +241,21 @@ impl KnowledgeValidator {
                     query,
                     &catalog.parameter_inputs,
                 )?;
+                validate_clarification_contract(capability, query)?;
+                validate_dataset_recipe(catalog, capability, query)?;
+            }
+
+            validate_capability_kind(capability, &catalog.datasets, &catalog.capabilities)?;
+            for policy in &capability.parameter_policies {
+                // Existing YAML predates acquisition metadata. Preserve that
+                // contract until each policy explicitly opts into a strategy.
+                if policy.user_required || !policy.resolution.is_empty() || policy.probe.is_some() {
+                    validate_parameter_acquisition(
+                        policy,
+                        &catalog.parameter_inputs,
+                        &catalog.datasets,
+                    )?;
+                }
             }
 
             validate_refs(
@@ -291,13 +315,6 @@ impl KnowledgeValidator {
                 if field.name.trim().is_empty() {
                     bail!("query {} has output field with empty name", query.id);
                 }
-
-                validate_status(
-                    "query output sensitivity",
-                    &format!("{}.{}", query.id, field.name),
-                    &field.sensitivity,
-                    SENSITIVITY_CLASSES,
-                )?;
             }
 
             let sql_path = resolve_sql_path(catalog, query);
@@ -313,8 +330,126 @@ impl KnowledgeValidator {
             validate_sql_safety(query, &sql_path)?;
         }
 
+        // Prose must not promise a narrowing the SQL cannot perform. Checked
+        // here, after every query's SQL file is known to exist, so the guard can
+        // read the statement it is judging the prose against.
+        for capability in &catalog.capabilities {
+            let Some(query) = catalog
+                .queries
+                .iter()
+                .find(|query| query.id == capability.query_id)
+            else {
+                // Dataset-backed capability: its SQL is assembled at request
+                // time from a recipe, so there is no single statement to read.
+                continue;
+            };
+            let sql = std::fs::read_to_string(resolve_sql_path(catalog, query)).unwrap_or_default();
+            crate::knowledge::catalog::prose_claims::validate_prose_claims(
+                capability,
+                Some(query),
+                &sql,
+            )?;
+        }
+
+        let mut dataset_ids = HashSet::new();
+        for dataset in &catalog.datasets {
+            if !dataset_ids.insert(dataset.id.as_str()) {
+                bail!("dataset {} is declared more than once", dataset.id);
+            }
+            crate::knowledge::dataset::validate::validate_dataset(dataset)?;
+            if dataset
+                .tables
+                .iter()
+                .any(|table| table.starts_with("m_loan"))
+            {
+                bail!("dataset {} references deferred loan tables", dataset.id);
+            }
+        }
+
+        // Issue 013 D3: a dataset shape nothing consumes is exactly how 5 of
+        // 10 datasets went stale silently (013 §3) — fail catalog load on it.
+        // A resolver/probe shape not attached to a `probe:` is only a
+        // warning: it may legitimately land a step ahead of its consumer.
+        for finding in find_completeness_lints(catalog) {
+            match finding.severity {
+                LintSeverity::Fatal => bail!("{}", finding.message),
+                LintSeverity::Warning => {
+                    tracing::warn!(target: "catalog_completeness", "{}", finding.message)
+                }
+            }
+        }
+
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LintSeverity {
+    Fatal,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LintFinding {
+    pub id: &'static str,
+    pub severity: LintSeverity,
+    pub message: String,
+}
+
+/// D3 catalog-level completeness lints (013 §2). Reads the already-loaded
+/// capability + dataset sets; no new data source.
+pub(crate) fn find_completeness_lints(catalog: &KnowledgeCatalog) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    for dataset in &catalog.datasets {
+        for shape in &dataset.shapes {
+            let consumed = catalog.capabilities.iter().any(|capability| {
+                capability.dataset_recipe.as_ref().is_some_and(|recipe| {
+                    recipe.dataset_id == dataset.id && recipe.shape_id == shape.id
+                })
+            });
+            if !consumed {
+                findings.push(LintFinding {
+                    id: "unconsumed_shape",
+                    severity: LintSeverity::Fatal,
+                    message: format!(
+                        "dataset {} shape {} has zero consuming capabilities \
+                         (wire it via a capability's dataset_recipe, or retire it)",
+                        dataset.id, shape.id
+                    ),
+                });
+                continue;
+            }
+
+            if matches!(
+                shape.role,
+                crate::knowledge::dataset::model::ShapeRole::Resolver
+                    | crate::knowledge::dataset::model::ShapeRole::Probe
+            ) {
+                let wired = catalog.capabilities.iter().any(|capability| {
+                    capability.parameter_policies.iter().any(|policy| {
+                        policy.probe.as_ref().is_some_and(|probe| {
+                            probe.dataset_id == dataset.id && probe.shape_id == shape.id
+                        })
+                    })
+                });
+                if !wired {
+                    findings.push(LintFinding {
+                        id: "unwired_resolver",
+                        severity: LintSeverity::Warning,
+                        message: format!(
+                            "dataset {} resolver/probe shape {} is not attached to any \
+                             capability's parameter probe: (it may legitimately land a step \
+                             ahead of its consumer)",
+                            dataset.id, shape.id
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    findings
 }
 
 pub(crate) fn validate_classification_policy(
@@ -381,6 +516,47 @@ fn validate_generic_layer(
         }
     }
 
+    Ok(())
+}
+
+/// Every query parameter the planner has to fill must declare where its value
+/// comes from, and every declaration must name a parameter that exists.
+///
+/// This is the guard that makes `knowledge/parameter-bindings/` authoritative
+/// instead of advisory. Without it a new required parameter simply never binds:
+/// the planner reports `missing parameter <name>` on every turn and the
+/// clarification loop asks for something it cannot store — which is exactly how
+/// `office_name`, `charge_name`, `client_id`, `account_number`,
+/// `latest_transaction_amount` and `product_name` shipped unreachable.
+fn validate_parameter_bindings(catalog: &KnowledgeCatalog) -> Result<()> {
+    for query in &catalog.queries {
+        for parameter in &query.parameters {
+            if matches!(
+                parameter.source.as_deref(),
+                Some("authorized_scope" | "transient_sensitive_input")
+            ) {
+                continue;
+            }
+            if !catalog.parameter_bindings.contains_key(&parameter.name) {
+                bail!(
+                    "query {} parameter {} has no entry in knowledge/parameter-bindings \
+                     (declare which constraint fields fill it, or an empty list if only a \
+                     policy default does)",
+                    query.id,
+                    parameter.name
+                );
+            }
+        }
+    }
+    for name in catalog.parameter_bindings.keys() {
+        if !catalog
+            .queries
+            .iter()
+            .any(|query| query.parameters.iter().any(|p| p.name == *name))
+        {
+            bail!("parameter binding {name} names a parameter no approved query declares");
+        }
+    }
     Ok(())
 }
 
@@ -464,6 +640,322 @@ fn validate_parameter_input_registry(
     Ok(())
 }
 
+/// A capability may never require `from_date`/`to_date` (date_range) without a
+/// covering policy default — that is the shape W-E removed (E2). Rejecting it at
+/// load time makes reintroduction a build failure, not a silent regression.
+fn validate_parameter_acquisition(
+    policy: &crate::knowledge::catalog::parameter_policy::ParameterPolicy,
+    inputs: &[ParameterInputKnowledge],
+    datasets: &[crate::knowledge::dataset::model::DatasetKnowledge],
+) -> Result<()> {
+    use crate::knowledge::catalog::parameter_policy::ResolutionStrategy;
+
+    if policy.user_required
+        && !inputs.iter().any(|input| {
+            input
+                .parameters
+                .iter()
+                .any(|parameter| parameter == &policy.name)
+        })
+    {
+        bail!(
+            "parameter {} is user_required but has no parameter input",
+            policy.name
+        );
+    }
+
+    if policy.name == "office_ids"
+        && policy.resolution.iter().any(|strategy| {
+            matches!(
+                strategy,
+                ResolutionStrategy::VerifiedUserText | ResolutionStrategy::Clarify
+            )
+        })
+    {
+        bail!("parameter office_ids may not use verified_user_text or clarify resolution");
+    }
+
+    let uses_probe = policy
+        .resolution
+        .contains(&ResolutionStrategy::AuthorizedDataProbe);
+    if uses_probe {
+        let probe = policy.probe.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "parameter {} uses authorized_data_probe without a probe reference",
+                policy.name
+            )
+        })?;
+        let dataset = datasets
+            .iter()
+            .find(|dataset| dataset.id == probe.dataset_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("probe references unknown dataset {}", probe.dataset_id)
+            })?;
+        let shape = dataset.shape(&probe.shape_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "probe references unknown shape {} on dataset {}",
+                probe.shape_id,
+                probe.dataset_id
+            )
+        })?;
+        if !matches!(
+            shape.role,
+            crate::knowledge::dataset::model::ShapeRole::Resolver
+        ) {
+            bail!("probe {} must reference a resolver shape", policy.name);
+        }
+        let output = shape
+            .produces
+            .iter()
+            .find(|slot| slot.slot == probe.output_slot)
+            .ok_or_else(|| {
+                anyhow::anyhow!("probe output slot {} does not exist", probe.output_slot)
+            })?;
+        if output.kind != parameter_type_name(policy.kind) {
+            bail!(
+                "probe output slot {} does not match parameter {} type",
+                probe.output_slot,
+                policy.name
+            );
+        }
+    }
+
+    if policy.resolution.is_empty() && policy.default.is_none() && !policy.user_required {
+        bail!(
+            "parameter {} has no resolution strategy, default, or user requirement",
+            policy.name
+        );
+    }
+    Ok(())
+}
+
+fn parameter_type_name(
+    kind: crate::knowledge::catalog::parameter_policy::ParameterType,
+) -> &'static str {
+    use crate::knowledge::catalog::parameter_policy::ParameterType;
+
+    match kind {
+        ParameterType::Date => "date",
+        ParameterType::Integer => "integer",
+        ParameterType::IntegerArray => "integer_array",
+        ParameterType::String => "string",
+        ParameterType::Currency => "currency",
+    }
+}
+
+fn validate_capability_kind(
+    capability: &CapabilityKnowledge,
+    datasets: &[crate::knowledge::dataset::model::DatasetKnowledge],
+    capabilities: &[CapabilityKnowledge],
+) -> Result<()> {
+    match capability.kind {
+        CapabilityKind::Terminal | CapabilityKind::Probe => Ok(()),
+        CapabilityKind::Resolver => {
+            let recipe = capability.dataset_recipe.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "resolver capability {} must reference a dataset shape",
+                    capability.id
+                )
+            })?;
+            let dataset = datasets
+                .iter()
+                .find(|dataset| dataset.id == recipe.dataset_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "resolver capability {} references unknown dataset",
+                        capability.id
+                    )
+                })?;
+            let shape = dataset.shape(&recipe.shape_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "resolver capability {} references unknown dataset shape",
+                    capability.id
+                )
+            })?;
+            if !matches!(
+                shape.role,
+                crate::knowledge::dataset::model::ShapeRole::Resolver
+            ) {
+                bail!(
+                    "resolver capability {} must reference a resolver shape",
+                    capability.id
+                );
+            }
+            Ok(())
+        }
+        CapabilityKind::Composite => {
+            if capability.member_capability_ids.len() < 2 {
+                bail!(
+                    "composite capability {} must declare at least two member capability ids",
+                    capability.id
+                );
+            }
+            for member_id in &capability.member_capability_ids {
+                if !capabilities
+                    .iter()
+                    .any(|member| member.id == *member_id && member.status == "approved_mvp")
+                {
+                    bail!(
+                        "composite capability {} references non-approved member {}",
+                        capability.id,
+                        member_id
+                    );
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_dataset_recipe(
+    catalog: &KnowledgeCatalog,
+    capability: &CapabilityKnowledge,
+    query: &QueryKnowledge,
+) -> Result<()> {
+    let Some(recipe) = capability.dataset_recipe.as_ref() else {
+        return Ok(());
+    };
+    let dataset = catalog
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == recipe.dataset_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "capability {} references unknown dataset {}",
+                capability.id,
+                recipe.dataset_id
+            )
+        })?;
+    let shape = dataset.shape(&recipe.shape_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "capability {} references unknown dataset shape {}",
+            capability.id,
+            recipe.shape_id
+        )
+    })?;
+    if let Some(order_by_id) = recipe.order_by_id.as_deref()
+        && !shape.order_by.iter().any(|allowed| allowed == order_by_id)
+    {
+        bail!(
+            "capability {} dataset shape {} does not allow order_by {}",
+            capability.id,
+            shape.id,
+            order_by_id
+        );
+    }
+    for mapping in &recipe.filters {
+        let slot = dataset
+            .filters
+            .iter()
+            .find(|slot| slot.id == mapping.filter_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "capability {} references unknown dataset filter {}",
+                    capability.id,
+                    mapping.filter_id
+                )
+            })?;
+        if !slot.operators.contains(&mapping.operator) {
+            bail!(
+                "capability {} uses unsupported operator for dataset filter {}",
+                capability.id,
+                slot.id
+            );
+        }
+        if mapping.parameter.is_some() == mapping.value.is_some() {
+            bail!(
+                "capability {} dataset filter {} must declare exactly one of parameter or value",
+                capability.id,
+                slot.id
+            );
+        }
+        if slot.input_policy == crate::knowledge::dataset::model::FilterInputPolicy::ExactIdentifier
+        {
+            let Some(parameter_name) = mapping.parameter.as_deref() else {
+                bail!(
+                    "capability {} exact identifier filter {} cannot use a literal value",
+                    capability.id,
+                    slot.id
+                );
+            };
+            if !query.parameters.iter().any(|parameter| {
+                parameter.name == parameter_name
+                    && parameter.source.as_deref() == Some("transient_sensitive_input")
+            }) {
+                bail!(
+                    "capability {} exact identifier filter {} requires transient sensitive input",
+                    capability.id,
+                    slot.id
+                );
+            }
+        }
+        if let Some(parameter_name) = mapping.parameter.as_deref()
+            && !query
+                .parameters
+                .iter()
+                .any(|parameter| parameter.name == parameter_name)
+        {
+            bail!(
+                "capability {} maps dataset filter {} from unknown query parameter {}",
+                capability.id,
+                slot.id,
+                parameter_name
+            );
+        }
+    }
+    for field in &recipe.projection {
+        let output = shape
+            .output_fields(dataset)
+            .iter()
+            .find(|output| output.name == *field)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "capability {} references unknown dataset output field {}",
+                    capability.id,
+                    field
+                )
+            })?;
+        if matches!(
+            output.sensitivity,
+            crate::knowledge::model::Sensitivity::FilterOnly
+                | crate::knowledge::model::Sensitivity::NeverUse
+        ) {
+            bail!(
+                "capability {} cannot project {} dataset output field {}",
+                capability.id,
+                output.sensitivity.as_str(),
+                field
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_clarification_contract(
+    capability: &CapabilityKnowledge,
+    query: &QueryKnowledge,
+) -> Result<()> {
+    for parameter in query.parameters.iter().filter(|p| {
+        p.required
+            && p.source.as_deref() != Some("authorized_scope")
+            && matches!(p.name.as_str(), "from_date" | "to_date")
+    }) {
+        let covered = capability.parameter_policies.iter().any(|policy| {
+            policy.name == parameter.name && !policy.required && policy.default.is_some()
+        });
+        if !covered {
+            bail!(
+                "capability {} requires {} with no policy default; this reintroduces \
+                 the date clarification W-E removed — add `required: false` with a \
+                 `default` expression",
+                capability.id,
+                parameter.name
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_capability_parameter_contract(
     capability: &CapabilityKnowledge,
     query: &QueryKnowledge,
@@ -477,15 +969,26 @@ fn validate_capability_parameter_contract(
         })
         .map(|parameter| parameter.name.as_str())
         .collect::<HashSet<_>>();
-    let declared_required_parameters = capability
-        .required_parameters
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
+    let declared_required_parameters: HashSet<&str> = if capability.parameter_policies.is_empty() {
+        capability
+            .required_parameters
+            .iter()
+            .map(String::as_str)
+            .collect()
+    } else {
+        // In the new-policy world, "covered by the capability" means either
+        // declared required OR carrying a default expression.
+        capability
+            .parameter_policies
+            .iter()
+            .filter(|p| p.required || p.default.is_some())
+            .map(|p| p.name.as_str())
+            .collect()
+    };
 
-    if declared_required_parameters != required_user_parameters {
+    if !required_user_parameters.is_subset(&declared_required_parameters) {
         bail!(
-            "approved capability {} required_parameters do not match required user query parameters",
+            "approved capability {} does not cover required user query parameters",
             capability.id
         );
     }
@@ -529,10 +1032,15 @@ fn validate_capability_parameter_contract(
                 capability.id
             );
         }
-        if !capability
-            .required_parameters
+        let limit_covered_by_policy = capability
+            .parameter_policies
             .iter()
-            .any(|parameter| parameter == "limit")
+            .any(|policy| policy.name == "limit");
+        if !limit_covered_by_policy
+            && !capability
+                .required_parameters
+                .iter()
+                .any(|parameter| parameter == "limit")
             && !capability
                 .optional_parameters
                 .iter()
@@ -684,7 +1192,98 @@ pub async fn validate_runtime(catalog: &KnowledgeCatalog, fineract_pool: &PgPool
         }
     }
 
+    validate_dataset_runtime(catalog, fineract_pool).await?;
+
     Ok(())
+}
+
+/// Prepares every executable `shape x order_by` combination of every authored
+/// dataset. Composition errors are catalog errors and the catalog is fully
+/// enumerable at boot, so a user request must never be what discovers a broken
+/// fragment.
+async fn validate_dataset_runtime(
+    catalog: &KnowledgeCatalog,
+    fineract_pool: &PgPool,
+) -> Result<()> {
+    use crate::knowledge::dataset::compose::compose;
+    use crate::knowledge::dataset::plan::executable_combinations;
+
+    for dataset in &catalog.datasets {
+        if dataset.database != "fineract" {
+            continue;
+        }
+        let source_path = resolve_catalog_sql_path(catalog, &dataset.source_sql)?;
+        let source = std::fs::read_to_string(&source_path)
+            .with_context(|| format!("read source_sql for dataset {}", dataset.id))?;
+
+        for (shape_id, order_by_id) in executable_combinations(dataset) {
+            let fragment = match dataset.shape(&shape_id).and_then(|s| s.fragment.clone()) {
+                Some(path) => {
+                    let fragment_path = resolve_catalog_sql_path(catalog, &path)?;
+                    Some(
+                        std::fs::read_to_string(&fragment_path)
+                            .with_context(|| format!("read fragment {path}"))?,
+                    )
+                }
+                None => None,
+            };
+            let composed = compose(
+                dataset,
+                &shape_id,
+                order_by_id.as_deref(),
+                &source,
+                fragment.as_deref(),
+            )?;
+            let sql = composed.sql.trim().trim_end_matches(';').to_string();
+            let statement = fineract_pool
+                .prepare(AssertSqlSafe(sql).into_sql_str())
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "dataset {} shape {shape_id} order_by {order_by_id:?} failed prepare: {err}",
+                        dataset.id
+                    )
+                })?;
+            let actual: Vec<String> = statement
+                .columns()
+                .iter()
+                .map(|column| column.name().to_string())
+                .collect();
+            let shape = dataset
+                .shape(&shape_id)
+                .expect("executable combination has declared shape");
+            let expected: Vec<String> = shape
+                .output_fields(dataset)
+                .iter()
+                .map(|field| field.name.clone())
+                .collect();
+            if actual != expected {
+                bail!(
+                    "dataset {} shape {shape_id} output columns {:?} do not match declared output_fields {:?}",
+                    dataset.id,
+                    actual,
+                    expected
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolves an SQL path declared by an authored dataset. Dataset sources and
+/// fragments use the same traversal-safe query-root rule as legacy queries.
+fn resolve_catalog_sql_path(catalog: &KnowledgeCatalog, relative: &str) -> Result<PathBuf> {
+    let relative = relative.strip_prefix("queries/").unwrap_or(relative);
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("invalid dataset SQL path");
+    }
+
+    Ok(catalog.query_path.join(path))
 }
 
 fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
@@ -713,6 +1312,13 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
     }
 
     validate_placeholders(query, trimmed)?;
+
+    if !currency_join_is_fanout_safe(&upper) {
+        bail!(
+            "query {} joins m_organisation_currency without LEFT JOIN LATERAL and LIMIT 1",
+            query.id
+        );
+    }
 
     if has_parameter(query, "office_ids") {
         let office_pos = parameter_position(query, "office_ids");
@@ -755,6 +1361,12 @@ fn validate_sql_safety(query: &QueryKnowledge, sql_path: &Path) -> Result<()> {
     Ok(())
 }
 
+// ponytail: string-level guard; join-graph analysis is unnecessary for this one table.
+fn currency_join_is_fanout_safe(sql_upper: &str) -> bool {
+    !sql_upper.contains("M_ORGANISATION_CURRENCY")
+        || (sql_upper.contains("LEFT JOIN LATERAL") && sql_upper.contains("LIMIT 1"))
+}
+
 fn validate_placeholders(query: &QueryKnowledge, sql: &str) -> Result<()> {
     let placeholders = placeholder_numbers(sql);
     let expected_count = query.parameters.len();
@@ -790,6 +1402,13 @@ fn validate_placeholders(query: &QueryKnowledge, sql: &str) -> Result<()> {
             "string" if cast.as_deref() != Some("text") => {
                 bail!(
                     "query {} parameter {} must use ${placeholder}::text",
+                    query.id,
+                    parameter.name
+                );
+            }
+            "decimal" if cast.as_deref() != Some("numeric") => {
+                bail!(
+                    "query {} parameter {} must use ${placeholder}::numeric",
                     query.id,
                     parameter.name
                 );
@@ -891,6 +1510,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolves_and_rejects_dataset_sql_paths() {
+        let catalog = KnowledgeCatalog {
+            root_path: PathBuf::from("/repo/knowledge"),
+            query_path: PathBuf::from("/repo/queries"),
+            data_areas: vec![],
+            domains: vec![],
+            schemas: vec![],
+            metrics: vec![],
+            capabilities: vec![],
+            queries: vec![],
+            policies: vec![],
+            responses: vec![],
+            parameter_bindings: Default::default(),
+            parameter_inputs: vec![],
+            classification: Default::default(),
+            datasets: vec![],
+        };
+
+        assert_eq!(
+            resolve_catalog_sql_path(&catalog, "queries/savings/activity.source.sql").unwrap(),
+            PathBuf::from("/repo/queries/savings/activity.source.sql")
+        );
+        assert!(resolve_catalog_sql_path(&catalog, "../secret.sql").is_err());
+        assert!(resolve_catalog_sql_path(&catalog, "/tmp/secret.sql").is_err());
+    }
+
+    #[test]
     fn rejects_invalid_status() {
         let error = validate_status("capability", "bad", "wrong", CAPABILITY_STATUSES)
             .expect_err("invalid status should fail");
@@ -912,6 +1558,351 @@ mod tests {
         assert_eq!(
             placeholder_cast("SELECT $3::bigint[]", 3).as_deref(),
             Some("bigint[]")
+        );
+    }
+
+    #[test]
+    fn currency_join_lateral_is_safe() {
+        let sql = "SELECT sa.currency_code FROM m_savings_account sa LEFT JOIN LATERAL (SELECT display_symbol FROM m_organisation_currency WHERE code = sa.currency_code LIMIT 1) cur ON true";
+        assert!(currency_join_is_fanout_safe(&sql.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn plain_currency_equality_join_is_rejected() {
+        let sql = "SELECT sa.currency_code FROM m_savings_account sa LEFT JOIN m_organisation_currency cur ON cur.code = sa.currency_code";
+        assert!(!currency_join_is_fanout_safe(&sql.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn query_without_currency_table_is_unaffected() {
+        assert!(currency_join_is_fanout_safe("SELECT C.ID FROM M_CLIENT C"));
+    }
+
+    fn parameter_policy(
+        name: &str,
+    ) -> crate::knowledge::catalog::parameter_policy::ParameterPolicy {
+        crate::knowledge::catalog::parameter_policy::ParameterPolicy {
+            name: name.into(),
+            kind: crate::knowledge::catalog::parameter_policy::ParameterType::String,
+            required: true,
+            default: None,
+            fill_when_missing: false,
+            user_may_override: true,
+            hard_cap: None,
+            user_required: false,
+            resolution: vec![],
+            probe: None,
+        }
+    }
+
+    fn resolver_dataset() -> crate::knowledge::dataset::model::DatasetKnowledge {
+        serde_yaml::from_str(
+            r#"
+id: client.identity
+database: fineract
+source_sql: queries/client/identity.sql
+shapes:
+  - id: identity_candidates
+    role: resolver
+    request_shape:
+      operation: list
+      subject: client
+      grouping: none
+      output: list
+      pii: none
+    produces:
+      - slot: client_id
+        type: integer
+        sensitivity: public_business
+        cardinality: many
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rejects_user_required_parameter_without_an_input() {
+        let mut policy = parameter_policy("client_name");
+        policy.user_required = true;
+        let error = validate_parameter_acquisition(&policy, &[], &[])
+            .expect_err("unaskable user-required parameter must be rejected");
+        assert!(error.to_string().contains("client_name"));
+    }
+
+    #[test]
+    fn rejects_authorized_data_probe_without_probe_reference() {
+        use crate::knowledge::catalog::parameter_policy::ResolutionStrategy;
+
+        let mut policy = parameter_policy("client_id");
+        policy.resolution = vec![ResolutionStrategy::AuthorizedDataProbe];
+        let error = validate_parameter_acquisition(&policy, &[], &[])
+            .expect_err("probe strategy without a probe reference must be rejected");
+        assert!(error.to_string().contains("probe"));
+    }
+
+    #[test]
+    fn rejects_probe_with_unknown_or_type_mismatched_output_slot() {
+        use crate::knowledge::catalog::parameter_policy::{ProbeRef, ResolutionStrategy};
+
+        let mut policy = parameter_policy("client_id");
+        policy.resolution = vec![ResolutionStrategy::AuthorizedDataProbe];
+        policy.probe = Some(ProbeRef {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            output_slot: "client_id".into(),
+        });
+        policy.kind = crate::knowledge::catalog::parameter_policy::ParameterType::Date;
+        let error = validate_parameter_acquisition(&policy, &[], &[resolver_dataset()])
+            .expect_err("probe output type must match the parameter type");
+        assert!(error.to_string().contains("client_id"));
+    }
+
+    #[test]
+    fn rejects_office_ids_user_text_or_clarification_resolution() {
+        use crate::knowledge::catalog::parameter_policy::ResolutionStrategy;
+
+        for forbidden in [
+            ResolutionStrategy::VerifiedUserText,
+            ResolutionStrategy::Clarify,
+        ] {
+            let mut policy = parameter_policy("office_ids");
+            policy.resolution = vec![forbidden];
+            let error = validate_parameter_acquisition(&policy, &[], &[])
+                .expect_err("office scope must not come from user text or clarification");
+            assert!(error.to_string().contains("office_ids"));
+        }
+    }
+
+    #[test]
+    fn rejects_unfillable_non_user_required_parameter() {
+        let policy = parameter_policy("unfillable");
+        let error = validate_parameter_acquisition(&policy, &[], &[])
+            .expect_err("a parameter without a source cannot be filled");
+        assert!(error.to_string().contains("unfillable"));
+    }
+
+    fn test_capability(id: &str) -> CapabilityKnowledge {
+        CapabilityKnowledge {
+            id: id.into(),
+            status: "approved_mvp".into(),
+            domain: "test".into(),
+            query_id: "test.q".into(),
+            dataset_recipe: None,
+            output_mode: "table".into(),
+            request_shape: Default::default(),
+            kind: CapabilityKind::Terminal,
+            member_capability_ids: vec![],
+            display_name: None,
+            description: None,
+            data_areas: vec![],
+            metrics: vec![],
+            examples: vec![],
+            continuation: false,
+            required_parameters: vec![],
+            optional_parameters: vec![],
+            defaults: Default::default(),
+            guards: Default::default(),
+            supported_intents: vec![],
+            unsupported_intents: vec![],
+            parameter_policies: vec![],
+        }
+    }
+
+    #[test]
+    fn rejects_resolver_without_resolver_shape() {
+        let mut capability = test_capability("resolver");
+        capability.kind = crate::knowledge::model::CapabilityKind::Resolver;
+        capability.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "terminal".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        let error = validate_capability_kind(&capability, &[resolver_dataset()], &[])
+            .expect_err("resolver capabilities require resolver shapes");
+        assert!(error.to_string().contains("resolver"));
+    }
+
+    #[test]
+    fn rejects_composite_with_fewer_than_two_approved_members() {
+        let mut capability = test_capability("composite");
+        capability.kind = crate::knowledge::model::CapabilityKind::Composite;
+        capability.member_capability_ids = vec!["approved".into()];
+        let error = validate_capability_kind(&capability, &[], &[test_capability("approved")])
+            .expect_err("composites require at least two approved members");
+        assert!(error.to_string().contains("at least two"));
+    }
+
+    #[test]
+    fn rejects_required_date_parameter_without_a_policy_default() {
+        use crate::knowledge::catalog::parameter_policy::{ParameterPolicy, ParameterType};
+        use crate::knowledge::model::{
+            CapabilityDefaults, CapabilityGuards, CapabilityKnowledge, QueryKnowledge,
+            QueryParameter,
+        };
+        let capability = CapabilityKnowledge {
+            id: "test_cap".into(),
+            status: "approved_mvp".into(),
+            domain: "test".into(),
+            query_id: "test.q".into(),
+            dataset_recipe: None,
+            output_mode: "table".into(),
+            request_shape: Default::default(),
+            kind: CapabilityKind::Terminal,
+            member_capability_ids: vec![],
+            display_name: None,
+            description: None,
+            data_areas: vec![],
+            metrics: vec![],
+            examples: vec![],
+            continuation: false,
+            required_parameters: vec![],
+            optional_parameters: vec![],
+            defaults: CapabilityDefaults::default(),
+            guards: CapabilityGuards::default(),
+            supported_intents: Vec::new(),
+            unsupported_intents: Vec::new(),
+            parameter_policies: vec![ParameterPolicy {
+                name: "from_date".into(),
+                kind: ParameterType::Date,
+                required: true,
+                default: None,
+                fill_when_missing: false,
+                user_may_override: true,
+                hard_cap: None,
+                user_required: false,
+                resolution: vec![],
+                probe: None,
+            }],
+        };
+        let query = QueryKnowledge {
+            id: "test.q".into(),
+            database: "db".into(),
+            sql_file: "test.sql".into(),
+            data_areas: vec![],
+            tables: vec![],
+            metrics: vec![],
+            parameters: vec![QueryParameter {
+                name: "from_date".into(),
+                kind: "date".into(),
+                required: true,
+                source: None,
+            }],
+            output_fields: vec![],
+            timeout_ms: None,
+        };
+        let err = validate_clarification_contract(&capability, &query)
+            .expect_err("required defaultless date must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("from_date") && msg.contains("default"),
+            "validator must reject a required date param with no default: {msg}"
+        );
+    }
+
+    fn empty_catalog() -> KnowledgeCatalog {
+        KnowledgeCatalog {
+            root_path: PathBuf::from("/repo/knowledge"),
+            query_path: PathBuf::from("/repo/queries"),
+            data_areas: vec![],
+            domains: vec![],
+            schemas: vec![],
+            metrics: vec![],
+            capabilities: vec![],
+            queries: vec![],
+            policies: vec![],
+            responses: vec![],
+            parameter_bindings: Default::default(),
+            parameter_inputs: vec![],
+            classification: Default::default(),
+            datasets: vec![],
+        }
+    }
+
+    #[test]
+    fn flags_a_dataset_shape_with_zero_consuming_capabilities_as_fatal() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "unconsumed_shape");
+        assert_eq!(findings[0].severity, LintSeverity::Fatal);
+        assert!(findings[0].message.contains("identity_candidates"));
+    }
+
+    #[test]
+    fn wired_shape_produces_no_unconsumed_finding() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+        let mut capability = test_capability("consumer");
+        capability.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        catalog.capabilities = vec![capability];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert!(
+            findings.iter().all(|f| f.id != "unconsumed_shape"),
+            "wired shape must not be flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn flags_a_wired_but_unprobed_resolver_shape_as_a_warning_not_fatal() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+        let mut capability = test_capability("consumer");
+        capability.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        catalog.capabilities = vec![capability];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "unwired_resolver");
+        assert_eq!(findings[0].severity, LintSeverity::Warning);
+    }
+
+    #[test]
+    fn probed_resolver_shape_produces_no_unwired_finding() {
+        let mut catalog = empty_catalog();
+        catalog.datasets = vec![resolver_dataset()];
+        let mut consumer = test_capability("consumer");
+        consumer.dataset_recipe = Some(crate::knowledge::dataset::model::DatasetRecipe {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            order_by_id: None,
+            filters: vec![],
+            projection: vec![],
+        });
+        let mut prober = test_capability("prober");
+        let mut policy = parameter_policy("client_id");
+        policy.probe = Some(crate::knowledge::catalog::parameter_policy::ProbeRef {
+            dataset_id: "client.identity".into(),
+            shape_id: "identity_candidates".into(),
+            output_slot: "client_id".into(),
+        });
+        prober.parameter_policies = vec![policy];
+        catalog.capabilities = vec![consumer, prober];
+
+        let findings = find_completeness_lints(&catalog);
+
+        assert!(
+            findings.is_empty(),
+            "probed and consumed shape must produce no findings: {findings:?}"
         );
     }
 }

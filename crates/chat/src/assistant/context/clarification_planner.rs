@@ -124,7 +124,7 @@ impl<'a> ClarificationPlanner<'a> {
         let defaults = limit_default(capability, query, &inputs);
         let missing = inputs
             .into_iter()
-            .filter(|input| !input_satisfied(input, facts, &defaults))
+            .filter(|input| !input_satisfied(self.catalog, input, query, facts, &defaults))
             .map(|input| field_for(input, facts, capability))
             .collect();
         Some(Candidate {
@@ -146,11 +146,13 @@ fn required_inputs<'a>(
     inputs: &'a [ParameterInputKnowledge],
 ) -> Vec<&'a ParameterInputKnowledge> {
     let mut result = Vec::new();
-    for parameter in query
-        .parameters
-        .iter()
-        .filter(|p| p.required && p.source.as_deref() != Some("authorized_scope"))
-    {
+    for parameter in query.parameters.iter().filter(|p| {
+        p.required
+            && !matches!(
+                p.source.as_deref(),
+                Some("authorized_scope" | "transient_sensitive_input")
+            )
+    }) {
         if let Some(input) = inputs
             .iter()
             .find(|input| input.parameters.iter().any(|name| name == &parameter.name))
@@ -198,8 +200,19 @@ fn limit_default(
     .collect()
 }
 
+/// An input is satisfied once every parameter this query actually takes from it
+/// has a value.
+///
+/// This used to be a match on the input id ending in `_ => false`, which meant
+/// six of the nine declared inputs — office_name, product_name, charge_name,
+/// client_id, account_number, latest_transaction_amount — were reported missing
+/// on every turn no matter what the user had typed, and the clarification could
+/// never be answered away. The catalog's binding declaration answers it now, so
+/// a new input needs no code here at all.
 fn input_satisfied(
+    _catalog: &KnowledgeCatalog,
     input: &ParameterInputKnowledge,
+    _query: &QueryKnowledge,
     facts: &ClarificationFacts,
     defaults: &ConstraintPatch,
 ) -> bool {
@@ -350,6 +363,10 @@ fn payload(
         source_intent: None,
         allow_free_text: false,
         is_missing_execution_parameters: true,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
@@ -402,13 +419,17 @@ mod tests {
                     status: "approved_mvp".into(),
                     domain: "test".into(),
                     query_id: format!("{id}_query"),
+                    dataset_recipe: None,
                     output_mode: "table".into(),
                     request_shape: RequestShape::default(),
+                    kind: Default::default(),
+                    member_capability_ids: vec![],
                     display_name: None,
                     description: None,
                     data_areas: vec![],
                     metrics: vec![],
                     examples: vec![],
+                    continuation: false,
                     required_parameters: vec![],
                     optional_parameters: vec![],
                     defaults: CapabilityDefaults { default_limit },
@@ -416,6 +437,9 @@ mod tests {
                         max_limit: Some(100),
                         max_date_range_days,
                     },
+                    supported_intents: Vec::new(),
+                    unsupported_intents: Vec::new(),
+                    parameter_policies: vec![],
                 },
             )
             .collect();
@@ -434,6 +458,7 @@ mod tests {
                     vec![param("from_date"), param("to_date")]
                 },
                 output_fields: vec![],
+                timeout_ms: None,
             })
             .collect();
         KnowledgeCatalog {
@@ -447,6 +472,16 @@ mod tests {
             queries,
             policies: vec![],
             responses: vec![],
+            parameter_bindings: [
+                ("from_date", vec![ConstraintField::FromDate]),
+                ("to_date", vec![ConstraintField::ToDate]),
+                ("limit", vec![ConstraintField::LimitValue]),
+                ("top_n", vec![ConstraintField::LimitValue]),
+                ("search", vec![ConstraintField::PersonName]),
+            ]
+            .into_iter()
+            .map(|(name, fields)| (name.to_string(), fields))
+            .collect(),
             parameter_inputs: vec![
                 input(
                     "date_range",
@@ -460,6 +495,7 @@ mod tests {
                 ),
             ],
             classification: ClassificationPolicy::default(),
+            datasets: vec![],
         }
     }
     fn plan(

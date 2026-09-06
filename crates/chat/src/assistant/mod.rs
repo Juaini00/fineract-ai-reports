@@ -1,11 +1,12 @@
 pub mod context;
 pub mod execution;
-pub mod legacy_pipeline;
 pub mod llm;
 pub mod presentation;
 pub mod retrieval;
 pub mod state;
+pub mod temporal;
 pub mod understanding;
+pub mod workflow;
 
 pub use context::{
     builder as context_builder, canonical_state,
@@ -17,15 +18,18 @@ pub use presentation::{builder as response_builder, contracts, renderer, respons
 pub use retrieval::{evidence, reranker};
 pub use state::{graph, memory};
 pub use understanding::{clarification_resolver, extraction, intent};
+pub use workflow::{compile as compile_workflow, verify as verify_workflow};
 
 pub use crate::audit::llm_trace_repository as llm_trace_repo;
-pub use crate::audit::llm_trace_repository::{LlmTrace, LlmTraceRecord, LlmTraceRepository};
+pub use crate::audit::llm_trace_repository::{
+    LlmTrace, LlmTraceRecord, LlmTraceRepository, LlmTraceUsageStatus,
+};
 pub use crate::conversation::repository::assistant_memory as session_memory_repo;
 pub use crate::conversation::repository::assistant_memory::SessionMemoryRepository;
 pub use crate::job::repository::assistant_memory as job_memory_repo;
 pub use crate::job::repository::assistant_memory::{GraphCheckpoint, JobMemoryRepository};
-pub use crate::knowledge::index::swiftide as swiftide_index;
-pub use crate::knowledge::index::swiftide::{SwiftideIndexPipeline, SwiftideKnowledgeDocument};
+pub use crate::knowledge::index::pipeline as catalog_index;
+pub use crate::knowledge::index::pipeline::{CatalogDocument, CatalogIndexPipeline};
 pub use clarification::{
     CLARIFICATION_VERSION_1, ClarificationChoice, ClarificationField, ClarificationFieldType,
     ClarificationKind, ClarificationOption, ClarificationOutcome, ClarificationPayload,
@@ -61,12 +65,13 @@ pub use presentation::renderer::{MarkdownRenderer, ResponseRenderer};
 pub use reranker::{LlmReranker, RerankerDecision, RerankerVerdict};
 pub use response::{AssistantResponse, AssistantResponseType, EvidenceReference};
 pub use retrieval::RetrievalEngine;
-pub use runtime::{AssistantGraphRuntime, GraphRuntimeResult, RuntimeUserInput};
-pub use state::graph::{
-    AssistantGraphTopology, GraphState, GraphTransition, TerminalState, TransitionRule,
-};
+pub use runtime::{GraphRuntimeResult, RuntimeUserInput, run_with_router};
+pub use state::graph::{GraphState, GraphTransition, TerminalState};
 pub use understanding::clarification_resolver::ClarificationResolver;
 pub use understanding::extraction::{
     DeterministicExtraction, PayloadCandidate, PayloadField, PayloadSource, PayloadTrust,
-    TemporalProvenance, TemporalValidationError, extract_message_facts, extract_message_facts_at,
+    TemporalProvenance, TemporalValidationError,
 };
+// Bundle 12 Task 7.2: extractors demoted to `pub(crate)` verification helpers;
+// re-exports use the crate-visible path so runtime/extraction stays green.
+pub(crate) use understanding::extraction::{extract_message_facts, extract_message_facts_at};

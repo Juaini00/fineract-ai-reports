@@ -1,5 +1,19 @@
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Worker-thread stack for the runtime. The chat pipeline runs as a deep async
+/// chain (route → retrieve → compile → run workflow → SQL); its combined poll
+/// frame overflows tokio's default 2 MB worker stack on the execution path,
+/// aborting the whole process with a stack overflow. 16 MB is verified
+/// sufficient for the deepest execution path (savings-activity workflow).
+const WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+fn main() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(WORKER_STACK_SIZE)
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     use std::net::SocketAddr;
 
     use axum::http::{HeaderValue, Method};

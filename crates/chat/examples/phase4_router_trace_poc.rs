@@ -2,15 +2,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, ensure};
 use app_core::config::AppConfig;
-use chat::{
-    assistant::{
-        AssistantIntentKind, ContextWindow, LlmTraceRepository, SemanticRouter,
-        llm::{
-            rig_client::RigLlmClient, traced_client::LlmTraceContext,
-            traced_client::TracedLlmClient,
-        },
-    },
-    knowledge::catalog::loader::KnowledgeLoader,
+use chat::assistant::{
+    AssistantIntentKind, ContextWindow, LlmTraceRepository, SemanticRouter,
+    llm::{provider::LlmProvider, traced_client::LlmTraceContext, traced_client::TracedLlmClient},
 };
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions, types::Json};
@@ -29,8 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     upsert_test_api_key(&pool).await?;
 
-    let catalog = KnowledgeLoader::new(&config.catalog.path, &config.catalog.query_path).load()?;
-    let llm = Arc::new(RigLlmClient::new(&config.llm, Some(&config.embedding))?);
+    let llm = Arc::new(LlmProvider::new(&config.llm, Some(&config.embedding))?);
     let traced = Arc::new(TracedLlmClient::new(
         llm,
         LlmTraceRepository::new(pool.clone()),
@@ -40,10 +33,14 @@ async fn main() -> anyhow::Result<()> {
             user_id: API_KEY_ID,
             legacy_api_key_id: None,
             graph_state: None,
+            correlation_id: None,
+            context_contract_version: None,
+            catalog_version_id: None,
+            index_version_id: None,
         }),
     ));
 
-    let router = SemanticRouter::new(traced, &catalog);
+    let router = SemanticRouter::new(traced);
     let intent = router
         .route("total savings deposit this month", &empty_context())
         .await?;

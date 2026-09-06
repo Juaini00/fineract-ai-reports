@@ -11,6 +11,7 @@ use crate::{
         ConstraintField, ConstraintPatch, LimitMode, OTHER_CLARIFICATION_OPTION_ID, TypedFactValue,
     },
     job::model::ValidatedClarificationSubmission,
+    knowledge::model::KnowledgeCatalog,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +27,37 @@ impl ClarificationValidationError {
     }
 }
 
+/// Which canonical fact a free-text answer to `input_id` becomes.
+///
+/// A text clarification field always covers exactly one query parameter (the
+/// input registry rejects anything else), so its first declared binding is the
+/// field the answer belongs in.
+fn text_target<'a>(catalog: &'a KnowledgeCatalog, input_id: &str) -> Option<&'a ConstraintField> {
+    let input = catalog
+        .parameter_inputs
+        .iter()
+        .find(|input| input.id == input_id)?;
+    catalog.binding_fields(input.parameters.first()?).first()
+}
+
+/// Shape the typed value the way the field's own contract expects. Everything a
+/// text clarification collects is a name or an exact literal, so the variant
+/// follows from the field, not from parsing the answer.
+fn text_fact(field: &ConstraintField, text: &str) -> TypedFactValue {
+    let text = text.to_owned();
+    match field {
+        ConstraintField::Office => TypedFactValue::Office(text),
+        ConstraintField::Product => TypedFactValue::Product(text),
+        ConstraintField::ChargeType => TypedFactValue::ChargeType(text),
+        ConstraintField::AccountNumber => TypedFactValue::AccountNumber(text),
+        ConstraintField::CurrencyCode => TypedFactValue::CurrencyCode(text),
+        ConstraintField::TransactionAmount => TypedFactValue::Decimal(text),
+        _ => TypedFactValue::PersonName(text),
+    }
+}
+
 pub fn validate_submission(
+    catalog: &KnowledgeCatalog,
     payload: &ClarificationPayload,
     principal: &PrincipalContext,
     clarification_id: Option<Uuid>,
@@ -106,7 +137,9 @@ pub fn validate_submission(
     let mut patch = ConstraintPatch::new();
     for field in fields {
         match answers.get(&field.key) {
-            Some(value) => validate_field(field, value, &mut patch)?,
+            Some(value) => {
+                validate_field(field, text_target(catalog, &field.key), value, &mut patch)?
+            }
             None if field.required && field.default_value.is_none() => {
                 return Err(ClarificationValidationError::field(format!(
                     "answers.{}",
@@ -136,6 +169,7 @@ pub fn validate_submission(
 
 fn validate_field(
     field: &ClarificationField,
+    target: Option<&ConstraintField>,
     value: &Value,
     patch: &mut ConstraintPatch,
 ) -> Result<(), ClarificationValidationError> {
@@ -241,7 +275,15 @@ fn validate_field(
                     field.key
                 )));
             }
-            // TODO(issue-003): map text answers only after their canonical constraint semantics are defined.
+            // The answer has to become a fact, or the loop cannot terminate: the
+            // next turn re-runs `input_satisfied`, finds nothing, and asks the
+            // same question again. `field.key` is the parameter input id, and
+            // the catalog says which constraint field that input's parameter
+            // binds from — the first one, since a text answer is a single
+            // value the user typed for this specific field.
+            if let Some(field_path) = target {
+                patch.insert(field_path.clone(), text_fact(field_path, text));
+            }
         }
     }
     Ok(())
@@ -251,6 +293,15 @@ fn validate_field(
 mod tests {
     use super::*;
     use crate::assistant::{ClarificationFieldType, ClarificationOption, ClarificationValidation};
+    fn catalog() -> KnowledgeCatalog {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        crate::knowledge::catalog::loader::KnowledgeLoader::new(
+            root.join("knowledge"),
+            root.join("queries"),
+        )
+        .load()
+        .unwrap()
+    }
     fn principal() -> PrincipalContext {
         PrincipalContext {
             user_id: Uuid::new_v4(),
@@ -279,6 +330,10 @@ mod tests {
             source_intent: None,
             allow_free_text: false,
             is_missing_execution_parameters: true,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }
     }
     fn field(key: &str, field_type: ClarificationFieldType, required: bool) -> ClarificationField {
@@ -303,6 +358,7 @@ mod tests {
         p: &ClarificationPayload,
     ) -> Result<ValidatedClarificationSubmission, ClarificationValidationError> {
         validate_submission(
+            &catalog(),
             p,
             &principal(),
             Some(p.id),
@@ -334,6 +390,7 @@ mod tests {
         let p = payload();
         assert!(
             validate_submission(
+                &catalog(),
                 &p,
                 &principal(),
                 Some(p.id),
@@ -348,6 +405,7 @@ mod tests {
         bad.insert("unknown".into(), Value::Null);
         assert!(
             validate_submission(
+                &catalog(),
                 &p,
                 &principal(),
                 Some(p.id),
@@ -367,6 +425,7 @@ mod tests {
             answers.insert("limit".into(), serde_json::json!(0));
             assert!(
                 validate_submission(
+                    &catalog(),
                     &p,
                     &principal(),
                     Some(p.id),
@@ -384,6 +443,7 @@ mod tests {
         let p = payload();
         assert!(
             validate_submission(
+                &catalog(),
                 &p,
                 &principal(),
                 Some(p.id),
@@ -393,6 +453,44 @@ mod tests {
                 BTreeMap::new()
             )
             .is_err()
+        );
+    }
+
+    /// The loop this closes: the assistant asks for a charge type, the user
+    /// types one, and before this the answer was validated and thrown away —
+    /// no ConstraintPatch, so the next turn asked the same question again.
+    #[test]
+    fn text_answer_becomes_a_constraint_so_the_loop_terminates() {
+        let mut p = payload();
+        p.kind = ClarificationKind::CollectFields;
+        p.options = vec![];
+        p.fields = vec![
+            field("charge_name", ClarificationFieldType::Text, true),
+            field("search", ClarificationFieldType::Text, true),
+        ];
+        let mut answers = BTreeMap::new();
+        answers.insert("charge_name".into(), serde_json::json!("Fee"));
+        answers.insert("search".into(), serde_json::json!("Tony"));
+
+        let out = validate_submission(
+            &catalog(),
+            &p,
+            &principal(),
+            Some(p.id),
+            Some(p.revision),
+            None,
+            None,
+            answers,
+        )
+        .unwrap();
+
+        assert_eq!(
+            out.constraint_patch.get(&ConstraintField::ChargeType),
+            Some(&TypedFactValue::ChargeType("Fee".into()))
+        );
+        assert_eq!(
+            out.constraint_patch.get(&ConstraintField::PersonName),
+            Some(&TypedFactValue::PersonName("Tony".into()))
         );
     }
 }

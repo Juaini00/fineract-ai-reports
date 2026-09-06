@@ -18,6 +18,7 @@ fn intent(kind: AssistantIntentKind, domain: AssistantDomain) -> AssistantIntent
         domain,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: vec![],
         constraints: Default::default(),
         context_reference: ContextReference::None,
@@ -135,23 +136,32 @@ async fn catalog_fallback_retrieves_without_vector_repo() {
             status: "approved_mvp".into(),
             domain: "savings".into(),
             query_id: "q".into(),
+            dataset_recipe: None,
             output_mode: "single".into(),
+            kind: Default::default(),
+            member_capability_ids: vec![],
             request_shape: RequestShape::default(),
             display_name: Some("Savings deposit total".into()),
             description: Some("deposit total".into()),
             data_areas: vec![],
             metrics: vec![],
             examples: vec!["show savings deposits".into()],
+            continuation: false,
             required_parameters: vec![],
             optional_parameters: vec![],
             defaults: Default::default(),
             guards: Default::default(),
+            supported_intents: Vec::new(),
+            unsupported_intents: Vec::new(),
+            parameter_policies: vec![],
         }],
         queries: vec![],
         policies: vec![],
         responses: vec![],
+        parameter_bindings: Default::default(),
         parameter_inputs: Vec::new(),
         classification: ClassificationPolicy::default(),
+        datasets: Vec::new(),
     });
     let plan = RetrievalPlan::new(
         "show savings deposits",
@@ -229,7 +239,7 @@ async fn shape_mismatch_no_longer_empties_random_clients_but_still_narrows_offic
         "expected organization_office_savings_summary among {:?}",
         evidence
             .iter()
-            .map(|item| item.capability_id.as_str())
+            .map(|item| &*item.capability_id)
             .collect::<Vec<_>>()
     );
 }

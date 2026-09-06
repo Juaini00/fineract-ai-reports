@@ -1,0 +1,9 @@
+# Genuine ambiguity: "charge tabungan" fits charges grouped by type, charges
+# that are unpaid, charges strictly overdue, and the plain newest-first charge
+# list. These are four different answers to four different questions.
+id: savings_charges_ambiguous_id
+message: "tampilkan charge tabungan"
+language: id
+domain: savings
+expected_decision: clarify
+expected_capability: null

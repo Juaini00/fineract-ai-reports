@@ -1,0 +1,711 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Instant;
+
+use anyhow::{Result, bail};
+use app_core::auth::model::PrincipalContext;
+use async_trait::async_trait;
+use futures::future::join_all;
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::assistant::ClarificationPayload;
+use crate::knowledge::model::KnowledgeCatalog;
+use crate::policy::authorization::{
+    effective_office_scope, ensure_capability_allowed, ensure_pii_allowed,
+};
+
+use super::contract::{
+    EdgeCondition, ExecutionWorkflow, Idempotency, NodeBudget, NodeId, NodeKind, WorkflowBudgets,
+    WorkflowNode,
+};
+use super::state::{NodeRunStatus, WorkflowNodeRun, WorkflowStateRepository, persisted_output};
+
+pub mod node;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeExecution {
+    Completed {
+        output: Value,
+        rows_returned: i32,
+    },
+    Waiting {
+        clarification: Box<ClarificationPayload>,
+    },
+    Failed,
+}
+
+#[async_trait]
+pub trait WorkflowNodeExecutor: Send + Sync {
+    /// Implementations execute only approved catalog resources. The runner has
+    /// already performed the per-node policy check and written a running row.
+    async fn execute(
+        &self,
+        node: &WorkflowNode,
+        bindings: &BTreeMap<String, Value>,
+    ) -> Result<NodeExecution>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkflowRunOutcome {
+    Completed,
+    WaitingForUserInput { node_id: NodeId },
+    Failed,
+}
+
+pub struct WorkflowRunner<E> {
+    state: WorkflowStateRepository,
+    executor: E,
+    catalog: std::sync::Arc<KnowledgeCatalog>,
+}
+
+impl<E> WorkflowRunner<E>
+where
+    E: WorkflowNodeExecutor,
+{
+    pub fn new(
+        state: WorkflowStateRepository,
+        executor: E,
+        catalog: std::sync::Arc<KnowledgeCatalog>,
+    ) -> Self {
+        Self {
+            state,
+            executor,
+            catalog,
+        }
+    }
+
+    /// Runs only dependency-ready nodes, up to `max_parallel_queries` of them
+    /// concurrently per iteration. Every node is authorized immediately
+    /// before execution, rather than relying on a workflow-level preflight.
+    pub async fn run(
+        &self,
+        job_id: Uuid,
+        user_id: Uuid,
+        principal: &PrincipalContext,
+        workflow: &ExecutionWorkflow,
+    ) -> Result<WorkflowRunOutcome> {
+        let mut runs = self.state.node_runs(job_id, workflow.id).await?;
+        // Reconstructed from durable node runs so a resumed job (a fresh
+        // `run()` call after a clarification pause) starts the ledger where
+        // the last run left off, not at zero.
+        let mut consumed = BudgetTotals::from_completed(workflow, &runs);
+        // One token per `run()` call, not per batch: a failure cancels only
+        // the batch it belongs to, because the run always returns `Failed`
+        // immediately after that batch — there is never a second batch to
+        // protect.
+        let token = CancellationToken::new();
+        loop {
+            let completed = completed_ids(&runs);
+            let runnable_nodes: Vec<&WorkflowNode> = workflow
+                .nodes
+                .iter()
+                .filter(|node| runnable(node, workflow, &runs, &completed))
+                .collect();
+            if runnable_nodes.is_empty() {
+                return Ok(
+                    if workflow.nodes.iter().any(|node| {
+                        matches!(node.kind, NodeKind::Complete(_)) && completed.contains(&node.id)
+                    }) {
+                        WorkflowRunOutcome::Completed
+                    } else {
+                        WorkflowRunOutcome::Failed
+                    },
+                );
+            };
+            for node in &runnable_nodes {
+                if node.idempotency == Idempotency::ExecuteOnce
+                    && runs
+                        .iter()
+                        .any(|run| run.node_id == node.id && run.status == NodeRunStatus::Completed)
+                {
+                    bail!("execute-once workflow node reached twice");
+                }
+            }
+
+            let max_parallel = usize::from(workflow.budgets.max_parallel_queries).max(1);
+            let mut batch: Vec<&WorkflowNode> = Vec::new();
+            let mut projected = consumed;
+            for node in runnable_nodes.iter().copied().take(max_parallel) {
+                if projected.would_exceed(&workflow.budgets, &node.budget) {
+                    break;
+                }
+                projected.add_declared(&node.budget);
+                batch.push(node);
+            }
+            if batch.is_empty() {
+                // Even the single best-fitting runnable node already exceeds
+                // a shared budget — nothing left to try.
+                return Ok(WorkflowRunOutcome::Failed);
+            }
+
+            let outcomes: Vec<NodeBatchOutcome> = join_all(batch.iter().copied().map(|node| {
+                self.execute_node(job_id, workflow, node, &runs, principal, token.clone())
+            }))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+
+            let mut failed = false;
+            let mut waiting: Option<(NodeId, Box<ClarificationPayload>)> = None;
+            for outcome in outcomes {
+                match outcome {
+                    NodeBatchOutcome::Completed {
+                        run,
+                        branch_decision,
+                        node_id,
+                        query_cost,
+                    } => {
+                        if let Some(cardinality) = branch_decision {
+                            self.state
+                                .record_branch_decision(job_id, workflow.id, &node_id, &cardinality)
+                                .await?;
+                        }
+                        consumed.add_actual(query_cost, &run);
+                        // `runs` feeds `bindings_for`/`cardinality_for` for
+                        // later nodes in this same run — the database row
+                        // alone isn't consulted for prior-step output.
+                        runs.push(run);
+                    }
+                    NodeBatchOutcome::Waiting {
+                        node_id,
+                        clarification,
+                    } => {
+                        waiting.get_or_insert((node_id, clarification));
+                    }
+                    NodeBatchOutcome::Failed | NodeBatchOutcome::Cancelled => {
+                        failed = true;
+                    }
+                }
+            }
+            if failed {
+                return Ok(WorkflowRunOutcome::Failed);
+            }
+            if let Some((node_id, clarification)) = waiting {
+                self.state
+                    .mark_workflow_paused(job_id, user_id, workflow.id, &node_id, &clarification)
+                    .await?;
+                return Ok(WorkflowRunOutcome::WaitingForUserInput { node_id });
+            }
+        }
+    }
+
+    /// Runs one node's full lifecycle (policy check, `begin_node`, execution,
+    /// completion/failure persistence). Races execution against `token` so a
+    /// FailFast sibling failure aborts this node before it finishes, instead
+    /// of composing a partial result from work that should have stopped.
+    async fn execute_node(
+        &self,
+        job_id: Uuid,
+        workflow: &ExecutionWorkflow,
+        node: &WorkflowNode,
+        runs: &[WorkflowNodeRun],
+        principal: &PrincipalContext,
+        token: CancellationToken,
+    ) -> Result<NodeBatchOutcome> {
+        check_node_policy(node, principal, &self.catalog)?;
+        let attempt = next_attempt(runs, &node.id)?;
+        let run = self
+            .state
+            .begin_node(
+                job_id,
+                workflow.id,
+                &node.id,
+                attempt,
+                json!({
+                    "node_id": node.id, "policy_checked": true,
+                }),
+            )
+            .await?;
+        let started = Instant::now();
+        let bindings = bindings_for(node, workflow, runs, principal)?;
+        let execution = tokio::select! {
+            biased;
+            _ = token.cancelled() => {
+                self.state.fail_node(&run, elapsed_ms(started)).await?;
+                return Ok(NodeBatchOutcome::Cancelled);
+            }
+            result = self.resolve_execution(job_id, workflow, node, &bindings, runs, principal) => result?,
+        };
+        let elapsed = elapsed_ms(started);
+        match execution {
+            NodeExecution::Completed {
+                output,
+                rows_returned,
+            } => {
+                let branch_decision = matches!(node.kind, NodeKind::CardinalityBranch(_))
+                    .then(|| {
+                        output
+                            .get("cardinality")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                let persisted = persisted_output(&node.inputs, output);
+                self.state
+                    .complete_node(&run, persisted.clone(), rows_returned, elapsed)
+                    .await?;
+                self.state
+                    .add_budget_consumed(
+                        job_id,
+                        i64::from(node.budget.query_cost),
+                        i64::from(rows_returned.max(0)),
+                        i64::from(elapsed.max(0)),
+                    )
+                    .await?;
+                Ok(NodeBatchOutcome::Completed {
+                    run: completed_run(run, elapsed, persisted, rows_returned),
+                    branch_decision,
+                    node_id: node.id.clone(),
+                    query_cost: node.budget.query_cost,
+                })
+            }
+            NodeExecution::Waiting { mut clarification } => {
+                clarification.workflow_id = Some(workflow.id);
+                clarification.node_id = Some(node.id.as_str().to_owned());
+                clarification.entity_kind = match &node.kind {
+                    NodeKind::ClarificationInterrupt(interrupt) => workflow
+                        .nodes
+                        .iter()
+                        .find(|candidate| candidate.id == interrupt.option_source)
+                        .and_then(|candidate| match &candidate.kind {
+                            NodeKind::ResolveEntity(resolve) => Some(resolve.entity_kind.clone()),
+                            _ => None,
+                        }),
+                    _ => None,
+                };
+                clarification.resume_node_id = match &node.kind {
+                    NodeKind::ClarificationInterrupt(interrupt) => {
+                        Some(interrupt.resume.as_str().to_owned())
+                    }
+                    _ => None,
+                };
+                Ok(NodeBatchOutcome::Waiting {
+                    node_id: node.id.clone(),
+                    clarification,
+                })
+            }
+            NodeExecution::Failed => {
+                self.state.fail_node(&run, elapsed).await?;
+                // Cancel in-flight siblings immediately (not after this whole
+                // batch resolves) so a long-running sibling observes it at
+                // its own next await point instead of running to completion.
+                token.cancel();
+                Ok(NodeBatchOutcome::Failed)
+            }
+        }
+    }
+
+    async fn resolve_execution(
+        &self,
+        job_id: Uuid,
+        workflow: &ExecutionWorkflow,
+        node: &WorkflowNode,
+        bindings: &BTreeMap<String, Value>,
+        runs: &[WorkflowNodeRun],
+        principal: &PrincipalContext,
+    ) -> Result<NodeExecution> {
+        Ok(match &node.kind {
+            NodeKind::CardinalityBranch(branch) => NodeExecution::Completed {
+                output: json!({ "cardinality": match node::branch::cardinality_for(runs, &branch.source)? {
+                    super::contract::Cardinality::Zero => "zero",
+                    super::contract::Cardinality::One => "one",
+                    super::contract::Cardinality::Many => "many",
+                } }),
+                rows_returned: 0,
+            },
+            NodeKind::Complete(_) => NodeExecution::Completed {
+                output: json!({}),
+                rows_returned: 0,
+            },
+            // Deterministic, no LLM, no injected executor: composition only
+            // merges completed sibling outputs after dropping whatever the
+            // principal isn't permitted to see.
+            NodeKind::ComposeResult(compose) => {
+                let sources = compose
+                    .sources
+                    .iter()
+                    .map(|source_id| {
+                        let source_node = workflow
+                            .nodes
+                            .iter()
+                            .find(|candidate| &candidate.id == source_id)
+                            .ok_or_else(|| anyhow::anyhow!("compose source node is missing"))?;
+                        Ok(node::compose::ComposeSource {
+                            output: node_output(runs, source_id)?,
+                            output_slots: source_node.outputs.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let outcome = node::compose::compose(
+                    compose.composition.clone(),
+                    sources,
+                    max_visible_sensitivity(principal),
+                )?;
+                self.state
+                    .record_sensitivity_drop(job_id, workflow.id, &node.id, &outcome.dropped_fields)
+                    .await?;
+                NodeExecution::Completed {
+                    output: outcome.value,
+                    rows_returned: 0,
+                }
+            }
+            _ => self.executor.execute(node, bindings).await?,
+        })
+    }
+}
+
+fn max_visible_sensitivity(principal: &PrincipalContext) -> crate::knowledge::model::Sensitivity {
+    if principal.can_view_pii {
+        crate::knowledge::model::Sensitivity::Pii
+    } else {
+        crate::knowledge::model::Sensitivity::FilterOnly
+    }
+}
+
+fn elapsed_ms(started: Instant) -> i32 {
+    i32::try_from(started.elapsed().as_millis()).unwrap_or(i32::MAX)
+}
+
+#[derive(Debug, Clone)]
+enum NodeBatchOutcome {
+    Completed {
+        run: WorkflowNodeRun,
+        branch_decision: Option<String>,
+        node_id: NodeId,
+        query_cost: u8,
+    },
+    Waiting {
+        node_id: NodeId,
+        clarification: Box<ClarificationPayload>,
+    },
+    Failed,
+    Cancelled,
+}
+
+/// Running total for the shared per-run budget ledger (`WorkflowBudgets`).
+/// `would_exceed`/`add_declared` use each node's *declared* worst case
+/// (`row_cap`, `timeout_ms`) to decide whether a node may start at all, since
+/// actual usage isn't known until it finishes; `add_actual` then reconciles
+/// the ledger with what the node really used.
+#[derive(Debug, Clone, Copy, Default)]
+struct BudgetTotals {
+    queries: u64,
+    rows: u64,
+    ms: u64,
+}
+
+impl BudgetTotals {
+    fn from_completed(workflow: &ExecutionWorkflow, runs: &[WorkflowNodeRun]) -> Self {
+        let nodes: HashMap<&NodeId, &WorkflowNode> =
+            workflow.nodes.iter().map(|node| (&node.id, node)).collect();
+        let mut totals = Self::default();
+        for run in runs
+            .iter()
+            .filter(|run| run.status == NodeRunStatus::Completed)
+        {
+            if let Some(node) = nodes.get(&run.node_id) {
+                totals.queries += u64::from(node.budget.query_cost);
+            }
+            totals.rows += u64::try_from(run.rows_returned.max(0)).unwrap_or(u64::MAX);
+            totals.ms += u64::try_from(run.duration_ms.unwrap_or(0).max(0)).unwrap_or(u64::MAX);
+        }
+        totals
+    }
+
+    fn would_exceed(&self, budgets: &WorkflowBudgets, node_budget: &NodeBudget) -> bool {
+        self.queries + u64::from(node_budget.query_cost) > u64::from(budgets.max_query_count)
+            || self.rows + u64::from(node_budget.row_cap) > u64::from(budgets.shared_row_cap)
+            || self.ms + node_budget.timeout_ms > budgets.shared_timeout_ms
+    }
+
+    fn add_declared(&mut self, node_budget: &NodeBudget) {
+        self.queries += u64::from(node_budget.query_cost);
+        self.rows += u64::from(node_budget.row_cap);
+        self.ms += node_budget.timeout_ms;
+    }
+
+    fn add_actual(&mut self, query_cost: u8, run: &WorkflowNodeRun) {
+        self.queries += u64::from(query_cost);
+        self.rows += u64::try_from(run.rows_returned.max(0)).unwrap_or(u64::MAX);
+        self.ms += u64::try_from(run.duration_ms.unwrap_or(0).max(0)).unwrap_or(u64::MAX);
+    }
+}
+
+fn completed_run(
+    mut run: WorkflowNodeRun,
+    duration_ms: i32,
+    output_json: Value,
+    rows_returned: i32,
+) -> WorkflowNodeRun {
+    run.status = NodeRunStatus::Completed;
+    run.duration_ms = Some(duration_ms);
+    run.output_json = Some(output_json);
+    run.rows_returned = rows_returned;
+    run
+}
+
+fn completed_ids(runs: &[WorkflowNodeRun]) -> HashSet<NodeId> {
+    runs.iter()
+        .filter(|run| run.status == NodeRunStatus::Completed)
+        .map(|run| run.node_id.clone())
+        .collect()
+}
+fn next_attempt(runs: &[WorkflowNodeRun], node_id: &NodeId) -> Result<i16> {
+    let attempt = runs
+        .iter()
+        .filter(|run| &run.node_id == node_id)
+        .map(|run| run.attempt)
+        .max()
+        .map_or(0, |attempt| attempt + 1);
+    Ok(attempt)
+}
+
+fn runnable(
+    node: &WorkflowNode,
+    workflow: &ExecutionWorkflow,
+    runs: &[WorkflowNodeRun],
+    completed: &HashSet<NodeId>,
+) -> bool {
+    if completed.contains(&node.id)
+        || runs.iter().any(|run| {
+            run.node_id == node.id
+                && matches!(run.status, NodeRunStatus::Running | NodeRunStatus::Waiting)
+        })
+    {
+        return false;
+    }
+    let incoming = workflow
+        .edges
+        .iter()
+        .filter(|edge| edge.to == node.id)
+        .collect::<Vec<_>>();
+    // A node with no incoming edges is an entry point (mirrors
+    // `WorkflowGraph::entry_nodes`, which `verify()` uses the same way) and is
+    // runnable immediately, regardless of whether it also has outgoing edges
+    // — an entry node driving the rest of the graph is the common case, not
+    // an exception.
+    incoming.is_empty()
+        || incoming.iter().any(|edge| {
+            completed.contains(&edge.from)
+                && edge_condition_matches(&edge.condition, &edge.from, runs)
+        })
+}
+
+/// Whether `node`'s incoming dependencies are satisfied given the completed
+/// runs: the same condition-aware predicate the scheduler uses (OR over
+/// incoming edges, with `Cardinality` arms matched against the branch source),
+/// minus the "not already started" exclusion. The guard (`data.rs`) uses this
+/// so its workflow-step membership check agrees with the scheduler on
+/// OR-convergence — a `CardinalityBranch` `one` arm and a `select -> execute`
+/// resume edge both feed the shared execute node, and only one path completes,
+/// so an all-parents-completed rule would wrongly reject the running arm.
+pub(crate) fn dependencies_satisfied(
+    node: &WorkflowNode,
+    workflow: &ExecutionWorkflow,
+    runs: &[WorkflowNodeRun],
+) -> bool {
+    let completed = completed_ids(runs);
+    let incoming = workflow
+        .edges
+        .iter()
+        .filter(|edge| edge.to == node.id)
+        .collect::<Vec<_>>();
+    incoming.is_empty()
+        || incoming.iter().any(|edge| {
+            completed.contains(&edge.from)
+                && edge_condition_matches(&edge.condition, &edge.from, runs)
+        })
+}
+
+fn edge_condition_matches(
+    condition: &EdgeCondition,
+    source: &NodeId,
+    runs: &[WorkflowNodeRun],
+) -> bool {
+    match condition {
+        EdgeCondition::Always | EdgeCondition::ClarificationAnswered => true,
+        EdgeCondition::Cardinality(expected) => {
+            node::branch::cardinality_for(runs, source).is_ok_and(|actual| &actual == expected)
+        }
+    }
+}
+
+fn check_node_policy(
+    node: &WorkflowNode,
+    principal: &PrincipalContext,
+    catalog: &KnowledgeCatalog,
+) -> Result<()> {
+    if let Some(capability) = node.policy.required_capability.as_deref() {
+        if !catalog
+            .capabilities
+            .iter()
+            .any(|item| item.id == capability && item.status == "approved_mvp")
+        {
+            bail!("workflow node capability is unavailable");
+        }
+        ensure_capability_allowed(principal, capability)?;
+    }
+    if let NodeKind::ExecuteQuery(query) = &node.kind
+        && let Some(capability) = query.capability_id.as_deref()
+    {
+        if !catalog
+            .capabilities
+            .iter()
+            .any(|item| item.id == capability && item.status == "approved_mvp")
+        {
+            bail!("workflow node capability is unavailable");
+        }
+        ensure_capability_allowed(principal, capability)?;
+    }
+    ensure_pii_allowed(principal, node.policy.pii_required)?;
+    effective_office_scope(principal, None)?;
+    Ok(())
+}
+
+fn bindings_for(
+    node: &WorkflowNode,
+    _workflow: &ExecutionWorkflow,
+    runs: &[WorkflowNodeRun],
+    principal: &PrincipalContext,
+) -> Result<BTreeMap<String, Value>> {
+    let mut bindings = BTreeMap::new();
+    for input in &node.inputs {
+        // The real value never travels through bindings/parameters at all —
+        // `GuardedDataTools::parameters_have_declared_provenance` rejects any
+        // parameter whose only declared source is `ExactSensitiveInput`, and
+        // `FineractDataExecutor` receives the value out-of-band (constructor
+        // field, forwarded to `execute_plan_with_sensitive` separately from
+        // `plan.params`). So this input contributes no binding at all, not
+        // even a `Null` placeholder.
+        if matches!(
+            input.source,
+            super::contract::BindingSource::ExactSensitiveInput
+        ) {
+            continue;
+        }
+        let value = match &input.source {
+            super::contract::BindingSource::AuthorizedScope => {
+                json!(effective_office_scope(principal, None)?)
+            }
+            super::contract::BindingSource::PriorStep { node, slot }
+            | super::contract::BindingSource::AuthorizedDataProbe { node, slot } => {
+                output_slot(runs, node, slot)?
+            }
+            // Catalog defaults, extractions, and user answers are preserved in
+            // workflow state by the compiler/resume path; a runner never makes
+            // up an untrusted value for them.
+            super::contract::BindingSource::ExactSensitiveInput => unreachable!("handled above"),
+            _ => Value::Null,
+        };
+        bindings.insert(input.parameter.clone(), value);
+    }
+    Ok(bindings)
+}
+fn node_output(runs: &[WorkflowNodeRun], node: &NodeId) -> Result<Value> {
+    runs.iter()
+        .rev()
+        .find(|run| &run.node_id == node && run.status == NodeRunStatus::Completed)
+        .and_then(|run| run.output_json.clone())
+        .ok_or_else(|| anyhow::anyhow!("completed workflow output is missing"))
+}
+fn output_slot(runs: &[WorkflowNodeRun], node: &NodeId, slot: &str) -> Result<Value> {
+    runs.iter()
+        .rev()
+        .find(|run| &run.node_id == node && run.status == NodeRunStatus::Completed)
+        .and_then(|run| run.output_json.as_ref())
+        .and_then(|output| output.get(slot))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("completed workflow output slot is missing"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assistant::workflow::contract::{Cardinality, NodeBudget, NodePolicy, RetryPolicy};
+    use crate::knowledge::model::Sensitivity;
+
+    fn node(id: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: NodeId::new(id).unwrap(),
+            kind: NodeKind::Complete(super::super::contract::CompleteNode {
+                terminal: super::super::contract::TerminalState::Success,
+            }),
+            inputs: vec![],
+            outputs: vec![],
+            policy: NodePolicy {
+                required_capability: None,
+                office_scope: super::super::contract::OfficeScope::AuthorizedIntersection,
+                max_sensitivity: Sensitivity::Pii,
+                pii_required: false,
+            },
+            budget: NodeBudget {
+                timeout_ms: 0,
+                row_cap: 0,
+                query_cost: 0,
+            },
+            idempotency: Idempotency::Pure,
+            retry: RetryPolicy { max_attempts: 0 },
+        }
+    }
+    #[test]
+    fn branch_only_schedules_matching_arm() {
+        let start = node("start");
+        let zero = node("zero");
+        let many = node("many");
+        let workflow = ExecutionWorkflow {
+            id: Uuid::nil(),
+            contract_version: 1,
+            catalog_version: Uuid::nil(),
+            nodes: vec![start, zero.clone(), many.clone()],
+            edges: vec![
+                super::super::contract::WorkflowEdge {
+                    from: NodeId::new("start").unwrap(),
+                    to: zero.id.clone(),
+                    condition: EdgeCondition::Cardinality(Cardinality::Zero),
+                },
+                super::super::contract::WorkflowEdge {
+                    from: NodeId::new("start").unwrap(),
+                    to: many.id.clone(),
+                    condition: EdgeCondition::Cardinality(Cardinality::Many),
+                },
+            ],
+            budgets: super::super::contract::WorkflowBudgets {
+                shared_timeout_ms: 1,
+                shared_row_cap: 1,
+                max_query_count: 1,
+                max_parallel_queries: 1,
+                max_model_turns: 1,
+                max_node_retries: 0,
+            },
+            fail_policy: super::super::contract::FailPolicy::FailFast,
+            output_contract: super::super::contract::OutputContract {
+                mode: super::super::contract::OutputMode::Table,
+                allows_partial: false,
+                max_sensitivity: Sensitivity::Pii,
+            },
+        };
+        let run = WorkflowNodeRun {
+            id: Uuid::nil(),
+            job_id: Uuid::nil(),
+            workflow_id: Uuid::nil(),
+            node_id: NodeId::new("start").unwrap(),
+            attempt: 0,
+            status: NodeRunStatus::Completed,
+            output_json: Some(json!({"row_count": 0})),
+            provenance_json: json!({}),
+            rows_returned: 0,
+            duration_ms: Some(0),
+            started_at: None,
+            finished_at: None,
+        };
+        let completed = completed_ids(std::slice::from_ref(&run));
+        assert!(runnable(
+            &zero,
+            &workflow,
+            std::slice::from_ref(&run),
+            &completed
+        ));
+        assert!(!runnable(&many, &workflow, &[run], &completed));
+    }
+}

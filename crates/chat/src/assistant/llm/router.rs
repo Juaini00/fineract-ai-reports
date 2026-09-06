@@ -1,17 +1,19 @@
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
-use crate::{
-    assistant::{AssistantIntent, ContextWindow, llm},
-    knowledge::model::KnowledgeCatalog,
-};
+use crate::assistant::{AssistantIntent, ContextWindow, llm};
 
 pub struct SemanticRouter {
     llm: llm::SharedLlmClient,
 }
 
 impl SemanticRouter {
-    pub fn new(llm: llm::SharedLlmClient, _catalog: &KnowledgeCatalog) -> Self {
+    /// Deliberately takes no `KnowledgeCatalog`. The router classifies the
+    /// message; it never decides coverage, so holding the catalog would only
+    /// tempt a stage that runs before retrieval into answering "no". The
+    /// parameter used to be accepted and discarded, which advertised a
+    /// capability this type does not have.
+    pub fn new(llm: llm::SharedLlmClient) -> Self {
         Self { llm }
     }
 
@@ -25,9 +27,14 @@ impl SemanticRouter {
             "rules": [
                 "Requests naming a metric to rank clients by (e.g. 'top N clients by savings accounts', '3 clients with most deposits', 'clients with highest balance') MUST use subject=client, operation=rank, output=ranking, grouping=none, pii=client_identity.",
                 "domain MUST match the primary subject of the request, not a noun that merely appears in the sentence. Example: 'top 3 clients by savings account count' → subject=client, domain=client (NOT savings).",
-                "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients') without a ranking metric are unsupported by the approved catalog — return intent=unsupported_in_domain instead of inventing a shape.",
+                "Requests for arbitrary/random/sample clients ('client sembarang', 'give me any N clients', 'give me 10 clients') are a real request shape: operation=random_sample (or list when the user asks for the newest/latest), subject=client, output=list. Never answer that the catalog does not cover something — you cannot see the catalog. Classify the request; retrieval and reranking decide coverage.",
                 "When a request_shape dimension is genuinely ambiguous set it to unknown rather than guessing.",
-                "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support."
+                "request_shape.subject MUST be exactly one of: savings_transaction, savings_account, savings_account_charge, client, office, organization_hierarchy, product, unknown. Never invent a value outside this list. Use savings_account_charge for charges or fees applied to a savings account; use savings_account for a request framed around the account itself. The same rule applies to every other request_shape/domain/intent enum field: only emit values defined by the schema, defaulting to unknown rather than fabricating a new enum member.",
+                "For matched reporting capabilities use intent=report_request, not the capability id. Do not invent SQL, capability ids, or unavailable report support.",
+                "When the user explicitly gives a transaction amount used to identify a transaction/account, copy it exactly as decimal text into constraints.transaction_amount; never round or convert it to floating point. Do NOT also emit it as an entity — an amount is a constraint, not an entity.",
+                "entities[].entity_type MUST be exactly one of: person_name, client_id, office, date_period, currency, product, metric, capability_hint, account_number, charge_type. Never invent a new entity kind. If a detail does not fit any of these, express it in constraints or omit it rather than inventing a type.",
+                "A named charge or fee ('weekly charge', 'penalty fee', 'biaya bulanan') is a charge_type entity, NOT a metric. metric names what is measured (a count, a sum, a balance); charge_type names which charge rows to narrow to.",
+                "canonical_query_en MUST be the user's message translated to English, keeping every reporting term, entity, metric, and date intact (e.g. 'hutang' -> 'debt/unpaid charge', 'jatuh tempo' -> 'due date', 'terlambat'/'lewat jatuh tempo' -> 'overdue'). If the message is already English, copy it unchanged. Never leave it empty."
             ]
         })
         .to_string();
@@ -56,7 +63,7 @@ mod tests {
 
     use super::*;
     use crate::assistant::{
-        AssistantDomain, AssistantIntentKind, AssistantLanguage, ContextReference,
+        AssistantDomain, AssistantIntentKind, AssistantLanguage, ContextReference, RetrievalPlan,
         llm::{EmbeddingResponse, LlmClient, LlmResponse, TokenUsage},
     };
 
@@ -126,23 +133,6 @@ mod tests {
         ]
     }
 
-    fn empty_catalog() -> KnowledgeCatalog {
-        KnowledgeCatalog {
-            root_path: Default::default(),
-            query_path: Default::default(),
-            data_areas: Vec::new(),
-            domains: Vec::new(),
-            schemas: Vec::new(),
-            metrics: Vec::new(),
-            capabilities: Vec::new(),
-            queries: Vec::new(),
-            policies: Vec::new(),
-            responses: Vec::new(),
-            parameter_inputs: Vec::new(),
-            classification: Default::default(),
-        }
-    }
-
     fn empty_context() -> ContextWindow {
         ContextWindow {
             summary: None,
@@ -160,85 +150,80 @@ mod tests {
 
     #[tokio::test]
     async fn router_returns_structured_intent_without_keyword_fallback() {
-        let catalog = empty_catalog();
-        let router = SemanticRouter::new(Arc::new(FakeLlm), &catalog);
+        let router = SemanticRouter::new(Arc::new(FakeLlm));
         let intent = router.route("client list", &empty_context()).await.unwrap();
         assert_eq!(intent.intent, AssistantIntentKind::DataLookup);
         assert_eq!(intent.domain, AssistantDomain::Client);
     }
 
-    /// LLM returns a value for `request_shape.operation` outside the
-    /// `RequestOperation` enum. The router must reject it with a
-    /// schema-level error naming the offending field, not a generic
-    /// `serde_json` decode failure.
-    struct InvalidEnumFakeLlm;
-
-    #[async_trait]
-    impl LlmClient for InvalidEnumFakeLlm {
-        async fn structured_value(
-            &self,
-            _purpose: crate::assistant::llm::LlmPurpose,
-            _system: &str,
-            _user: &str,
-            _schema: serde_json::Value,
-        ) -> Result<LlmResponse<serde_json::Value>> {
-            Ok(LlmResponse {
-                value: json!({
-                    "intent": "report_request",
-                    "domain": "savings",
-                    "request_shape": {"operation": "not_a_real_operation"},
-                    "language": "en",
-                    "entities": [],
-                    "constraints": {},
-                    "context_reference": "none",
-                    "confidence": 0.9,
-                    "reason": "fake"
-                }),
-                usage: TokenUsage::default(),
-                cost_usd: None,
-                provider: "fake".into(),
-                model: "fake".into(),
-                latency_ms: 0,
-            })
-        }
-
-        async fn embed(
-            &self,
-            _purpose: crate::assistant::llm::LlmPurpose,
-            text: &str,
-        ) -> Result<EmbeddingResponse> {
-            Ok(EmbeddingResponse {
-                vector: fake_embedding(text),
-                usage: TokenUsage::default(),
-                cost_usd: None,
-                provider: "fake".into(),
-                model: "fake".into(),
-                latency_ms: 0,
-            })
-        }
-    }
-
+    /// An invalid `request_shape.operation` value must degrade safely to
+    /// `RequestOperation::Unknown` (via `#[serde(other)]`) rather than
+    /// failing deserialization or silently aliasing to some real variant.
+    ///
+    /// This test proves exactly two things about `shape_score`, and no
+    /// more: (1) an `Unknown` dimension contributes zero to the score
+    /// (never counted as a match), and (2) a hallucinated enum value
+    /// deserializes into `Unknown` instead of erroring or guessing a real
+    /// variant. It does NOT prove a hallucinated operation "cannot drive a
+    /// confident wrong pick" — `shape_score` only excludes the `Unknown`
+    /// dimension from the count, so a capability that matches every other
+    /// dimension still scores 0.8/1.0 (4 of 5) despite the operation
+    /// mismatch, as asserted below. Whether that residual score is
+    /// acceptable is a separate design decision, not something this test
+    /// evaluates.
     #[tokio::test]
-    async fn router_rejects_invalid_request_shape_operation_with_field_level_error() {
-        let catalog = empty_catalog();
-        let router = SemanticRouter::new(Arc::new(InvalidEnumFakeLlm), &catalog);
-        let error = router
-            .route("client list", &empty_context())
-            .await
-            .expect_err("invalid enum value must be rejected");
-        let message = error
-            .chain()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(" | ");
-        assert!(
-            message.contains("request_shape.operation") || message.contains("operation"),
-            "error should name the offending field, got: {message}"
+    async fn invalid_request_shape_operation_degrades_to_unknown_and_does_not_count_as_a_match() {
+        let request_shape: crate::assistant::RequestShape = serde_json::from_value(json!({
+            "operation": "not_a_real_operation",
+            "subject": "client",
+            "grouping": "none",
+            "output": "ranking",
+            "pii": "client_identity"
+        }))
+        .expect("unknown enum values must still deserialize");
+        assert_eq!(
+            request_shape.operation,
+            crate::assistant::RequestOperation::Unknown,
+            "invalid operation value must degrade to Unknown, not a guessed variant"
         );
-        assert!(
-            !message.contains("structured LLM response schema mismatch")
-                || message.contains("operation"),
-            "generic fallback message must not swallow the field-level detail: {message}"
+
+        let plan = RetrievalPlan {
+            query_text: "top clients".into(),
+            domain: AssistantDomain::Client,
+            intent: AssistantIntentKind::ReportRequest,
+            request_shape,
+            entities: Vec::new(),
+            constraints: json!({}),
+            metadata_filters: Default::default(),
+            allow_all_capabilities: true,
+            allowed_capabilities: Vec::new(),
+            source_snippets: Vec::new(),
+        };
+
+        // A capability whose request_shape is fully specified, matching every
+        // dimension except operation.
+        let capability: crate::knowledge::model::CapabilityKnowledge =
+            serde_json::from_value(json!({
+                "id": "cap.client.rank_by_metric",
+                "status": "approved_mvp",
+                "domain": "client",
+                "query_id": "q.client.rank_by_metric",
+                "output_mode": "ranking",
+                "request_shape": {
+                    "operation": "rank",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "ranking",
+                    "pii": "client_identity"
+                }
+            }))
+            .unwrap();
+
+        let score = crate::assistant::retrieval::engine::shape_score(&plan, &capability);
+        assert_eq!(
+            score, 0.8,
+            "Unknown operation must contribute zero to the score (4 of 5 \
+             dimensions still match, so the score is 0.8, not 1.0 and not 0.0)"
         );
     }
 }

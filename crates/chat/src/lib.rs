@@ -1,8 +1,9 @@
 pub mod api;
 pub mod assistant;
 pub mod audit;
-pub mod chat;
 pub mod conversation;
+pub mod execution;
 pub mod job;
 pub mod knowledge;
+pub mod management;
 pub mod policy;

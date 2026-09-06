@@ -1,0 +1,29 @@
+id: savings.charge_amount_outstanding
+domain: savings
+status: approved_mvp
+description: Sum of unpaid, non-waived savings charge amounts still outstanding. Outstanding-ness is established by the settlement flags and a positive outstanding amount, never by the charge due date. Used by savings_pending_charges_clients capability.
+data_areas:
+  - savings_charges_fees
+source_table: m_savings_account_charge
+source_columns:
+  - amount_outstanding_derived
+  - is_paid_derived
+  - waived
+  - is_active
+  - charge_due_date
+expression: SUM(m_savings_account_charge.amount_outstanding_derived)
+filters:
+  - m_savings_account_charge.waived = false
+  - m_savings_account_charge.is_paid_derived = false
+  - m_savings_account_charge.is_active = true
+  - m_savings_account_charge.amount_outstanding_derived > 0
+grouping_compatible:
+  - client_id
+  - office_id
+  - currency_code
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_charges_fees data scope.
+  - id: unpaid_filter_declared
+    rule: filters must exclude waived and paid charges.

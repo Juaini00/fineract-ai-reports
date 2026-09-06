@@ -1,0 +1,713 @@
+//! Static dataset rules, enforced at catalog load before any SQL is prepared.
+
+use std::collections::HashSet;
+
+use anyhow::{Result, bail};
+
+use crate::knowledge::dataset::grammar::validate_sql_expr;
+use crate::knowledge::dataset::model::{DatasetKnowledge, FilterInputPolicy, FilterOperator};
+use crate::knowledge::model::Sensitivity;
+
+const FILTER_TYPES: &[&str] = &["date", "integer", "boolean", "string", "decimal"];
+const OUTPUT_TYPES: &[&str] = &["bigint", "integer", "string", "date", "decimal", "boolean"];
+
+pub fn validate_dataset(dataset: &DatasetKnowledge) -> Result<()> {
+    if dataset
+        .filters
+        .iter()
+        .any(|filter| filter.operators.contains(&FilterOperator::In))
+        && dataset
+            .shapes
+            .iter()
+            .any(|shape| shape.row_cap.is_none_or(|cap| cap == 0))
+    {
+        bail!(
+            "dataset {} in filters require a non-zero row_cap on every shape",
+            dataset.id
+        );
+    }
+
+    let mut filter_ids = HashSet::new();
+    for filter in &dataset.filters {
+        if !filter_ids.insert(filter.id.as_str()) {
+            bail!("dataset {} declares filter {} twice", dataset.id, filter.id);
+        }
+        if !FILTER_TYPES.contains(&filter.kind.as_str()) {
+            bail!(
+                "dataset {} filter {} has unsupported type {}",
+                dataset.id,
+                filter.id,
+                filter.kind
+            );
+        }
+        if filter.operators.is_empty() {
+            bail!(
+                "dataset {} filter {} declares no operators",
+                dataset.id,
+                filter.id
+            );
+        }
+        if filter.input_policy == FilterInputPolicy::ExactIdentifier {
+            if filter.kind != "string" {
+                bail!(
+                    "dataset {} exact identifier filter {} must be a string",
+                    dataset.id,
+                    filter.id
+                );
+            }
+            if filter.operators.as_slice() != [FilterOperator::Eq] {
+                bail!(
+                    "dataset {} exact identifier filter {} may use only eq",
+                    dataset.id,
+                    filter.id
+                );
+            }
+            if filter.case_insensitive {
+                bail!(
+                    "dataset {} exact identifier filter {} must be case-sensitive",
+                    dataset.id,
+                    filter.id
+                );
+            }
+        }
+        validate_sql_expr(&filter.expr).map_err(|reason| {
+            anyhow::anyhow!("dataset {} filter {}: {reason}", dataset.id, filter.id)
+        })?;
+    }
+
+    let mut order_by_ids = HashSet::new();
+    for option in &dataset.order_by {
+        if !order_by_ids.insert(option.id.as_str()) {
+            bail!(
+                "dataset {} declares order_by {} twice",
+                dataset.id,
+                option.id
+            );
+        }
+        validate_sql_expr(&option.expr).map_err(|reason| {
+            anyhow::anyhow!("dataset {} order_by {}: {reason}", dataset.id, option.id)
+        })?;
+    }
+
+    if dataset.shapes.is_empty() {
+        bail!("dataset {} declares no shapes", dataset.id);
+    }
+    let mut shape_ids = HashSet::new();
+    for shape in &dataset.shapes {
+        if !shape_ids.insert(shape.id.as_str()) {
+            bail!("dataset {} declares shape {} twice", dataset.id, shape.id);
+        }
+        for reference in &shape.order_by {
+            if !order_by_ids.contains(reference.as_str()) {
+                bail!(
+                    "dataset {} shape {} references undeclared order_by {reference}",
+                    dataset.id,
+                    shape.id
+                );
+            }
+        }
+        // A dataset with filter slots always composes a CTE, which needs a
+        // fragment to select from it. Only a fully degenerate dataset may omit one.
+        if shape.fragment.is_none() && !dataset.filters.is_empty() {
+            bail!(
+                "dataset {} shape {} must declare a fragment because the dataset declares filters",
+                dataset.id,
+                shape.id
+            );
+        }
+        let mut output_field_names = HashSet::new();
+        let fields = shape.output_fields(dataset);
+        if fields.is_empty() {
+            bail!(
+                "dataset {} shape {} declares no output fields",
+                dataset.id,
+                shape.id
+            );
+        }
+        for field in fields {
+            if field.name.trim().is_empty() {
+                bail!(
+                    "dataset {} shape {} has output field with empty name",
+                    dataset.id,
+                    shape.id
+                );
+            }
+            if !output_field_names.insert(field.name.as_str()) {
+                bail!(
+                    "dataset {} shape {} declares output field {} twice",
+                    dataset.id,
+                    shape.id,
+                    field.name
+                );
+            }
+            if !OUTPUT_TYPES.contains(&field.kind.as_str()) {
+                bail!(
+                    "dataset {} shape {} output field {} has unsupported type {}",
+                    dataset.id,
+                    shape.id,
+                    field.name,
+                    field.kind
+                );
+            }
+            if matches!(
+                field.sensitivity,
+                Sensitivity::FilterOnly | Sensitivity::NeverUse
+            ) {
+                bail!(
+                    "dataset {} shape {} cannot project {} output field {}",
+                    dataset.id,
+                    shape.id,
+                    field.sensitivity.as_str(),
+                    field.name
+                );
+            }
+        }
+        if dataset
+            .filters
+            .iter()
+            .any(|filter| filter.input_policy == FilterInputPolicy::ExactIdentifier)
+            && !fields
+                .iter()
+                .any(|field| field.sensitivity == Sensitivity::MaskedOutput)
+        {
+            bail!(
+                "dataset {} shape {} exact identifier requires masked_output",
+                dataset.id,
+                shape.id
+            );
+        }
+        if !fields.iter().any(|field| field.core) {
+            bail!(
+                "dataset {} shape {} declares no core output field",
+                dataset.id,
+                shape.id
+            );
+        }
+        // Issue 011: a shape that returns a string column the request cannot
+        // narrow by is the silent-wrong-answer shape — the value the user wants
+        // to filter on is in the result and unreachable from the request. Force
+        // the author to either declare the filter or state the omission.
+        // Identity columns are excluded: they are gated by PII policy, not
+        // narrowed by the caller.
+        for field in fields.iter().filter(|field| {
+            field.kind == "string"
+                && !matches!(
+                    field.sensitivity,
+                    Sensitivity::Pii | Sensitivity::MaskedOutput
+                )
+        }) {
+            let filtered = dataset
+                .filters
+                .iter()
+                .any(|filter| filter.id == field.name || filter.expr == field.name);
+            if !filtered && !dataset.filters_exempt.contains(&field.name) {
+                bail!(
+                    "dataset {} shape {} returns narrowable column {} with no filter slot; \
+                     declare a filter or list it under filters_exempt",
+                    dataset.id,
+                    shape.id,
+                    field.name
+                );
+            }
+        }
+
+        // Issue 013 D1: a stable-id bigint (FK or entity id) is just as
+        // narrowable as a string column and must clear the same bar.
+        for field in fields.iter().filter(|field| {
+            field.kind == "bigint"
+                && (field.name.ends_with("_id")
+                    || dataset
+                        .entity
+                        .as_ref()
+                        .is_some_and(|entity| entity.id_field == field.name))
+        }) {
+            let filtered = dataset
+                .filters
+                .iter()
+                .any(|filter| filter.id == field.name || filter.expr == field.name);
+            if !filtered && !dataset.filters_exempt.contains(&field.name) {
+                bail!(
+                    "dataset {} shape {} returns narrowable column {} with no filter slot; \
+                     declare a filter or list it under filters_exempt",
+                    dataset.id,
+                    shape.id,
+                    field.name
+                );
+            }
+        }
+
+        let mut parameter_names = HashSet::new();
+        for parameter in shape.parameters(dataset) {
+            if !parameter_names.insert(parameter.name.as_str()) {
+                bail!(
+                    "dataset {} shape {} declares parameter {} twice",
+                    dataset.id,
+                    shape.id,
+                    parameter.name
+                );
+            }
+        }
+        if dataset
+            .filters
+            .iter()
+            .any(|filter| filter.input_policy == FilterInputPolicy::ExactIdentifier)
+            && !shape.parameters(dataset).iter().any(|parameter| {
+                parameter.name == "office_ids"
+                    && parameter.kind == "array_bigint"
+                    && parameter.required
+                    && parameter.source.as_deref() == Some("authorized_scope")
+            })
+        {
+            bail!(
+                "dataset {} shape {} exact identifier requires authorized office_ids",
+                dataset.id,
+                shape.id
+            );
+        }
+    }
+
+    if let Some(entity) = &dataset.entity {
+        let fields: Vec<_> = dataset
+            .shapes
+            .iter()
+            .flat_map(|shape| shape.output_fields(dataset))
+            .collect();
+        let Some(id_field) = fields.iter().find(|field| field.name == entity.id_field) else {
+            bail!(
+                "dataset {} entity id_field {} is not an output field",
+                dataset.id,
+                entity.id_field
+            );
+        };
+        if id_field.kind != "bigint" || id_field.sensitivity != Sensitivity::PublicBusiness {
+            bail!(
+                "dataset {} entity id_field {} must be bigint public_business",
+                dataset.id,
+                entity.id_field
+            );
+        }
+        for label in &entity.label_fields {
+            if !fields.iter().any(|field| field.name == *label) {
+                bail!(
+                    "dataset {} entity label field {label} is not an output field",
+                    dataset.id
+                );
+            }
+        }
+    }
+
+    for shape in &dataset.shapes {
+        if shape.role == crate::knowledge::dataset::model::ShapeRole::Resolver
+            && shape.produces.is_empty()
+        {
+            bail!(
+                "dataset {} resolver shape {} must declare produces",
+                dataset.id,
+                shape.id
+            );
+        }
+    }
+
+    // An exemption that no longer names a returned column is stale permission:
+    // it silently keeps covering nothing while the column it excused moved on.
+    for name in &dataset.filters_exempt {
+        if !dataset
+            .shapes
+            .iter()
+            .flat_map(|shape| shape.output_fields(dataset))
+            .any(|field| field.name == *name)
+        {
+            bail!(
+                "dataset {} exempts unknown output field {name} from filtering",
+                dataset.id
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assistant::{
+        RequestGrouping, RequestOperation, RequestOutput, RequestPii, RequestShape, RequestSubject,
+    };
+    use crate::knowledge::dataset::model::{
+        DatasetOutputField, FilterInputPolicy, FilterOperator, FilterSlot, OrderByOption,
+        ShapeOption,
+    };
+    use crate::knowledge::model::{QueryParameter, Sensitivity};
+
+    fn valid() -> DatasetKnowledge {
+        DatasetKnowledge {
+            id: "savings.account_charges".into(),
+            database: "fineract".into(),
+            source_sql: "queries/savings/account_charges.source.sql".into(),
+            tables: vec!["m_savings_account_charge".into()],
+            filters: vec![
+                FilterSlot {
+                    id: "due_date".into(),
+                    expr: "sac.charge_due_date".into(),
+                    kind: "date".into(),
+                    case_insensitive: false,
+                    input_policy: FilterInputPolicy::Ordinary,
+                    operators: vec![FilterOperator::Eq],
+                },
+                FilterSlot {
+                    id: "savings_account_charge_id".into(),
+                    expr: "sac.id".into(),
+                    kind: "integer".into(),
+                    case_insensitive: false,
+                    input_policy: FilterInputPolicy::Ordinary,
+                    operators: vec![FilterOperator::Eq],
+                },
+            ],
+            entity: None,
+            filters_exempt: Vec::new(),
+            shapes: vec![ShapeOption {
+                id: "list".into(),
+                request_shape: RequestShape {
+                    operation: RequestOperation::List,
+                    subject: RequestSubject::SavingsAccountCharge,
+                    grouping: RequestGrouping::None,
+                    output: RequestOutput::List,
+                    pii: RequestPii::None,
+                },
+                role: Default::default(),
+                expected_cardinality: None,
+                row_cap: None,
+                grouped_by: None,
+                produces: Vec::new(),
+                fragment: Some("queries/savings/account_charges.list.frag.sql".into()),
+                order_by: vec!["created_desc".into()],
+                output_fields: Vec::new(),
+                parameters: Vec::new(),
+            }],
+            order_by: vec![OrderByOption {
+                id: "created_desc".into(),
+                expr: "sac.created_on_utc DESC".into(),
+            }],
+            output_fields: vec![DatasetOutputField {
+                name: "savings_account_charge_id".into(),
+                kind: "bigint".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+                core: true,
+            }],
+            parameters: Vec::new(),
+            timeout_ms: None,
+        }
+    }
+
+    #[test]
+    fn accepts_a_well_formed_dataset() {
+        assert!(validate_dataset(&valid()).is_ok());
+    }
+
+    #[test]
+    fn validates_entity_identity_labels_and_resolver_outputs() {
+        let mut dataset = valid();
+        dataset.entity = Some(crate::knowledge::dataset::model::EntityMetadata {
+            kind: "client".into(),
+            id_field: "savings_account_charge_id".into(),
+            label_fields: vec!["label".into()],
+            label_fallback: "Client {savings_account_charge_id}".into(),
+        });
+        dataset.output_fields.push(DatasetOutputField {
+            name: "label".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::Pii,
+            core: false,
+        });
+        dataset.shapes[0].role = crate::knowledge::dataset::model::ShapeRole::Resolver;
+        dataset.shapes[0].row_cap = Some(25);
+        dataset.shapes[0]
+            .produces
+            .push(crate::knowledge::dataset::model::ProducedSlot {
+                slot: "client_id".into(),
+                kind: "integer".into(),
+                sensitivity: Sensitivity::PublicBusiness,
+                cardinality: crate::knowledge::dataset::model::Cardinality::Many,
+            });
+        assert!(validate_dataset(&dataset).is_ok());
+
+        let mut invalid_id = dataset.clone();
+        invalid_id.entity.as_mut().unwrap().id_field = "label".into();
+        assert!(validate_dataset(&invalid_id).is_err());
+
+        let mut missing_label = dataset.clone();
+        missing_label.entity.as_mut().unwrap().label_fields = vec!["missing".into()];
+        assert!(validate_dataset(&missing_label).is_err());
+
+        let mut no_produces = dataset;
+        no_produces.shapes[0].produces.clear();
+        assert!(validate_dataset(&no_produces).is_err());
+    }
+
+    #[test]
+    fn in_filters_require_a_shape_row_cap() {
+        let mut dataset = valid();
+        dataset.filters[0].operators = vec![FilterOperator::In];
+        assert!(validate_dataset(&dataset).is_err());
+
+        dataset.shapes[0].row_cap = Some(25);
+        assert!(validate_dataset(&dataset).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_shape_referencing_an_undeclared_order_by() {
+        let mut dataset = valid();
+        dataset.shapes[0].order_by = vec!["nope".into()];
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("order_by"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_a_dataset_with_no_core_output_field() {
+        let mut dataset = valid();
+        dataset.output_fields[0].core = false;
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("core"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_filter_and_shape_ids() {
+        let mut dataset = valid();
+        let duplicate = dataset.filters[0].clone();
+        dataset.filters.push(duplicate);
+        assert!(validate_dataset(&dataset).is_err());
+
+        let mut dataset = valid();
+        let duplicate = dataset.shapes[0].clone();
+        dataset.shapes.push(duplicate);
+        assert!(validate_dataset(&dataset).is_err());
+    }
+
+    #[test]
+    fn rejects_expressions_that_fail_the_grammar() {
+        let mut dataset = valid();
+        dataset.filters[0].expr = "sac.id; DROP TABLE m_client".into();
+        assert!(validate_dataset(&dataset).is_err());
+
+        let mut dataset = valid();
+        dataset.order_by[0].expr = "sac.id /* x */".into();
+        assert!(validate_dataset(&dataset).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_filter_type() {
+        let mut dataset = valid();
+        dataset.filters[0].kind = "jsonb".into();
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+
+        assert!(error.contains("unsupported type"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unsupported_output_fields() {
+        let mut dataset = valid();
+        dataset.output_fields.push(dataset.output_fields[0].clone());
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(
+            error.contains("output field") && error.contains("twice"),
+            "got: {error}"
+        );
+
+        let mut dataset = valid();
+        dataset.output_fields[0].kind = "jsonb".into();
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("unsupported type"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_invalid_exact_identifier_contracts() {
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "integer".into();
+        assert!(
+            validate_dataset(&dataset)
+                .unwrap_err()
+                .to_string()
+                .contains("string")
+        );
+
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "string".into();
+        dataset.filters[0].operators.push(FilterOperator::Lt);
+        assert!(
+            validate_dataset(&dataset)
+                .unwrap_err()
+                .to_string()
+                .contains("only eq")
+        );
+
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "string".into();
+        dataset.filters[0].case_insensitive = true;
+        assert!(
+            validate_dataset(&dataset)
+                .unwrap_err()
+                .to_string()
+                .contains("case-sensitive")
+        );
+    }
+
+    #[test]
+    fn exact_identifier_requires_masked_output_and_authorized_scope() {
+        let mut dataset = valid();
+        dataset.filters[0].input_policy = FilterInputPolicy::ExactIdentifier;
+        dataset.filters[0].kind = "string".into();
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(
+            error.contains("masked_output") || error.contains("office_ids"),
+            "got: {error}"
+        );
+
+        dataset.output_fields.push(DatasetOutputField {
+            name: "masked_account_number".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::MaskedOutput,
+            core: true,
+        });
+        dataset.parameters.push(QueryParameter {
+            name: "office_ids".into(),
+            kind: "array_bigint".into(),
+            required: true,
+            source: Some("authorized_scope".into()),
+        });
+        assert!(validate_dataset(&dataset).is_ok());
+    }
+
+    #[test]
+    fn rejects_forbidden_output_sensitivity() {
+        let mut dataset = valid();
+        dataset.output_fields[0].sensitivity = Sensitivity::FilterOnly;
+        assert!(validate_dataset(&dataset).is_err());
+
+        dataset.output_fields[0].sensitivity = Sensitivity::NeverUse;
+        assert!(validate_dataset(&dataset).is_err());
+    }
+
+    /// Issue 013 D1: a returned/joinable stable-id `bigint` column (`office_id`)
+    /// is just as narrowable as a string column, so it must clear the same bar:
+    /// a declared filter or a stated `filters_exempt` exemption.
+    #[test]
+    fn rejects_an_unfiltered_stable_id_bigint_column() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "office_id".into(),
+            kind: "bigint".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+            core: false,
+        });
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("office_id"), "got: {error}");
+        assert!(
+            error.contains("declare a filter or list it under filters_exempt"),
+            "got: {error}"
+        );
+
+        // Either escape hatch closes it: a declared filter …
+        let mut filtered = dataset.clone();
+        filtered.filters.push(FilterSlot {
+            id: "office_id".into(),
+            expr: "mc.office_id".into(),
+            kind: "integer".into(),
+            case_insensitive: false,
+            input_policy: FilterInputPolicy::Ordinary,
+            operators: vec![FilterOperator::Eq],
+        });
+        assert!(validate_dataset(&filtered).is_ok());
+
+        // … or a stated exemption.
+        let mut exempt = dataset.clone();
+        exempt.filters_exempt = vec!["office_id".into()];
+        assert!(validate_dataset(&exempt).is_ok());
+    }
+
+    /// The dataset's own entity `id_field` is stable-id shaped too, even when
+    /// its name doesn't end in `_id` by coincidence (it usually does, but the
+    /// entity metadata is the authoritative source, not the name pattern).
+    #[test]
+    fn identity_bigint_output_is_not_exempt_from_the_id_filter_rule() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "product_id".into(),
+            kind: "bigint".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+            core: false,
+        });
+
+        assert!(validate_dataset(&dataset).is_err());
+    }
+
+    /// Issue 011: `savings.account_charges` returned `charge_name` while
+    /// declaring `filters: []`, so "charges of type weekly" was answered with
+    /// every charge. The gap must fail at catalog load, not at a user.
+    #[test]
+    fn rejects_a_narrowable_string_column_with_no_filter_slot() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "charge_name".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::PublicBusiness,
+            core: false,
+        });
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("charge_name"), "got: {error}");
+
+        // Either escape hatch closes it: a declared filter …
+        let mut filtered = dataset.clone();
+        filtered.filters.push(FilterSlot {
+            id: "charge_name".into(),
+            expr: "charge_name".into(),
+            kind: "string".into(),
+            case_insensitive: true,
+            input_policy: FilterInputPolicy::Ordinary,
+            operators: vec![FilterOperator::Eq],
+        });
+        assert!(validate_dataset(&filtered).is_ok());
+
+        // … or a stated exemption.
+        let mut exempt = dataset.clone();
+        exempt.filters_exempt = vec!["charge_name".into()];
+        assert!(validate_dataset(&exempt).is_ok());
+    }
+
+    #[test]
+    fn identity_columns_are_gated_by_pii_policy_not_by_filter_slots() {
+        let mut dataset = valid();
+        dataset.output_fields.push(DatasetOutputField {
+            name: "client_display_name".into(),
+            kind: "string".into(),
+            sensitivity: Sensitivity::Pii,
+            core: false,
+        });
+
+        assert!(validate_dataset(&dataset).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_exemption_that_names_no_returned_column() {
+        let mut dataset = valid();
+        dataset.filters_exempt = vec!["gone".into()];
+
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("gone"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_a_shape_without_a_fragment_when_the_dataset_declares_filters() {
+        let mut dataset = valid();
+        dataset.shapes[0].fragment = None;
+        let error = validate_dataset(&dataset).unwrap_err().to_string();
+        assert!(error.contains("fragment"), "got: {error}");
+    }
+}

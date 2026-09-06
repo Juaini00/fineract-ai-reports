@@ -21,6 +21,9 @@ pub struct RespondToChatJobInput {
     pub job_id: Uuid,
     pub clarification_id: Option<Uuid>,
     pub clarification_revision: Option<u32>,
+    pub workflow_id: Option<Uuid>,
+    pub node_id: Option<String>,
+    pub workflow_revision: Option<i64>,
     pub selected_option_id: Option<String>,
     pub source_message: Option<String>,
     pub answers: BTreeMap<String, Value>,
@@ -73,6 +76,16 @@ pub struct ChatJob {
 pub struct ChatJobAuditTimeline {
     pub job_id: Uuid,
     pub events: Vec<ChatJobAuditEvent>,
+}
+
+/// A durable row from `chat_job_events` (the SSE event log), replayed to a
+/// client that subscribes after the live pub/sub race is already over.
+#[derive(Debug, Clone)]
+pub struct ChatJobEvent {
+    pub event_type: String,
+    pub step: Option<String>,
+    pub payload_json: serde_json::Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,12 +1,11 @@
+use chat::assistant::execution::plan::{
+    EvidenceEvaluation, ExecutionPlan, PolicyDecision, PolicyDecisionStatus, RetrievalPlan,
+};
 use chat::assistant::{
     AssistantConstraints, AssistantDomain, AssistantIntent, AssistantIntentKind, AssistantLanguage,
     ContextReference, ResponseBuilder, ToolResult,
 };
-use chat::chat::planner::{
-    AnswerPlan, EvidenceEvaluation, ExecutionPlan, ExecutionPlanType, PolicyDecision,
-    PolicyDecisionStatus, RetrievalPlan,
-};
-use chat::knowledge::model::{KnowledgeCatalog, QueryKnowledge, QueryOutputField};
+use chat::knowledge::model::{KnowledgeCatalog, QueryKnowledge, QueryOutputField, Sensitivity};
 use serde_json::json;
 
 #[test]
@@ -27,6 +26,7 @@ fn structured_response_renders_markdown_and_preserves_refs() {
             summary: None,
             error: None,
             evidence_refs: vec!["client_name_lookup".into()],
+            truncated: None,
         },
         &catalog(),
     );
@@ -74,6 +74,7 @@ fn client_lookup_messages_are_ambiguity_aware() {
                 summary: None,
                 error: None,
                 evidence_refs: vec![],
+                truncated: None,
             },
             &catalog(),
         );
@@ -87,6 +88,7 @@ fn intent() -> AssistantIntent {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: AssistantConstraints::default(),
         context_reference: ContextReference::None,
@@ -98,15 +100,14 @@ fn intent() -> AssistantIntent {
 
 fn plan() -> ExecutionPlan {
     ExecutionPlan {
-        plan_type: ExecutionPlanType::Atomic,
         domain: "client".into(),
         capability: "client_name_lookup".into(),
         query_id: "client.name_lookup".into(),
+        dataset_selection: None,
         output_mode: "list".into(),
         params: json!({ "search": "Tony" }),
         retrieval_plan: RetrievalPlan::default(),
         evidence_evaluation: EvidenceEvaluation::default(),
-        answer_plan: AnswerPlan::default(),
         requires_policy_check: true,
     }
 }
@@ -143,11 +144,14 @@ fn catalog() -> KnowledgeCatalog {
                 field("office_name", "string", "public_business"),
                 field("status_label", "string", "public_business"),
             ],
+            timeout_ms: None,
         }],
         policies: Vec::new(),
         responses: Vec::new(),
+        parameter_bindings: Default::default(),
         parameter_inputs: Vec::new(),
         classification: Default::default(),
+        datasets: Vec::new(),
     }
 }
 
@@ -155,6 +159,10 @@ fn field(name: &str, kind: &str, sensitivity: &str) -> QueryOutputField {
     QueryOutputField {
         name: name.into(),
         kind: kind.into(),
-        sensitivity: sensitivity.into(),
+        sensitivity: match sensitivity {
+            "public_business" => Sensitivity::PublicBusiness,
+            "pii" => Sensitivity::Pii,
+            other => panic!("unsupported test sensitivity {other}"),
+        },
     }
 }

@@ -26,6 +26,7 @@ pub enum RequestOperation {
     Lookup,
     RandomSample,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -34,11 +35,13 @@ pub enum RequestOperation {
 pub enum RequestSubject {
     SavingsTransaction,
     SavingsAccount,
+    SavingsAccountCharge,
     Client,
     Office,
     OrganizationHierarchy,
     Product,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -50,6 +53,7 @@ pub enum RequestGrouping {
     Office,
     Product,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -63,6 +67,7 @@ pub enum RequestOutput {
     TimeSeries,
     Lookup,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -73,6 +78,7 @@ pub enum RequestPii {
     ClientIdentity,
     ConditionalClientIdentity,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -86,6 +92,13 @@ pub struct AssistantIntent {
     pub request_shape: RequestShape,
     #[serde(default = "default_language")]
     pub language: AssistantLanguage,
+    /// The user's message translated to English, preserving all reporting
+    /// terminology, entities, and dates. Used to build the embedding query
+    /// against the (English) knowledge base instead of the raw message, so
+    /// non-English requests still retrieve the right capability. Leave equal
+    /// to the original message when it is already English.
+    #[serde(default)]
+    pub canonical_query_en: String,
     #[serde(default)]
     pub entities: Vec<AssistantEntity>,
     #[serde(default)]
@@ -106,13 +119,27 @@ pub enum AssistantIntentKind {
     #[default]
     Greeting,
     Help,
-    ReportRequest,
     DataLookup,
     ClarificationReply,
     FollowUp,
+    /// The only intent that terminates before retrieval runs. It is a safety
+    /// boundary, not a claim about what the catalog covers.
     UnsafeRequest,
+    /// The router's "this looks off-topic" hint. **Not** a terminal answer —
+    /// it lowers the catalog-match prior (`retrieval::engine::catalog_fallback`)
+    /// and lets the reranker, which sees real capability rows, decide.
+    ///
+    /// There is deliberately no `UnsupportedInDomain` sibling: "the approved
+    /// catalog does not cover this" is a claim only a stage holding the
+    /// catalog can make, and the router does not hold it. That verdict now
+    /// belongs solely to `RerankerVerdict::Unsupported`.
     OutOfDomain,
-    UnsupportedInDomain,
+    /// Also the landing place for any intent string outside this list
+    /// (`#[serde(other)]`, which serde requires on the last variant): an
+    /// intent the router cannot name must reach retrieval, never fail the job
+    /// and never become a rejection.
+    #[serde(other)]
+    ReportRequest,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -127,6 +154,7 @@ pub enum AssistantDomain {
     Tax,
     Audit,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -140,6 +168,7 @@ pub enum AssistantLanguage {
     En,
     Id,
     Mixed,
+    #[serde(other)]
     Unknown,
 }
 
@@ -157,6 +186,7 @@ pub struct AssistantEntity {
 #[serde(rename_all = "snake_case")]
 pub enum AssistantEntityType {
     PersonName,
+    ClientId,
     Office,
     DatePeriod,
     Currency,
@@ -164,6 +194,17 @@ pub enum AssistantEntityType {
     Metric,
     CapabilityHint,
     AccountNumber,
+    /// A charge/fee type name (`m_charge.name`), e.g. "Weekly Charge". Without
+    /// its own slot the router forced these into `Metric`, where nothing binds
+    /// them, and the narrowing was dropped on the way to SQL (issue 011).
+    ChargeType,
+    /// An entity kind the model invented (e.g. `transaction_amount`). Without
+    /// this arm a single hallucinated entity type fails the whole router call
+    /// and the user gets nothing, even though the other entities were fine.
+    /// Every consumer selects entities by matching a specific variant, so an
+    /// `Unknown` entity is ignored rather than misread as something real.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -177,6 +218,10 @@ pub struct AssistantConstraints {
     pub office_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub metric: Option<String>,
+    /// Exact decimal text for an explicitly stated transaction amount. Never a
+    /// floating-point value; dataset filters parse this as `Decimal`.
+    #[serde(default)]
+    pub transaction_amount: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -193,8 +238,18 @@ pub enum Quantity {
 pub enum ContextReference {
     #[default]
     None,
+    /// RESERVED for the drill-down follow-up (issue 009), not issue 007.
+    /// Never produced or consumed today: no code carries a prior result set or
+    /// capability forward, and nothing branches on this value. Do not delete —
+    /// removing it would silently narrow the extractor's accepted contract, and
+    /// the follow-up depends on it. See issue 007 §W-H / §F5.
+    // ponytail: reserved surface, kept deliberately dead until issue 009 starts.
     PreviousJob,
     PendingClarification,
+    /// RESERVED for the drill-down follow-up (issue 009), not issue 007.
+    /// Never produced or consumed today. Do not delete — see `PreviousJob` above
+    /// and issue 007 §W-H / §F5.
+    // ponytail: reserved surface, kept deliberately dead until issue 009 starts.
     SessionTopic,
 }
 
@@ -217,4 +272,58 @@ pub struct SourceIntentSnapshot {
     pub confidence: f32,
     #[serde(default)]
     pub reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduces a real production failure: the model emitted
+    /// `transaction_amount`, which is not a declared entity kind, and the whole
+    /// router call died with "unknown variant `transaction_amount`" — losing the
+    /// two perfectly valid entities alongside it.
+    #[test]
+    fn an_invented_entity_kind_degrades_to_unknown_instead_of_failing_the_router() {
+        // `AssistantEntity` keys this field `entity_type`; only the gateway's
+        // `GatewayEntity` renames it to `type`.
+        let raw = r#"{
+            "entities": [
+                {"entity_type": "person_name", "value": "Nour Hashem"},
+                {"entity_type": "product", "value": "Current Account USD"},
+                {"entity_type": "transaction_amount", "value": "0.130000"}
+            ]
+        }"#;
+
+        #[derive(Deserialize)]
+        struct Probe {
+            entities: Vec<AssistantEntity>,
+        }
+
+        let probe: Probe = serde_json::from_str(raw).expect("must not fail on an invented kind");
+        assert_eq!(
+            probe.entities[0].entity_type,
+            AssistantEntityType::PersonName
+        );
+        assert_eq!(probe.entities[1].entity_type, AssistantEntityType::Product);
+        assert_eq!(probe.entities[2].entity_type, AssistantEntityType::Unknown);
+    }
+
+    /// An Unknown entity must never be mistaken for a real one, because every
+    /// consumer selects entities by matching a specific variant.
+    #[test]
+    fn unknown_matches_no_real_entity_kind() {
+        for real in [
+            AssistantEntityType::PersonName,
+            AssistantEntityType::ClientId,
+            AssistantEntityType::Office,
+            AssistantEntityType::DatePeriod,
+            AssistantEntityType::Currency,
+            AssistantEntityType::Product,
+            AssistantEntityType::Metric,
+            AssistantEntityType::CapabilityHint,
+            AssistantEntityType::AccountNumber,
+        ] {
+            assert_ne!(AssistantEntityType::Unknown, real);
+        }
+    }
 }

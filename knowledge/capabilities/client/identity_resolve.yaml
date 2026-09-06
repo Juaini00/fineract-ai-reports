@@ -1,0 +1,33 @@
+id: client_identity_resolve
+status: approved_mvp
+domain: client
+display_name: Client Identity Resolve
+# Internal resolver capability: it exists only so the `client.identity`
+# `identity_candidates` resolver shape has an approved_mvp capability + query
+# behind it. The workflow compiler stamps this capability id onto a
+# ResolveEntity node whenever a parameter declares an `authorized_data_probe`
+# against that shape, and the guarded executor turns the recipe into the
+# resolver SQL. `continuation: true` keeps it out of first-turn classifier
+# selection — it is never asked for directly, only used as a probe target.
+kind: resolver
+continuation: true
+description: Resolve candidate clients within the caller's authorized office scope, returning client id and safe label fields for entity selection.
+data_areas: [client_foundation, organization_foundation]
+required_api_capability: client_identity_resolve
+query_id: client.identity_resolve
+metrics: [client.relationship_lookup]
+output_mode: list
+request_shape: { operation: lookup, subject: client, grouping: none, output: lookup, pii: client_identity }
+examples:
+  - Resolve the client to continue.
+supported_intents:
+  - resolve a client entity within authorized office scope
+guards:
+  require_office_scope: true
+  pii: { returns_pii: true, never_return: [account_no, external_id, mobile_no, email] }
+dataset_recipe:
+  dataset_id: client.identity
+  shape_id: identity_candidates
+  projection: [client_id, client_display_name, office_id, office_name, client_status_enum]
+parameters:
+  office_ids: { type: integer_array, required: false, default: authorized_scope, user_may_override: false }

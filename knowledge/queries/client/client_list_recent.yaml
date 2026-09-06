@@ -17,10 +17,17 @@ parameters:
   - name: limit
     type: integer
     required: true
+  # User-supplied narrowing, not authorization. It is ANDed after the
+  # unconditional `c.office_id = ANY($1::bigint[])` scope predicate, so it can
+  # only ever shrink the authorized set. Unbound it binds NULL and the
+  # predicate short-circuits, leaving the statement text identical.
+  - name: office_name
+    type: string
+    required: false
 output_fields:
   - name: client_id
     type: bigint
-    sensitivity: pii
+    sensitivity: public_business
   - name: client_display_name
     type: string
     sensitivity: pii
@@ -39,7 +46,6 @@ guards:
   require_office_filter: true
   parameterized_only: true
 timeout_ms: 3000
-cost_class: low
 checks:
   - id: sql_file_exists
     rule: sql_file must exist under queries/.
@@ -55,3 +61,9 @@ checks:
     rule: client_id and client_display_name output fields must be sensitivity=pii.
   - id: no_raw_identifiers
     rule: Query must not output account_no, external_id, mobile_no, or email_address.
+  - id: office_name_narrows_only
+    rule: >-
+      office_name is ANDed after the authorized office_ids predicate and binds
+      NULL when absent, so it can only narrow within authorized_scope, never
+      widen it. Match is exact and case-insensitive on the office's own name;
+      child offices are not included.

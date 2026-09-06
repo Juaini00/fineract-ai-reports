@@ -1,0 +1,25 @@
+id: savings.transaction_count
+domain: savings
+status: approved_mvp
+description: Count of non-reversed savings account transactions, in either direction. Distinct from savings.deposit_count and savings.withdrawal_count, which each cover one direction only; this metric answers "how many transactions does this client have".
+data_areas:
+  - savings_transactions
+source_table: m_savings_account_transaction
+source_columns:
+  - id
+  - savings_account_id
+  - is_reversed
+expression: COUNT(m_savings_account_transaction.id)
+filters:
+  - m_savings_account_transaction.is_reversed = false
+grouping_compatible:
+  - savings_account_id
+  - office_id
+sensitivity: public_business
+checks:
+  - id: source_table_in_scope
+    rule: source_table must be included by savings_transactions data scope.
+  - id: reversed_excluded
+    rule: filters must exclude reversed transactions.
+  - id: office_scope_required
+    rule: metric must only count transactions within authorized office_ids.

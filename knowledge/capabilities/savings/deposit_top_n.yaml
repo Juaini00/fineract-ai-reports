@@ -2,16 +2,17 @@ id: savings_deposit_top_n
 status: approved_mvp
 domain: savings
 display_name: Top Savings Deposits
-description: Return the largest savings deposit transactions for a date range within the caller's authorized office scope.
+description: Return the largest savings deposit transactions for a date range within the caller's authorized
+  office scope.
 data_areas:
-  - organization_foundation
-  - client_foundation
-  - savings_core
-  - savings_transactions
+- organization_foundation
+- client_foundation
+- savings_core
+- savings_transactions
 required_api_capability: savings_deposit_top_n
 query_id: savings.deposit_top_n
 metrics:
-  - savings.deposit_amount
+- savings.deposit_amount
 output_mode: top_n
 request_shape:
   operation: rank
@@ -20,25 +21,20 @@ request_shape:
   output: ranking
   pii: conditional_client_identity
 examples:
-  - Who made the largest deposit today?
-  - Show the largest deposits this month.
-  - Top 10 savings deposits this week.
+- Who made the largest deposit today?
+- Show the largest deposits this month.
+- Top 10 savings deposits this week.
+- Largest deposit transactions by client.
+- Setoran terbesar dari transaksi tabungan nasabah.
+- Peringkat penyetor terbesar berdasarkan transaksi setoran.
 supported_intents:
-  - largest savings deposits by date range
-  - top deposit transactions for authorized offices
-  - top deposits filtered by currency or savings product
+- largest savings deposits by date range
+- top deposit transactions for authorized offices
+- top deposits filtered by currency or savings product
 unsupported_intents:
-  - raw account number lookup
-  - transaction external id lookup
-  - payment reference lookup
-required_parameters:
-  - from_date
-  - to_date
-  - limit
-optional_parameters:
-  - office_ids
-  - currency_code
-  - product_ids
+- raw account number lookup
+- transaction external id lookup
+- payment reference lookup
 defaults:
   exclude_reversed: true
   transaction_type_enum: 1
@@ -46,48 +42,43 @@ guards:
   require_office_scope: true
   max_date_range_days: 366
   max_limit: 100
-pii:
-  returns_pii: conditional
-  allowed_fields_when_can_view_pii:
-    - client_id
-    - client_display_name
-  omitted_when_cannot_view_pii:
-    - client_id
-    - client_display_name
-  never_return:
-    - account_no
-    - external_id
-    - ref_no
-    - payment_detail_id
-cost_class: medium
-clarification:
-  missing_parameters:
-    - from_date
-    - to_date
-    - limit
-output_fields:
-  public:
-    - transaction_id
-    - transaction_date
-    - amount
-    - currency_code
-    - office_id
-    - office_name
-    - product_id
-    - product_name
-  pii_conditional:
-    - client_id
-    - client_display_name
 checks:
-  - id: query_exists
-    rule: query_id must exist in knowledge/queries.
-  - id: required_parameters_match_query
-    rule: required_parameters must be declared as required query parameters.
-  - id: output_fields_match_query
-    rule: public plus pii_conditional fields must exactly match query output_fields names.
-  - id: pii_fields_are_conditional
-    rule: every pii query output field must be listed in pii.allowed_fields_when_can_view_pii.
-  - id: never_return_absent_from_query
-    rule: pii.never_return fields must not appear in query output_fields.
-  - id: office_scope_required
-    rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+- id: query_exists
+  rule: query_id must exist in knowledge/queries.
+- id: required_parameters_match_query
+  rule: required_parameters must be declared as required query parameters.
+- id: output_fields_match_query
+  rule: public plus pii_conditional fields must exactly match query output_fields names.
+- id: pii_fields_are_conditional
+  rule: every pii query output field must be listed in pii.allowed_fields_when_can_view_pii.
+- id: never_return_absent_from_query
+  rule: pii.never_return fields must not appear in query output_fields.
+- id: office_scope_required
+  rule: query must declare office_ids from authorized_scope and require_office_filter=true.
+parameters:
+  from_date:
+    type: date
+    required: false
+    default: start_of_month(business_today)
+    fill_when_missing: true
+  to_date:
+    type: date
+    required: false
+    default: business_today
+    fill_when_missing: true
+  office_ids:
+    type: integer_array
+    required: false
+    default: authorized_scope
+    user_may_override: false
+  currency_code:
+    type: string
+    required: false
+  product_ids:
+    type: integer_array
+    required: false
+  limit:
+    type: integer
+    required: false
+    default: "10"
+    hard_cap: 100

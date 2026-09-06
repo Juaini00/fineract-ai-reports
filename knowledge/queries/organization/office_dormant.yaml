@@ -44,7 +44,6 @@ guards:
   require_office_filter: true
   parameterized_only: true
 timeout_ms: 5000
-cost_class: medium
 checks:
   - id: sql_file_exists
     rule: sql_file must exist under queries/.

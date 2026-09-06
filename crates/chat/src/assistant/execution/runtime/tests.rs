@@ -55,52 +55,6 @@ fn empty_context() -> ContextWindow {
 }
 
 #[test]
-fn traverses_three_state_skeleton() {
-    let memory = JobMemory {
-        job_id: Uuid::nil(),
-        graph_state: "receive_message".into(),
-        terminal_state: None,
-        current_user_message_metadata: json!({}),
-        intent: None,
-        source_intent: None,
-        retrieval_plan: json!({}),
-        retrieval_evidence: json!({}),
-        evidence_decision: json!({}),
-        selected_capability: None,
-        selected_tool: None,
-        tool_params: json!({}),
-        policy_decision: json!({}),
-        execution_summary: json!({}),
-        structured_response: None,
-        pending_clarification: None,
-        planner_snapshot_id: None,
-        warnings: json!([]),
-        revision: 0,
-    };
-    let result = AssistantGraphRuntime::run(
-        memory,
-        ContextWindow {
-            summary: None,
-            active_domain: None,
-            selected_entities: json!({}),
-            recent_messages: Vec::new(),
-            relevant_jobs: Vec::new(),
-            pending_clarification: None,
-            source_intent: None,
-            source_snippets: Vec::new(),
-            client_scope: json!({}),
-            warnings: Vec::new(),
-        },
-    );
-    assert_eq!(result.transitions.len(), 3);
-    assert_eq!(
-        result.memory.terminal_state,
-        Some(TerminalState::WaitingForUserInput)
-    );
-    assert!(result.memory.structured_response.is_some());
-}
-
-#[test]
 fn preserves_limit_from_pending_clarification_context() {
     let intent = pending_clarification_intent(&ContextWindow {
         summary: None,
@@ -169,6 +123,10 @@ fn preserves_limit_when_source_intent_quantity_defaults() {
         }),
         allow_free_text: false,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     };
 
     let intent = intent_from_source(&payload, &context, None);
@@ -187,6 +145,7 @@ fn preserves_limit_from_direct_report_intent() {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: Default::default(),
         context_reference: ContextReference::None,
@@ -236,6 +195,7 @@ fn preserves_explicit_quantity_from_direct_report_intent() {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             quantity: Some(Quantity::Limit { value: 5 }),
@@ -267,6 +227,7 @@ fn records_deterministic_conflicts_before_merge() {
         domain: AssistantDomain::Client,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             quantity: Some(Quantity::Limit { value: 20 }),
@@ -386,28 +347,15 @@ async fn route_retrieval_evidence_without_repository_is_unsupported_without_cata
         client_scope: json!({ "capabilities": ["savings_deposit_total"] }),
         warnings: Vec::new(),
     };
-    let catalog = KnowledgeCatalog {
-        root_path: Default::default(),
-        query_path: Default::default(),
-        data_areas: Vec::new(),
-        domains: Vec::new(),
-        schemas: Vec::new(),
-        metrics: Vec::new(),
-        capabilities: Vec::new(),
-        queries: Vec::new(),
-        policies: Vec::new(),
-        responses: Vec::new(),
-        parameter_inputs: Vec::new(),
-        classification: Default::default(),
-    };
     let llm = Arc::new(FakeLlm) as SharedLlmClient;
-    let router = SemanticRouter::new(llm.clone(), &catalog);
+    let router = SemanticRouter::new(llm.clone());
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
         Some(&router),
         Some(&llm),
+        None,
         None,
         None,
         None,
@@ -461,9 +409,10 @@ async fn semantic_router_unavailable_fails_closed() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -483,29 +432,6 @@ async fn semantic_router_unavailable_fails_closed() {
     assert_eq!(
         result.memory.structured_response.unwrap().response_type,
         AssistantResponseType::Error
-    );
-}
-
-#[tokio::test]
-async fn greeting_completes_without_router() {
-    let result = AssistantGraphRuntime::run_with_router(
-        empty_memory(),
-        empty_context(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "Hi",
-    )
-    .await;
-
-    assert_eq!(result.memory.terminal_state, Some(TerminalState::Completed));
-    assert_eq!(
-        result.memory.structured_response.unwrap().title.as_deref(),
-        Some("Hello")
     );
 }
 
@@ -583,6 +509,10 @@ async fn exact_pending_option_id_resolves_before_router() {
             }),
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }),
         source_intent: None,
         source_snippets: Vec::new(),
@@ -590,9 +520,10 @@ async fn exact_pending_option_id_resolves_before_router() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -603,6 +534,7 @@ async fn exact_pending_option_id_resolves_before_router() {
         RuntimeUserInput {
             message: "client_top_n_by_savings_balance".into(),
             source_message: "please use the balance option".into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_top_n_by_savings_balance".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -688,6 +620,10 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
             source_intent: None,
             allow_free_text: true,
             is_missing_execution_parameters: false,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }),
         source_intent: None,
         source_snippets: Vec::new(),
@@ -695,9 +631,10 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         warnings: Vec::new(),
     };
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         memory,
         context,
+        None,
         None,
         None,
         None,
@@ -708,6 +645,7 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
         RuntimeUserInput {
             message: "client_summary".into(),
             source_message: "client summary".into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_summary".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -738,9 +676,10 @@ async fn invalid_pending_option_id_is_rejected_before_router() {
 
 #[tokio::test]
 async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(false, 3, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -751,6 +690,7 @@ async fn repeated_invalid_option_enters_bounded_free_text_recovery() {
         RuntimeUserInput {
             message: "stale option".into(),
             source_message: "stale option".into(),
+            sensitive_identifier: None,
             selected_option_id: Some("unavailable_report".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -789,9 +729,10 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
     };
     let message = "show 10 clients with the most savings accounts";
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -802,6 +743,7 @@ async fn selected_option_with_conflicting_message_reclarifies_and_increments_att
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("client_top_n_by_deposit_volume".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -848,9 +790,10 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
     };
     let message = "Rank offices by savings transaction volume";
 
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         context,
+        None,
         None,
         None,
         None,
@@ -861,6 +804,7 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("organization_office_activity_ranking".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -885,6 +829,129 @@ async fn source_month_survives_selection_and_limit_falls_back_to_default() {
     let constraints = &result.memory.intent.as_ref().unwrap().constraints;
     assert!(constraints.from_date.is_some());
     assert!(constraints.to_date.is_some());
+}
+
+#[tokio::test]
+async fn defaultless_required_search_asks_and_runs_nothing() {
+    let mut context = pending_context(false, 1, "client_name_lookup");
+    context.active_domain = Some("client".into());
+    context
+        .pending_clarification
+        .as_mut()
+        .unwrap()
+        .source_intent
+        .as_mut()
+        .unwrap()
+        .domain = AssistantDomain::Client;
+    let catalog = Arc::new(runtime_test_catalog());
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["client_name_lookup".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let message = "look up a client please";
+    let result = run_with_router(
+        empty_memory(),
+        context,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&catalog),
+        Some(&client),
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            sensitive_identifier: None,
+            selected_option_id: Some("client_name_lookup".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        result.memory.terminal_state,
+        Some(TerminalState::WaitingForUserInput)
+    );
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|p| p.as_ref())
+        .expect("must ask for the missing search parameter");
+    assert!(
+        payload.fields.iter().any(|f| f.key == "search"),
+        "collect_fields must carry `search`: {:?}",
+        payload.fields
+    );
+    assert!(result.memory.selected_tool.is_none());
+    assert_eq!(result.memory.tool_params, json!({}));
+}
+
+#[tokio::test]
+async fn fully_defaulted_capability_completes_without_asking() {
+    let mut context = pending_context(false, 1, "organization_office_activity_ranking");
+    context.active_domain = Some("organization".into());
+    let source = context
+        .pending_clarification
+        .as_mut()
+        .unwrap()
+        .source_intent
+        .as_mut()
+        .unwrap();
+    source.domain = AssistantDomain::Organization;
+    source.constraints.from_date = Some("2026-07-01".into());
+    source.constraints.to_date = Some("2026-07-29".into());
+    let catalog = Arc::new(runtime_test_catalog());
+    let client = PrincipalContext {
+        user_id: Uuid::nil(),
+        role: "admin".into(),
+        office_ids: vec![1],
+        capability_ids: vec!["organization_office_activity_ranking".into()],
+        can_view_pii: true,
+        legacy_api_key_id: None,
+    };
+    let message = "Rank offices by savings transaction volume this month";
+    let result = run_with_router(
+        empty_memory(),
+        context,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&catalog),
+        Some(&client),
+        None,
+        RuntimeUserInput {
+            message: message.into(),
+            source_message: message.into(),
+            sensitive_identifier: None,
+            selected_option_id: Some("organization_office_activity_ranking".into()),
+            clarification_id: None,
+            clarification_revision: None,
+            constraint_patch: Default::default(),
+        },
+    )
+    .await;
+
+    // "No ask" guarantee: no clarification payload attached. Terminal state may
+    // still be WaitingForUserInput for unrelated pipeline reasons in the no-DB
+    // harness — the durable guarantee is that we did not construct a clarification.
+    let payload = result
+        .pending_clarification
+        .as_ref()
+        .and_then(|p| p.as_ref());
+    assert!(
+        payload.is_none(),
+        "a fully-defaulted capability must not ask: {payload:?}"
+    );
 }
 
 fn runtime_test_catalog() -> KnowledgeCatalog {
@@ -941,6 +1008,7 @@ fn clarification_options_show_period_already_given_in_the_request() {
         domain: AssistantDomain::Savings,
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             from_date: Some("2026-07-01".into()),
@@ -972,6 +1040,7 @@ fn test_plan() -> RetrievalPlan {
             domain: AssistantDomain::Savings,
             request_shape: Default::default(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: Vec::new(),
             constraints: Default::default(),
             context_reference: ContextReference::None,
@@ -1092,6 +1161,10 @@ fn pending_context(missing_parameters: bool, attempt: u32, capability_id: &str) 
             }),
             allow_free_text: true,
             is_missing_execution_parameters: missing_parameters,
+            workflow_id: None,
+            node_id: None,
+            resume_node_id: None,
+            entity_kind: None,
         }),
         source_intent: None,
         source_snippets: Vec::new(),
@@ -1110,6 +1183,7 @@ fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
         &RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("others".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -1132,9 +1206,10 @@ fn meaningful_others_is_a_new_request_not_a_reset_prompt() {
 #[tokio::test]
 async fn others_continues_missing_parameters_with_message_facts() {
     let message = "this month";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -1145,6 +1220,7 @@ async fn others_continues_missing_parameters_with_message_facts() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: Some("others".into()),
             clarification_id: None,
             clarification_revision: None,
@@ -1173,9 +1249,10 @@ async fn others_continues_missing_parameters_with_message_facts() {
 #[tokio::test]
 async fn long_message_continues_missing_parameters() {
     let message = "Please use every transaction from this current month for the report";
-    let result = AssistantGraphRuntime::run_with_router(
+    let result = run_with_router(
         empty_memory(),
         pending_context(true, 1, "savings_deposit_top_n"),
+        None,
         None,
         None,
         None,
@@ -1186,6 +1263,7 @@ async fn long_message_continues_missing_parameters() {
         RuntimeUserInput {
             message: message.into(),
             source_message: message.into(),
+            sensitive_identifier: None,
             selected_option_id: None,
             clarification_id: None,
             clarification_revision: None,
@@ -1199,4 +1277,323 @@ async fn long_message_continues_missing_parameters() {
         Some("savings_deposit_top_n")
     );
     assert_eq!(result.pending_clarification, Some(None));
+}
+
+/// The veto guard.
+///
+/// Old `router.rs` rule 28 told the model to answer `unsupported_in_domain`
+/// for "give me any N clients" — a claim about catalog coverage made by a
+/// stage that never sees the catalog, and a false one:
+/// `knowledge/capabilities/client/client_random_sample.yaml` is
+/// `approved_mvp` and lists this very phrasing among its examples. In
+/// production the verdict short-circuited `semantic.rs` before
+/// `RetrievalEngine::retrieve` was ever called, so the job completed
+/// `unsupported` with stage events `routing -> formatting` and no retrieval
+/// stage at all.
+///
+/// This fake is deliberately hostile on both ends: the router half still
+/// emits the string the deleted rule asked for (and `out_of_domain`), and
+/// the reranker half always answers `unsupported`. Neither is allowed to
+/// stop retrieval from running against the real catalog.
+///
+/// What this proves: no pre-retrieval stage can veto, and the real catalog
+/// does surface a random-sample/recent-list capability for this message.
+/// What it does NOT prove: that a live model picks the right one of them —
+/// that is `RerankerVerdict`'s job and needs a live LLM.
+struct VetoingFakeLlm {
+    intent: &'static str,
+}
+
+#[async_trait]
+impl LlmClient for VetoingFakeLlm {
+    async fn structured_value(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _system: &str,
+        user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        let is_rerank = serde_json::from_str::<serde_json::Value>(user)
+            .ok()
+            .is_some_and(|value| value.get("candidates").is_some());
+        let value = if is_rerank {
+            json!({
+                "decision": "unsupported",
+                "confidence": 0.0,
+                "alternatives": [],
+                "reason": "hostile fake"
+            })
+        } else {
+            json!({
+                "intent": self.intent,
+                "domain": "client",
+                "request_shape": {
+                    "operation": "random_sample",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "list",
+                    "pii": "client_identity"
+                },
+                "language": "en",
+                "entities": [],
+                "constraints": {},
+                "context_reference": "none",
+                "confidence": 0.9,
+                "reason": "fake"
+            })
+        };
+        Ok(LlmResponse {
+            value,
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+
+    async fn embed(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _text: &str,
+    ) -> Result<EmbeddingResponse> {
+        Ok(EmbeddingResponse {
+            vector: vec![1.0, 0.0],
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn router_verdict_cannot_veto_retrieval() {
+    let catalog = Arc::new(runtime_test_catalog());
+    // `unsupported_in_domain` is no longer an `AssistantIntentKind`; a model
+    // still emitting it lands on `ReportRequest` via `#[serde(other)]`, which
+    // is the point — an unnameable intent must reach retrieval, not fail the
+    // job and not become a rejection.
+    for intent in ["unsupported_in_domain", "out_of_domain"] {
+        let llm = Arc::new(VetoingFakeLlm { intent }) as SharedLlmClient;
+        let router = SemanticRouter::new(llm.clone());
+        // Chat's admin projection grants every approved capability; this
+        // mirrors it so the auth boundary in `allowed_ids` is not what the
+        // assertion measures.
+        let mut context = empty_context();
+        context.client_scope = json!({ "allow_all_capabilities": true });
+        let result = run_with_router(
+            empty_memory(),
+            context,
+            Some(&router),
+            Some(&llm),
+            None,
+            None,
+            None,
+            Some(&catalog),
+            None,
+            None,
+            "give me 10 clients that we have in our system?",
+        )
+        .await;
+
+        let evidence = result
+            .memory
+            .retrieval_evidence
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let ids: Vec<&str> = evidence
+            .iter()
+            .filter_map(|item| item["capability_id"].as_str())
+            .collect();
+        assert!(
+            !ids.is_empty(),
+            "retrieval must run and produce candidates for intent={intent}"
+        );
+        assert!(
+            ids.contains(&"client_random_sample") || ids.contains(&"client_list_recent"),
+            "expected client_random_sample or client_list_recent for intent={intent}, got {ids:?}"
+        );
+        assert!(
+            result
+                .transitions
+                .iter()
+                .any(|transition| transition.from == GraphState::RetrieveKnowledge),
+            "graph must pass through RetrieveKnowledge for intent={intent}"
+        );
+    }
+}
+
+/// The sufficiency guard.
+///
+/// Production: "berikan saya 5 client yg ada pada <office>" was answered by a
+/// capability that had no user-supplied office parameter, so clients from all
+/// eight authorized offices came back and the job recorded
+/// `terminal_state: "completed"`. `reranker::RERANKER_SYSTEM` was given a rule
+/// against exactly that; a rule in a prompt is an instruction to a model, not a
+/// gate, so this drives the real graph instead.
+///
+/// The fake is permissive where the old one was hostile: its reranker half
+/// always selects `candidates[0]`, i.e. whatever retrieval ranked top. That is
+/// the model behaviour the prompt rule is supposed to prevent and cannot, so if
+/// an office-blind capability is still on the list, this test executes it.
+///
+/// The office is never spoken by the fake router — it carries no entities at
+/// all. It has to come from the deterministic extractor reading the user's own
+/// words, which is the standard `expressed_filters` requires.
+///
+/// Non-vacuity is asserted, not assumed: the same fake, same catalog and same
+/// question *without* an office must surface at least one capability that the
+/// catalog says cannot bind one, and that capability must be gone once the
+/// office is named. A capability id appears nowhere in this test — the parallel
+/// work adding a user-supplied office filter moves capabilities from one side
+/// of `capability_honours` to the other, and the assertion follows it.
+struct TopCandidateFakeLlm;
+
+#[async_trait]
+impl LlmClient for TopCandidateFakeLlm {
+    async fn structured_value(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _system: &str,
+        user: &str,
+        _schema: serde_json::Value,
+    ) -> Result<LlmResponse<serde_json::Value>> {
+        let parsed = serde_json::from_str::<serde_json::Value>(user).unwrap_or(json!({}));
+        let value = match parsed["candidates"].as_array() {
+            Some(candidates) => json!({
+                "decision": "select",
+                "capability_id": candidates.first().map(|c| c["id"].clone()),
+                "confidence": 0.95,
+                "alternatives": [],
+                "reason": "top candidate"
+            }),
+            None => json!({
+                "intent": "report_request",
+                "domain": "client",
+                "request_shape": {
+                    "operation": "random_sample",
+                    "subject": "client",
+                    "grouping": "none",
+                    "output": "list",
+                    "pii": "client_identity"
+                },
+                "language": "en",
+                "entities": [],
+                "constraints": {},
+                "context_reference": "none",
+                "confidence": 0.9,
+                "reason": "fake"
+            }),
+        };
+        Ok(LlmResponse {
+            value,
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+
+    async fn embed(
+        &self,
+        _purpose: crate::assistant::llm::LlmPurpose,
+        _text: &str,
+    ) -> Result<EmbeddingResponse> {
+        Ok(EmbeddingResponse {
+            vector: vec![1.0, 0.0],
+            usage: TokenUsage::default(),
+            cost_usd: None,
+            provider: "fake".into(),
+            model: "fake".into(),
+            latency_ms: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_named_office_cannot_be_answered_by_an_office_blind_capability() {
+    let catalog = Arc::new(runtime_test_catalog());
+    let llm = Arc::new(TopCandidateFakeLlm) as SharedLlmClient;
+
+    async fn run(
+        catalog: &Arc<KnowledgeCatalog>,
+        llm: &SharedLlmClient,
+        message: &str,
+    ) -> GraphRuntimeResult {
+        let router = SemanticRouter::new(llm.clone());
+        let mut context = empty_context();
+        // Mirrors chat's admin projection, so the auth boundary in
+        // `allowed_ids` is not what the assertion measures.
+        context.client_scope = json!({ "allow_all_capabilities": true });
+        run_with_router(
+            empty_memory(),
+            context,
+            Some(&router),
+            Some(llm),
+            None,
+            None,
+            None,
+            Some(catalog),
+            None,
+            None,
+            message,
+        )
+        .await
+    }
+
+    fn candidate_ids(result: &GraphRuntimeResult) -> Vec<String> {
+        result
+            .memory
+            .retrieval_evidence
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["capability_id"].as_str().map(ToOwned::to_owned))
+            .collect()
+    }
+
+    let honours = |id: &str| {
+        crate::assistant::retrieval::capability_honours(&catalog, id, &ConstraintField::Office)
+    };
+
+    let control = run(&catalog, &llm, "give me 5 clients").await;
+    let control_ids = candidate_ids(&control);
+    let office_blind: Vec<String> = control_ids
+        .iter()
+        .filter(|id| !honours(id))
+        .cloned()
+        .collect();
+    assert!(
+        !office_blind.is_empty(),
+        "premise gone: retrieval for {control_ids:?} no longer offers any capability \
+         the catalog says cannot bind an office filter, so this test cannot observe a drop"
+    );
+
+    let scoped = run(&catalog, &llm, "give me 5 clients in Head Office").await;
+    let scoped_ids = candidate_ids(&scoped);
+    for id in &scoped_ids {
+        assert!(
+            honours(id),
+            "{id} reached the reranker for a question naming an office, but the \
+             catalog gives it no parameter an office can bind"
+        );
+    }
+    for id in &office_blind {
+        assert!(
+            !scoped_ids.contains(id),
+            "{id} survived the sufficiency gate: {scoped_ids:?}"
+        );
+    }
+    // The permissive fake selects candidates[0] unconditionally, so this is the
+    // capability that would have executed and returned unfiltered rows.
+    if let Some(selected) = scoped.memory.selected_capability.as_deref() {
+        assert!(
+            honours(selected),
+            "executed {selected} for a question naming an office it cannot filter by"
+        );
+    }
 }

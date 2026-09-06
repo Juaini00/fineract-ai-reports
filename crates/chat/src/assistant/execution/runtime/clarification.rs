@@ -149,6 +149,7 @@ pub(super) fn pending_clarification_intent(context: &ContextWindow) -> Assistant
         },
         request_shape: Default::default(),
         language: AssistantLanguage::En,
+        canonical_query_en: String::new(),
         entities: Vec::new(),
         constraints: crate::assistant::AssistantConstraints {
             quantity,
@@ -236,6 +237,11 @@ pub(super) fn clarification_candidate_allowed(
     if !is_candidate {
         return false;
     }
+    if payload.kind == crate::assistant::ClarificationKind::SelectEntity {
+        return id
+            .strip_prefix("client:")
+            .is_some_and(|value| value.parse::<i64>().is_ok());
+    }
     let has_scope = context.client_scope.get("allow_all_capabilities").is_some()
         || context.client_scope.get("capabilities").is_some();
     if !has_scope {
@@ -288,6 +294,7 @@ pub(super) fn intent_from_source(
             domain: source.domain.clone(),
             request_shape: source.request_shape.clone(),
             language: AssistantLanguage::En,
+            canonical_query_en: String::new(),
             entities: source.entities.clone(),
             constraints: source.constraints.clone(),
             context_reference: ContextReference::PendingClarification,
@@ -358,7 +365,7 @@ pub(super) fn clarification_payload_for(
     }
     let by_id: std::collections::HashMap<&str, &Evidence> = evidence
         .iter()
-        .map(|e| (e.capability_id.as_str(), e))
+        .map(|e| (e.capability_id.as_ref(), e))
         .collect();
     let mut options: Vec<ClarificationOption> = alternatives
         .iter()
@@ -398,6 +405,10 @@ pub(super) fn clarification_payload_for(
         source_intent,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
@@ -443,6 +454,10 @@ pub(super) fn clarification_payload(
         source_intent,
         allow_free_text: true,
         is_missing_execution_parameters: false,
+        workflow_id: None,
+        node_id: None,
+        resume_node_id: None,
+        entity_kind: None,
     }
 }
 
