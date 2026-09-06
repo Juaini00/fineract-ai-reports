@@ -27,8 +27,16 @@ examples:
 - Show all savings activity for authorized offices.
 - Aktivitas transaksi tabungan mingguan.
 supported_intents:
-- savings activity list by date range
-- recent savings transactions for authorized offices
+  - savings activity list by date range
+  - recent savings transactions for authorized offices
+required_parameters:
+  - from_date
+  - to_date
+optional_parameters:
+  - office_ids
+  - limit
+  - currency_code
+  - product_ids
 defaults:
   exclude_reversed: true
 guards:

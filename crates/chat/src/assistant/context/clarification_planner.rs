@@ -210,26 +210,45 @@ fn limit_default(
 /// never be answered away. The catalog's binding declaration answers it now, so
 /// a new input needs no code here at all.
 fn input_satisfied(
-    catalog: &KnowledgeCatalog,
+    _catalog: &KnowledgeCatalog,
     input: &ParameterInputKnowledge,
-    query: &QueryKnowledge,
+    _query: &QueryKnowledge,
     facts: &ClarificationFacts,
     defaults: &ConstraintPatch,
 ) -> bool {
-    let mut relevant = input
-        .parameters
-        .iter()
-        .filter(|name| query.parameters.iter().any(|p| p.name == **name))
-        .peekable();
-    if relevant.peek().is_none() {
-        return false;
+    match input.id.as_str() {
+        "date_range" => {
+            matches!(
+                facts.values.get(&ConstraintField::FromDate),
+                Some(TypedFactValue::Date(_))
+            ) && matches!(
+                facts.values.get(&ConstraintField::ToDate),
+                Some(TypedFactValue::Date(_))
+            )
+        }
+        "limit" => {
+            matches!(
+                facts
+                    .values
+                    .get(&ConstraintField::LimitMode)
+                    .or_else(|| defaults.get(&ConstraintField::LimitMode)),
+                Some(TypedFactValue::LimitMode(
+                    LimitMode::TopN | LimitMode::Limit
+                ))
+            ) && matches!(
+                facts
+                    .values
+                    .get(&ConstraintField::LimitValue)
+                    .or_else(|| defaults.get(&ConstraintField::LimitValue)),
+                Some(TypedFactValue::Integer(_))
+            )
+        }
+        "search" => matches!(
+            facts.values.get(&ConstraintField::PersonName),
+            Some(TypedFactValue::PersonName(_))
+        ),
+        _ => false,
     }
-    relevant.all(|name| {
-        catalog
-            .binding_fields(name)
-            .iter()
-            .any(|field| facts.values.contains_key(field) || defaults.contains_key(field))
-    })
 }
 
 fn field_for(

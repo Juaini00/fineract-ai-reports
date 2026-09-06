@@ -98,15 +98,14 @@ pub fn validate_submission(
     // a concurrent response from accepting a stale payload.
 
     let selected = match payload.kind {
-        ClarificationKind::SelectOption | ClarificationKind::SelectEntity => {
+        ClarificationKind::SelectOption => {
             let Some(option_id) = selected_option_id.as_deref() else {
                 return Err(ClarificationValidationError::field("option_id"));
             };
             let Some(option) = payload.options.iter().find(|option| option.id == option_id) else {
                 return Err(ClarificationValidationError::field("option_id"));
             };
-            if payload.kind == ClarificationKind::SelectOption
-                && option.id != OTHER_CLARIFICATION_OPTION_ID
+            if option.id != OTHER_CLARIFICATION_OPTION_ID
                 && !principal.capability_ids.iter().any(|id| id == &option.id)
             {
                 return Err(ClarificationValidationError::field("option_id"));
@@ -150,9 +149,7 @@ pub fn validate_submission(
             None => {}
         }
     }
-    let display_message = if payload.kind == ClarificationKind::SelectEntity {
-        "Client selected".to_owned()
-    } else if !source_message.is_empty() {
+    let display_message = if !source_message.is_empty() {
         source_message.clone()
     } else if let Some(option) = selected {
         option.label.clone()
